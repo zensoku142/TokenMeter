@@ -17,9 +17,10 @@ a = Analysis(
     excludes=[
         'tkinter', 'pystray', 'PIL',
         'matplotlib', 'scipy', 'OpenGL', 'cupy', 'colorcet',
+        # pyqtgraph.__init__ 会无条件导入 imageview、multiprocess 和
+        # parametertree；即使当前界面未直接使用，也不能从发布包排除。
         'pyqtgraph.console', 'pyqtgraph.examples', 'pyqtgraph.flowchart',
-        'pyqtgraph.imageview', 'pyqtgraph.jupyter', 'pyqtgraph.multiprocess',
-        'pyqtgraph.opengl', 'pyqtgraph.parametertree',
+        'pyqtgraph.jupyter', 'pyqtgraph.opengl',
         'PySide6.QtNetwork', 'PySide6.QtPdf',
         'PySide6.QtPdfWidgets', 'PySide6.QtQml', 'PySide6.QtQuick',
         'PySide6.QtQuickControls2', 'PySide6.QtQuickWidgets', 'PySide6.QtTest',
@@ -61,7 +62,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='TokenSpider-v1.1.1-windows-x64',
+    name='TokenSpider-v1.1.2-windows-x64',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
