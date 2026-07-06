@@ -48,7 +48,9 @@ from ui.qt_theme import (
 )
 
 
-def format_money(value: float | Decimal) -> str:
+def format_money(value: float | Decimal | None) -> str:
+    if value is None:
+        return "--"
     amount = float(value)
     decimals = 4 if 0 < abs(amount) < 0.01 else 2
     return f"¥{amount:.{decimals}f}"
@@ -162,6 +164,7 @@ class MetricCard(QFrame):
         icon.setPixmap(metric_icon(icon_name))
         title_label = QLabel(title)
         title_label.setObjectName("cardTitle")
+        self.title_label = title_label
         title_row.addWidget(icon)
         title_row.addWidget(title_label)
         title_row.addStretch(1)
@@ -183,6 +186,9 @@ class MetricCard(QFrame):
         self.detail.setText(detail)
         self.footer.setText(footer)
         self.footer.setVisible(bool(footer))
+
+    def set_title(self, title: str) -> None:
+        self.title_label.setText(title)
 
 
 class TrendCard(QFrame):
@@ -373,12 +379,13 @@ class StatisticsCard(QFrame):
             int(recent_rows.get(day.isoformat(), {}).get("tokens", 0) or 0)
             for day in recent_dates
         )
+        has_daily_data = data.today_tokens is not None
         values = (
             format_money(data.monthly_cost_cny),
             format_money(data.total_cost_cny),
-            compact_tokens(data.monthly_usage_tokens),
-            format_money(recent_cost),
-            compact_tokens(recent_tokens),
+            compact_tokens(data.monthly_usage_tokens) if data.monthly_usage_tokens is not None else "--",
+            format_money(recent_cost) if has_daily_data else "--",
+            compact_tokens(recent_tokens) if has_daily_data else "--",
         )
         for label, value in zip(self._values, values):
             label.setText(value)
@@ -405,10 +412,10 @@ class MainPanel(QFrame):
         header_layout.setSpacing(9)
         logo = QLabel()
         logo.setPixmap(app_icon(32).pixmap(32, 32))
-        title = QLabel("API 使用监控")
-        title.setObjectName("panelTitle")
+        self._title_label = QLabel("API 使用监控")
+        self._title_label.setObjectName("panelTitle")
         header_layout.addWidget(logo)
-        header_layout.addWidget(title)
+        header_layout.addWidget(self._title_label)
         header_layout.addStretch(1)
         self.settings_button = self._tool_button(
             "settings", QStyle.StandardPixmap.SP_FileDialogDetailedView, "设置"
@@ -529,15 +536,27 @@ class MainPanel(QFrame):
 
     def update_data(self, data: TokenData, loading: bool = False) -> None:
         money = lambda value: "--" if loading else format_money(value)
-        tokens = lambda value: "--" if loading else compact_tokens(int(value))
+        tokens = lambda value: "--" if loading or value is None else compact_tokens(int(value))
+        # Show the active provider name in the title bar.
+        provider_id = ""
+        if data.per_provider:
+            provider_id = data.per_provider[0].provider_id
+            provider_name = data.per_provider[0].provider_name
+            self._title_label.setText(f"API 使用监控 · {provider_name}")
+        is_mimo = provider_id == "mimo"
+        self.today_card.set_title("今日使用金额" if not is_mimo else "今日用量")
+        self.balance_card.set_title("账户余额" if not is_mimo else "套餐剩余")
+        self.month_card.set_title("本月累计")
         self.today_card.set_values(
             money(data.today_cost_cny),
-            tokens(data.today_tokens),
+            "平台暂不提供按日明细" if is_mimo else tokens(data.today_tokens),
             "",
         )
         self.balance_card.set_values(
-            money(data.balance_cny),
-            f"约 {tokens(data.balance_tokens)}" if data.balance_tokens else "账户可用余额",
+            tokens(data.balance_tokens) if is_mimo else money(data.balance_cny),
+            "剩余 Token" if is_mimo else (
+                f"约 {tokens(data.balance_tokens)}" if data.balance_tokens else "账户可用余额"
+            ),
             "",
         )
         self.month_card.set_values(
@@ -548,7 +567,9 @@ class MainPanel(QFrame):
         self.activity.set_activity(data.daily_usage)
         source_days = [day for day in self.activity.days if day.has_source_data]
         total = sum(day.token_count for day in source_days)
-        if not source_days:
+        if is_mimo:
+            summary = "MiMo 控制台暂不提供逐日明细"
+        elif not source_days:
             summary = "暂无 Token 活动"
         else:
             first = min(day.date for day in source_days)
@@ -577,6 +598,10 @@ class MainPanel(QFrame):
             return "网络连接失败", C_RED
         if "SERVER_ERROR" in codes:
             return "API 服务异常", C_RED
+        if data.status == "not_configured":
+            return "尚未配置凭据，请前往设置", C_YELLOW
+        if data.status == "ok" and data.today_tokens is None:
+            return "连接正常，平台未提供按日明细", C_GREEN
         if data.status == "ok" and not any(day.get("tokens", 0) for day in data.daily_usage):
             return "连接正常，暂无 Token 活动", C_GREEN
         return {

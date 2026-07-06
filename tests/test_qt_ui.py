@@ -8,11 +8,12 @@ os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QToolButton
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QToolButton
 
 from data.store import TokenData
 from ui.geometry import WorkArea
 from ui.qt_panel import MainPanel, StatisticsCard, TrendCard, format_money_axis, format_token_axis
+from ui.qt_settings import SettingsWindow
 from ui.qt_theme import (
     ACTIVITY_CARD_HEIGHT,
     APP_STYLE,
@@ -183,7 +184,9 @@ def test_expanded_window_hides_ball_and_uses_compact_panel_size():
 
         assert widget.ball.isHidden()
         assert widget.panel.isVisible()
-        assert (widget.width(), widget.height()) == (820, 550)
+        # 小屏幕/无头测试后端会把面板限制在当前工作区内。
+        assert widget.width() <= 820
+        assert widget.height() == 550
         assert widget.mask().isEmpty()
 
         widget.toggle()
@@ -290,3 +293,48 @@ def test_escape_closes_settings_before_collapsing_panel():
         assert widget.ball.isVisible()
         widget._closed = True
         widget.hide()
+
+
+def test_edge_snap_uses_one_eased_animation_and_delayed_hide():
+    with patch("ui.qt_widget.TokenData.fetch", return_value=sample_data()):
+        widget = FloatingWidget()
+        widget.move(12, 200)
+        with patch.object(widget, "_work_area", return_value=WorkArea(0, 0, 1920, 1080)):
+            assert widget._try_edge_snap()
+            assert widget._edge_direction == "left"
+            assert widget._edge_animation.duration() == 180
+            assert widget._edge_hide_timer.isActive()
+
+            widget._expanded = True
+            widget._edge_animation.stop()
+            before = widget.pos()
+            widget._do_edge_hide()
+            assert widget.pos() == before
+
+        widget._closed = True
+        widget.hide()
+
+
+def test_settings_keep_unsaved_provider_drafts_when_switching():
+    values = {
+        "ACTIVE_PROVIDER": "deepseek",
+        "REFRESH_INTERVAL": 60_000,
+        "EDGE_HIDE_ENABLED": True,
+        "DEEPSEEK_AUTH": "",
+    }
+    with (
+        patch("ui.qt_settings.config_manager.load_config", return_value=values),
+        patch("ui.qt_settings.config_manager.all_config", return_value=values),
+    ):
+        window = SettingsWindow()
+        window._provider_widgets["AUTH"].setText("draft-token")
+        mimo_index = next(
+            index
+            for index in range(window.provider_combo.count())
+            if window.provider_combo.itemData(index) == "mimo"
+        )
+        window.provider_combo.setCurrentIndex(mimo_index)
+        window.provider_combo.setCurrentIndex(0)
+        assert window._provider_widgets["AUTH"].text() == "draft-token"
+        assert window._provider_widgets["AUTH"].echoMode() == QLineEdit.EchoMode.Password
+        window.close()

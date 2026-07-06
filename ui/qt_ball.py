@@ -27,6 +27,8 @@ class FloatingUsageBall(QWidget):
         self._active = False
 
     def set_values(self, today: str, balance: str) -> None:
+        if self._today == today and self._balance == balance:
+            return
         self._today = today
         self._balance = balance
         self.update()
@@ -68,7 +70,6 @@ class FloatingUsageBall(QWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         side = min(self.width(), self.height())
-        # 绘制坐标按原 120px 设计稿等比缩放，缩小后仍保持文字和分隔线比例。
         painter.scale(side / DESIGN_SIZE, side / DESIGN_SIZE)
         side = DESIGN_SIZE
         center = QPointF(side / 2, side / 2)
@@ -76,9 +77,9 @@ class FloatingUsageBall(QWidget):
         glow_alpha = 70 if self._hovered else 36
         if self._active:
             glow_alpha = 24
-        painter.setPen(QPen(QColor(47, 111, 228, glow_alpha), 8))
+        painter.setPen(QPen(QColor(47, 111, 228, glow_alpha), 4))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(center, side / 2 - 9, side / 2 - 9)
+        painter.drawEllipse(center, side / 2 - 2, side / 2 - 2)
 
         outer = QRadialGradient(center, side / 2)
         outer.setColorAt(0.0, QColor(C_CARD))
@@ -86,7 +87,7 @@ class FloatingUsageBall(QWidget):
         outer.setColorAt(1.0, QColor("#0b2c66"))
         painter.setBrush(outer)
         painter.setPen(QPen(QColor(C_ACCENT_2 if self._hovered else C_ACCENT), 2))
-        painter.drawEllipse(center, side / 2 - 8, side / 2 - 8)
+        painter.drawEllipse(center, side / 2 - 3, side / 2 - 3)
 
         highlight = QLinearGradient(0, 8, 0, side * 0.55)
         highlight.setColorAt(0.0, QColor(90, 145, 255, 42))

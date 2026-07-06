@@ -1,4 +1,6 @@
 .venv/
+.venv-build/
+.venv-stale-*/
 __pycache__/
 *.py[cod]
 
@@ -21,6 +23,10 @@ htmlcov/
 
 build*/
 dist*/
+
+# 本地对照副本和一次性诊断脚本不属于发布源码。
+TokenScope-master/
+_deepcopy_test.py
 
 # 一次性设计验收产物不属于发布源码，避免后续误提交。
 qa-*.png

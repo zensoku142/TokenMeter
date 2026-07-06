@@ -16,31 +16,48 @@ from typing import Any
 from urllib.parse import urlparse
 
 APP_NAME = "TokenSpider"
-SECRET_KEYS = ("DEEPSEEK_API_KEY", "DEEPSEEK_AUTH", "DEEPSEEK_COOKIE")
-OFFICIAL_HOSTS = {"platform.deepseek.com", "api.deepseek.com"}
+
+
+SECRET_KEYS = (
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_AUTH",
+    "DEEPSEEK_COOKIE",
+    "MIMO_COOKIE",
+    "MIMO_API_PLATFORM_PH",
+    "MIMO_API_KEY",
+)
+OFFICIAL_HOSTS = {
+    "platform.deepseek.com",
+    "api.deepseek.com",
+    "platform.xiaomimimo.com",
+}
 DEFAULT_CONFIG: dict[str, Any] = {
     "DEEPSEEK_API_KEY": "",
     "DEEPSEEK_AUTH": "",
     "DEEPSEEK_COOKIE": "",
     "DEEPSEEK_BASE": "https://platform.deepseek.com",
+    "MIMO_COOKIE": "",
+    "MIMO_API_PLATFORM_PH": "",
+    "MIMO_API_KEY": "",
+    "MIMO_BASE": "https://platform.xiaomimimo.com",
     "REFRESH_INTERVAL": 60_000,
     "WIDGET_COMPACT_SIZE": 96,
     "WIDGET_EXPANDED_SIZE": (820, 564),
     "BG_COLOR": "#071427",
     "ACCENT_COLOR": "#2f6fe4",
     "TEXT_COLOR": "#edf4ff",
+    "ACTIVE_PROVIDER": "deepseek",
+    "EDGE_HIDE_ENABLED": True,
 }
 FIELD_META: dict[str, dict[str, Any]] = {
-    "DEEPSEEK_API_KEY": {"label": "官方 API Key（可选）", "kind": "text", "secret": True},
-    "DEEPSEEK_AUTH": {"label": "Bearer Token", "kind": "text", "secret": True},
-    "DEEPSEEK_COOKIE": {"label": "Cookie", "kind": "text", "secret": True, "multiline": True},
-    "DEEPSEEK_BASE": {"label": "API 地址", "kind": "text"},
-    "REFRESH_INTERVAL": {"label": "刷新间隔(毫秒)", "kind": "int", "min": 5_000},
-    "WIDGET_COMPACT_SIZE": {"label": "悬浮球尺寸", "kind": "int", "min": 96, "max": 124},
-    "WIDGET_EXPANDED_SIZE": {"label": "展开面板尺寸", "kind": "tuple_int"},
-    "BG_COLOR": {"label": "背景色", "kind": "color"},
-    "ACCENT_COLOR": {"label": "强调色", "kind": "color"},
-    "TEXT_COLOR": {"label": "文本色", "kind": "color"},
+    **{key: {"kind": "text", "secret": key in SECRET_KEYS} for key in DEFAULT_CONFIG},
+    "REFRESH_INTERVAL": {"kind": "int", "min": 5_000},
+    "WIDGET_COMPACT_SIZE": {"kind": "int", "min": 96, "max": 124},
+    "WIDGET_EXPANDED_SIZE": {"kind": "tuple_int"},
+    "BG_COLOR": {"kind": "color"},
+    "ACCENT_COLOR": {"kind": "color"},
+    "TEXT_COLOR": {"kind": "color"},
+    "EDGE_HIDE_ENABLED": {"kind": "bool"},
 }
 
 
@@ -98,6 +115,39 @@ class _CREDENTIALW(ctypes.Structure):
     ]
 
 
+_CREDENTIALW_TYPE = 1  # CRED_TYPE_GENERIC
+# Initialise the advapi32 DLL binding on first import (i.e. the main
+# thread). Doing this lazily inside worker threads can trigger an
+# `Error calling Python override of QThread::run()` because Windows
+# credential APIs expect to be called from a thread that has already
+# performed module initialisation.
+_advapi32 = None
+if os.name == "nt":
+    try:
+        _advapi32 = ctypes.WinDLL("Advapi32.dll", use_last_error=True)
+        _advapi32.CredReadW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.POINTER(_CREDENTIALW)),
+        ]
+        _advapi32.CredReadW.restype = wintypes.BOOL
+        _advapi32.CredWriteW.argtypes = [
+            ctypes.POINTER(_CREDENTIALW),
+            wintypes.DWORD,
+        ]
+        _advapi32.CredWriteW.restype = wintypes.BOOL
+        _advapi32.CredDeleteW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        _advapi32.CredDeleteW.restype = wintypes.BOOL
+        _advapi32.CredFree.argtypes = [ctypes.c_void_p]
+    except Exception:
+        _advapi32 = None
+
+
 def _credential_target(key: str) -> str:
     return f"{APP_NAME}/{key}"
 
@@ -105,24 +155,30 @@ def _credential_target(key: str) -> str:
 def _read_credential(key: str) -> str:
     if os.name != "nt":
         return os.environ.get(key, "")
-    advapi32 = ctypes.WinDLL("Advapi32.dll")
-    advapi32.CredReadW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-        ctypes.POINTER(ctypes.POINTER(_CREDENTIALW)),
-    ]
-    advapi32.CredReadW.restype = wintypes.BOOL
-    advapi32.CredFree.argtypes = [ctypes.c_void_p]
-    pointer = ctypes.POINTER(_CREDENTIALW)()
-    if not advapi32.CredReadW(_credential_target(key), 1, 0, ctypes.byref(pointer)):
+    if _advapi32 is None:
         return ""
+    pointer = ctypes.POINTER(_CREDENTIALW)()
     try:
+        if not _advapi32.CredReadW(
+            _credential_target(key),
+            _CREDENTIALW_TYPE,
+            0,
+            ctypes.byref(pointer),
+        ):
+            return ""
         credential = pointer.contents
         if not credential.CredentialBlob or not credential.CredentialBlobSize:
             return ""
         raw = ctypes.string_at(credential.CredentialBlob, credential.CredentialBlobSize)
         return raw.decode("utf-16-le")
+    except Exception:
+        return ""
     finally:
-        advapi32.CredFree(pointer)
+        if pointer:
+            try:
+                _advapi32.CredFree(pointer)
+            except Exception:
+                pass
 
 
 def _write_credential(key: str, value: str) -> None:
@@ -130,23 +186,27 @@ def _write_credential(key: str, value: str) -> None:
         if value:
             raise OSError("非 Windows 环境请通过同名环境变量提供凭证")
         return
-    advapi32 = ctypes.WinDLL("Advapi32.dll")
-    advapi32.CredWriteW.argtypes = [ctypes.POINTER(_CREDENTIALW), wintypes.DWORD]
-    advapi32.CredWriteW.restype = wintypes.BOOL
-    advapi32.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    if _advapi32 is None:
+        if value:
+            raise OSError("Windows 凭据管理器不可用，凭据未保存")
+        return
     if not value:
-        advapi32.CredDeleteW(_credential_target(key), 1, 0)
+        if not _advapi32.CredDeleteW(_credential_target(key), _CREDENTIALW_TYPE, 0):
+            error = ctypes.get_last_error()
+            # 1168 表示凭据本来就不存在，属于幂等删除成功。
+            if error != 1168:
+                raise ctypes.WinError(error)
         return
     raw = value.encode("utf-16-le")
     blob = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
     credential = _CREDENTIALW()
-    credential.Type = 1
+    credential.Type = _CREDENTIALW_TYPE
     credential.TargetName = _credential_target(key)
     credential.CredentialBlobSize = len(raw)
     credential.CredentialBlob = ctypes.cast(blob, ctypes.POINTER(ctypes.c_ubyte))
     credential.Persist = 2
     credential.UserName = APP_NAME
-    if not advapi32.CredWriteW(ctypes.byref(credential), 0):
+    if not _advapi32.CredWriteW(ctypes.byref(credential), 0):
         raise ctypes.WinError()
 
 
@@ -194,6 +254,16 @@ def validate_value(key: str, value: Any) -> Any:
             raise ValueError(f"{key} 必须是 #RRGGBB 颜色")
         int(value[1:], 16)
         return value
+    if kind == "bool":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        raise ValueError(f"{key} 必须是布尔值")
     return str(value)
 
 
@@ -206,9 +276,21 @@ def validate_config(values: dict[str, Any]) -> dict[str, Any]:
     merged.update(values)
     for key in list(merged):
         merged[key] = validate_value(key, merged[key])
-    parsed = urlparse(merged["DEEPSEEK_BASE"])
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("DEEPSEEK_BASE 必须是有效的 HTTP(S) 地址")
+    active_provider = str(merged.get("ACTIVE_PROVIDER", "deepseek")).strip().lower()
+    if active_provider not in {"deepseek", "mimo"}:
+        raise ValueError("ACTIVE_PROVIDER 必须是 deepseek 或 mimo")
+    merged["ACTIVE_PROVIDER"] = active_provider
+    # Provider 凭据会随请求发送，因此自定义地址至少必须是完整的 HTTP(S) URL；
+    # 是否信任非官方主机由设置窗口在保存前再次向用户确认。
+    for key in FIELD_META:
+        if not str(key).endswith("_BASE"):
+            continue
+        value = str(merged.get(key, "")).strip()
+        if not value:
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"{key} 必须是有效的 HTTP(S) 地址")
     return merged
 
 
@@ -317,7 +399,11 @@ def all_config() -> dict[str, Any]:
 def _prune_backups() -> None:
     backups = sorted(CONFIG_DIR.glob("config.json.bak-*"), reverse=True)
     for path in backups[3:]:
-        path.unlink(missing_ok=True)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # 备份清理失败不能回滚已经原子写入的有效配置。
+            logger().warning("Old config backup could not be removed: %s", path)
 
 
 def save_config(values: dict[str, Any]) -> dict[str, Any]:

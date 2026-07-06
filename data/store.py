@@ -1,4 +1,4 @@
-"""Data models and fault-tolerant DeepSeek usage aggregation."""
+"""Provider-neutral aggregation with isolated per-provider snapshots."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar
 
-import api.deepseek as ds
-import api.deepseek_official as official
+import api.deepseek as ds  # 兼容 v1.0 中对 data.store.ds 的测试和扩展引用。
 import config_manager
+from api.providers import active_providers
+from api.providers.base import FetchError, ModelUsage
 from data import history
 
 TOKEN_TYPES = {
@@ -21,20 +22,6 @@ TOKEN_TYPES = {
 }
 ACTIVITY_DAYS = 365
 HISTORY_SYNC_BATCH_SIZE = 2
-
-
-@dataclass(frozen=True)
-class FetchError:
-    code: str
-    source: str
-    message: str
-
-
-@dataclass
-class ModelUsage:
-    model: str
-    tokens: int = 0
-    cost_cny: Decimal = Decimal("0")
 
 
 def top_model_stats(
@@ -68,11 +55,9 @@ def _safe_int(value: Any) -> int:
 
 
 def sum_usage_amount(item: dict[str, Any], allowed_types: set[str] = TOKEN_TYPES) -> Decimal:
-    """汇总一条模型记录；坏字段只跳过当前 usage，避免丢弃整批响应。"""
     total = Decimal("0")
     usages = item.get("usage", [])
     if not isinstance(usages, list):
-        config_manager.logger().warning("Skipped usage with invalid list type")
         return total
     for usage in usages:
         if not isinstance(usage, dict) or usage.get("type") not in allowed_types:
@@ -93,7 +78,6 @@ def months_for_week(today: date) -> list[tuple[int, int]]:
 
 
 def months_for_activity(today: date) -> list[tuple[int, int]]:
-    """Return newest-first months intersecting the 365-day activity window."""
     earliest = today - timedelta(days=ACTIVITY_DAYS - 1)
     current = today.replace(day=1)
     first = earliest.replace(day=1)
@@ -104,295 +88,330 @@ def months_for_activity(today: date) -> list[tuple[int, int]]:
     return months
 
 
-def _error_from_exception(source: str, exc: Exception) -> FetchError:
-    if isinstance(exc, ds.APIError):
-        return FetchError(exc.code, source, exc.message)
-    if isinstance(exc, (KeyError, TypeError, ValueError)):
-        config_manager.logger().warning("Invalid response in %s: %s", source, exc)
-        return FetchError("INVALID_RESPONSE", source, "DeepSeek 返回结构已变化")
-    config_manager.logger().exception("Unexpected fetch error in %s", source)
-    return FetchError("UNKNOWN_ERROR", source, "读取用量时发生未知错误")
+# 新实现内部仍使用带下划线名称；保留公开别名以兼容 v1.0 调用方。
+_months_for_week = months_for_week
+_months_for_activity = months_for_activity
 
 
-def _validate_days(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    days = payload.get("days", [])
-    if not isinstance(days, list):
-        raise ValueError("days 字段不是列表")
-    return days
-
-
-def _daily_totals(
+def _sum_from_payloads(
     payloads: list[dict[str, Any]], today: date
-) -> tuple[Decimal, Decimal]:
-    today_total = Decimal("0")
-    week_total = Decimal("0")
+) -> tuple[int, int, Decimal, Decimal]:
+    today_tokens = 0
+    week_tokens = 0
+    today_cost = Decimal("0")
+    week_cost = Decimal("0")
     week_start = today - timedelta(days=today.weekday())
-    seen: set[tuple[date, int]] = set()
     for payload in payloads:
-        for day_entry in _validate_days(payload):
-            if not isinstance(day_entry, dict):
+        days = payload.get("days", [])
+        if not isinstance(days, list):
+            continue
+        for day in days:
+            if not isinstance(day, dict):
                 continue
             try:
-                usage_date = date.fromisoformat(str(day_entry.get("date", "")))
+                usage_date = date.fromisoformat(str(day.get("date", "")))
             except ValueError:
-                config_manager.logger().warning("Skipped usage row with invalid date")
                 continue
-            items = day_entry.get("data", [])
+            items = day.get("data", [])
             if not isinstance(items, list):
-                config_manager.logger().warning("Skipped day with invalid data list")
                 continue
-            for index, item in enumerate(items):
-                if not isinstance(item, dict) or (usage_date, index) in seen:
+            for item in items:
+                if not isinstance(item, dict):
                     continue
-                seen.add((usage_date, index))
-                amount = sum_usage_amount(item)
-                if usage_date == today:
-                    today_total += amount
-                if week_start <= usage_date <= today:
-                    week_total += amount
-    return today_total, week_total
+                usages = item.get("usage", [])
+                if not isinstance(usages, list):
+                    continue
+                for usage in usages:
+                    if not isinstance(usage, dict):
+                        continue
+                    usage_type = str(usage.get("type", ""))
+                    try:
+                        amount = _decimal(usage.get("amount"))
+                    except ValueError:
+                        config_manager.logger().warning("Skipped malformed provider usage")
+                        continue
+                    if usage_type == "cost_cny":
+                        if usage_date == today:
+                            today_cost += amount
+                        if week_start <= usage_date <= today:
+                            week_cost += amount
+                    elif usage_type in TOKEN_TYPES:
+                        if usage_date == today:
+                            today_tokens += int(amount)
+                        if week_start <= usage_date <= today:
+                            week_tokens += int(amount)
+    return today_tokens, week_tokens, today_cost, week_cost
 
 
-def _model_totals(payload: dict[str, Any]) -> dict[str, Decimal]:
-    rows = payload.get("total", [])
-    if not isinstance(rows, list):
-        raise ValueError("total 字段不是列表")
-    result: dict[str, Decimal] = {}
-    for row in rows:
-        if not isinstance(row, dict):
+def _monthly_totals_from_payloads(
+    payloads: list[dict[str, Any]], today: date
+) -> tuple[int, Decimal, list[dict[str, Any]]]:
+    month_tokens = 0
+    month_cost = Decimal("0")
+    models: dict[str, dict[str, Any]] = {}
+    for payload in payloads:
+        days = payload.get("days", [])
+        if not isinstance(days, list):
             continue
-        model = str(row.get("model", "")).strip()
-        if not model:
-            config_manager.logger().warning("Skipped model row without model id")
-            continue
-        result[model] = result.get(model, Decimal("0")) + sum_usage_amount(row)
-    return result
+        for day in days:
+            if not isinstance(day, dict):
+                continue
+            try:
+                usage_date = date.fromisoformat(str(day.get("date", "")))
+            except ValueError:
+                continue
+            if (usage_date.year, usage_date.month) != (today.year, today.month):
+                continue
+            for item in day.get("data", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                model = str(item.get("model", "unknown")).strip() or "unknown"
+                slot = models.setdefault(model, {"model": model, "usage": []})
+                for usage in item.get("usage", []) or []:
+                    if not isinstance(usage, dict):
+                        continue
+                    try:
+                        amount = _decimal(usage.get("amount"))
+                    except ValueError:
+                        continue
+                    usage_type = str(usage.get("type", ""))
+                    if usage_type == "cost_cny":
+                        month_cost += amount
+                    elif usage_type in TOKEN_TYPES:
+                        month_tokens += int(amount)
+                    else:
+                        continue
+                    slot["usage"].append(copy.deepcopy(usage))
+    per_model = sorted(
+        models.values(),
+        key=lambda row: sum(
+            _safe_int(usage.get("amount"))
+            for usage in row["usage"]
+            if usage.get("type") in TOKEN_TYPES
+        ),
+        reverse=True,
+    )
+    return month_tokens, month_cost, per_model
+
+
+@dataclass
+class PerProviderData:
+    provider_id: str
+    provider_name: str
+    balance_cny: float | None = None
+    balance_tokens: int | None = None
+    monthly_usage_tokens: int | None = None
+    monthly_cost_cny: float | None = None
+    today_tokens: int | None = None
+    today_cost_cny: float | None = None
+    weekly_tokens: int | None = None
+    weekly_cost_cny: float | None = None
+    total_cost_cny: float | None = None
+    per_model: list[dict[str, Any]] = field(default_factory=list)
+    errors: list[FetchError] = field(default_factory=list)
+    status: str = "loading"
+    is_stale: bool = False
 
 
 @dataclass
 class TokenData:
-    """Aggregated view plus explicit freshness/error state."""
-
-    balance_cny: float = 0.0
-    balance_tokens: int = 0
-    monthly_usage_tokens: int = 0
-    monthly_cost_cny: float = 0.0
-    today_tokens: int = 0
-    today_cost_cny: float = 0.0
-    weekly_tokens: int = 0
-    weekly_cost_cny: float = 0.0
-    total_cost_cny: float = 0.0
+    balance_cny: float | None = None
+    balance_tokens: int | None = 0
+    monthly_usage_tokens: int | None = 0
+    monthly_cost_cny: float | None = None
+    today_tokens: int | None = 0
+    today_cost_cny: float | None = None
+    weekly_tokens: int | None = 0
+    weekly_cost_cny: float | None = None
+    total_cost_cny: float | None = None
     per_model_amount: list[dict[str, Any]] = field(default_factory=list)
     per_model_cost: list[dict[str, Any]] = field(default_factory=list)
     model_stats: dict[str, ModelUsage] = field(default_factory=dict)
+    per_provider: list[PerProviderData] = field(default_factory=list)
     status: str = "loading"
     last_success_at: datetime | None = None
     last_attempt_at: datetime | None = None
     errors: list[FetchError] = field(default_factory=list)
     is_stale: bool = False
     last_updated: str = ""
-    official_status: str = "not_configured"
-    platform_status: str = "unknown"
     daily_usage: list[dict[str, Any]] = field(default_factory=list)
 
     _last_snapshot: ClassVar["TokenData | None"] = None
+    _provider_snapshots: ClassVar[dict[str, "TokenData"]] = {}
     _cache_lock: ClassVar[threading.Lock] = threading.Lock()
 
     @classmethod
-    def _base_snapshot(cls) -> "TokenData":
+    def _base_snapshot(cls, provider_id: str = "") -> "TokenData":
         with cls._cache_lock:
-            return copy.deepcopy(cls._last_snapshot) if cls._last_snapshot else cls()
+            snapshot = cls._provider_snapshots.get(provider_id) if provider_id else cls._last_snapshot
+            return copy.deepcopy(snapshot) if snapshot else cls()
 
     @classmethod
     def fetch(cls, today: date | None = None) -> "TokenData":
         current_day = today or date.today()
-        data = cls._base_snapshot()
+        providers = list(active_providers())
+        if not providers:
+            return cls(
+                status="error",
+                errors=[FetchError("NOT_CONFIGURED", "平台", "没有可用的数据平台")],
+                last_attempt_at=datetime.now(),
+            )
+
+        provider = providers[0]
+        cached = cls._base_snapshot(provider.id)
+        data = cached
         data.status = "loading"
         data.errors = []
         data.last_attempt_at = datetime.now()
+        previous_per = data.per_provider[0] if data.per_provider else None
+        per = copy.deepcopy(previous_per) if previous_per else PerProviderData(provider.id, provider.name)
+        per.provider_id = provider.id
+        per.provider_name = provider.name
+        per.errors = []
+        per.status = "loading"
+        per.is_stale = False
         successes = 0
-        platform_requests_stopped = False
 
-        official_balance_loaded = False
-        if config_manager.get("DEEPSEEK_API_KEY", "").strip():
+        if not provider.is_configured():
+            # 删除或切换凭据后不能继续展示旧账号数据，否则会造成“仍已登录”的错觉。
+            per = PerProviderData(provider.id, provider.name, status="not_configured")
+            per.errors.append(FetchError("NOT_CONFIGURED", provider.name, f"尚未配置 {provider.name} 凭据"))
+            data.daily_usage = []
+            data.last_success_at = None
+            data.last_updated = ""
+        else:
             try:
-                balance = official.get_balance()
-                infos = balance.get("balance_infos", [])
-                if not isinstance(infos, list):
-                    raise ValueError("balance_infos 字段不是列表")
-                for info in infos:
-                    if isinstance(info, dict) and info.get("currency") == "CNY":
-                        data.balance_cny = float(_decimal(info.get("total_balance")))
-                        official_balance_loaded = True
-                        break
-                data.official_status = "ok"
+                balance, balance_error = provider.fetch_balance()
+            except Exception as exc:
+                config_manager.logger().exception("Balance fetch failed for %s", provider.id)
+                balance, balance_error = None, FetchError("UNKNOWN_ERROR", "账户余额", str(exc))
+            if balance is not None:
+                per.balance_cny = float(balance.amount) if balance.amount is not None else None
+                per.balance_tokens = int(balance.token_estimate)
                 successes += 1
+            if balance_error:
+                per.errors.append(balance_error)
+
+            try:
+                summary, summary_error = provider.fetch_summary()
             except Exception as exc:
-                data.official_status = "error"
-                data.errors.append(_error_from_exception("官方余额", exc))
+                config_manager.logger().exception("Summary fetch failed for %s", provider.id)
+                summary, summary_error = None, FetchError("UNKNOWN_ERROR", "账户摘要", str(exc))
+            if summary is not None:
+                per.monthly_cost_cny = (
+                    float(summary.month_cost) if summary.month_cost is not None else None
+                )
+                per.monthly_usage_tokens = int(summary.month_tokens)
+                if summary.remaining_tokens and not per.balance_tokens:
+                    per.balance_tokens = int(summary.remaining_tokens)
+                successes += 1
+            if summary_error:
+                per.errors.append(summary_error)
 
-        try:
-            summary = ds.get_user_summary()
-            wallets = summary.get("normal_wallets", [])
-            if not isinstance(wallets, list):
-                raise ValueError("normal_wallets 字段不是列表")
-            for wallet in wallets:
-                if not isinstance(wallet, dict) or wallet.get("currency") != "CNY":
-                    continue
-                if not official_balance_loaded:
-                    data.balance_cny = float(_decimal(wallet.get("balance")))
-                data.balance_tokens = _safe_int(wallet.get("token_estimation"))
-            monthly_costs = summary.get("monthly_costs", [])
-            if isinstance(monthly_costs, list) and monthly_costs:
-                first = monthly_costs[0]
-                if isinstance(first, dict):
-                    data.monthly_cost_cny = float(_decimal(first.get("amount")))
-            data.monthly_usage_tokens = _safe_int(summary.get("monthly_token_usage"))
-            successes += 1
-            data.platform_status = "ok"
-        except Exception as exc:
-            data.platform_status = "error"
-            data.errors.append(_error_from_exception("账户摘要", exc))
-            platform_requests_stopped = (
-                isinstance(exc, ds.APIError)
-                and exc.code in {"RATE_LIMITED", "PLATFORM_BLOCKED"}
-            )
-
-        amount_payloads: list[dict[str, Any]] = []
-        amount_failed = False
-        token_models: dict[str, Decimal] | None = None
-        request_months = months_for_week(current_day)
-        try:
-            backfill_count = 0
-            for missing_month in history.unsynced_months(
-                months_for_activity(current_day)
-            ):
-                if missing_month in request_months:
-                    continue
-                request_months.append(missing_month)
-                backfill_count += 1
-                if backfill_count >= HISTORY_SYNC_BATCH_SIZE:
-                    break
-        except Exception:
-            config_manager.logger().exception("History sync state read failed")
-            data.errors.append(
-                FetchError("LOCAL_STORAGE", "历史缓存", "本地历史同步状态读取失败")
-            )
-        if not platform_requests_stopped:
-            for month, year in request_months:
-                try:
-                    amount_payloads.append(ds.get_usage_amount(month, year))
-                    successes += 1
-                except Exception as exc:
-                    amount_failed = True
-                    data.errors.append(_error_from_exception("Token 明细", exc))
-                    if isinstance(exc, ds.APIError) and exc.code in {
-                        "RATE_LIMITED", "PLATFORM_BLOCKED"
-                    }:
-                        # 同一轮继续请求只会放大限流或风控；保留已取得的数据并等待下次刷新。
-                        platform_requests_stopped = True
+            request_months = months_for_week(current_day)
+            try:
+                for month in history.unsynced_months(
+                    months_for_activity(current_day), provider.id
+                ):
+                    if month in request_months:
+                        continue
+                    request_months.append(month)
+                    if len(request_months) >= len(months_for_week(current_day)) + HISTORY_SYNC_BATCH_SIZE:
                         break
-        if amount_payloads and not amount_failed:
+            except Exception:
+                config_manager.logger().exception("History sync state read failed for %s", provider.id)
+                per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地同步状态读取失败"))
+
             try:
-                today_tokens, weekly_tokens = _daily_totals(amount_payloads, current_day)
-                data.today_tokens, data.weekly_tokens = int(today_tokens), int(weekly_tokens)
-                # 回填月份追加在请求列表末尾，当前模型统计必须仍取本月响应。
-                current_index = request_months.index(
-                    (current_day.month, current_day.year)
-                )
-                current_amount = amount_payloads[current_index]
-                data.per_model_amount = copy.deepcopy(current_amount.get("total", []))
-                token_models = _model_totals(current_amount)
+                payloads, payload_errors = provider.fetch_payloads(request_months)
             except Exception as exc:
-                data.errors.append(_error_from_exception("Token 解析", exc))
-
-        cost_payloads: list[dict[str, Any]] = []
-        cost_failed = False
-        cost_models: dict[str, Decimal] | None = None
-        if not platform_requests_stopped:
-            for month, year in request_months:
-                try:
-                    cost_payloads.append(ds.get_usage_cost(month, year))
-                    successes += 1
-                except Exception as exc:
-                    cost_failed = True
-                    data.errors.append(_error_from_exception("费用明细", exc))
-                    if isinstance(exc, ds.APIError) and exc.code in {
-                        "RATE_LIMITED", "PLATFORM_BLOCKED"
-                    }:
-                        platform_requests_stopped = True
-                        break
-        if cost_payloads and not cost_failed:
-            try:
-                today_cost, weekly_cost = _daily_totals(cost_payloads, current_day)
-                # 费用先用 Decimal 聚合，最后才转成兼容现有 UI 的 float。
-                data.today_cost_cny = float(today_cost)
-                data.weekly_cost_cny = float(weekly_cost)
-                current_index = request_months.index(
-                    (current_day.month, current_day.year)
+                config_manager.logger().exception("Payload fetch failed for %s", provider.id)
+                payloads, payload_errors = [], [FetchError("UNKNOWN_ERROR", "用量明细", str(exc))]
+            per.errors.extend(payload_errors)
+            if payloads:
+                today_tokens, week_tokens, today_cost, week_cost = _sum_from_payloads(
+                    payloads, current_day
                 )
-                current_cost = cost_payloads[current_index]
-                data.per_model_cost = copy.deepcopy(current_cost.get("total", []))
-                cost_models = _model_totals(current_cost)
-            except Exception as exc:
-                data.errors.append(_error_from_exception("费用解析", exc))
-
-        if token_models is not None and cost_models is not None:
-            # 两类模型明细都成功时才整体替换，既移除已下线模型，也避免部分失败清空缓存。
-            data.model_stats = {
-                model: ModelUsage(
-                    model,
-                    int(token_models.get(model, Decimal("0"))),
-                    cost_models.get(model, Decimal("0")),
+                per.today_tokens = today_tokens
+                per.weekly_tokens = week_tokens
+                per.today_cost_cny = float(today_cost)
+                per.weekly_cost_cny = float(week_cost)
+                month_tokens, month_cost, per_model = _monthly_totals_from_payloads(
+                    payloads, current_day
                 )
-                for model in token_models.keys() | cost_models.keys()
-            }
-
-        platform_calls_succeeded = bool(amount_payloads or cost_payloads)
-        if amount_failed or cost_failed:
-            data.platform_status = "partial" if platform_calls_succeeded else "error"
-        elif data.platform_status != "error":
-            data.platform_status = "ok"
-
-        if amount_payloads and cost_payloads and not amount_failed and not cost_failed:
-            try:
-                # 当前月仍在增长，不能标记为完整历史；跨月后需再补拉一次最终账单。
-                current_month = (current_day.month, current_day.year)
-                completed_months = [
-                    month for month in request_months if month != current_month
+                if per.monthly_usage_tokens is None:
+                    per.monthly_usage_tokens = month_tokens
+                if per.monthly_cost_cny is None:
+                    per.monthly_cost_cny = float(month_cost)
+                per.per_model = per_model
+                successes += 1
+                completed = [
+                    tuple(payload["_month"])
+                    for payload in payloads
+                    if payload.get("_month")
+                    and payload.get("_complete")
+                    and tuple(payload["_month"]) != (current_day.month, current_day.year)
                 ]
-                history.save_usage(
-                    amount_payloads,
-                    cost_payloads,
-                    synced_months=completed_months,
-                )
-            except Exception as exc:
-                config_manager.logger().exception("History save failed")
-                data.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史数据保存失败"))
+                try:
+                    history.save_usage(payloads, payloads, completed, provider.id)
+                except Exception:
+                    config_manager.logger().exception("History save failed for %s", provider.id)
+                    per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史保存失败"))
 
-        try:
-            # 图表只消费本地规范化日数据，避免 UI 重新理解不稳定的上游响应结构。
-            # UI 只读取年度窗口；历史总金额则独立汇总全部本地账单。
-            data.daily_usage = history.recent_daily(371)
-            data.total_cost_cny = float(history.total_cost())
-        except Exception:
-            config_manager.logger().exception("History read failed")
-            data.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史数据读取失败"))
+            try:
+                data.daily_usage = (
+                    history.recent_daily(371, provider.id)
+                    if provider.supports_daily_usage
+                    else []
+                )
+                per.total_cost_cny = (
+                    float(history.total_cost(provider.id))
+                    if provider.supports_cost
+                    else None
+                )
+            except Exception:
+                config_manager.logger().exception("History read failed for %s", provider.id)
+                per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史读取失败"))
+
+            if successes:
+                per.status = "partial" if per.errors else "ok"
+                per.is_stale = bool(per.errors)
+            else:
+                per.status = "error"
+                per.is_stale = previous_per is not None
+
+        data.per_provider = [per]
+        data.balance_cny = per.balance_cny
+        data.balance_tokens = per.balance_tokens
+        data.monthly_usage_tokens = per.monthly_usage_tokens
+        data.monthly_cost_cny = per.monthly_cost_cny
+        data.today_tokens = per.today_tokens
+        data.today_cost_cny = per.today_cost_cny
+        data.weekly_tokens = per.weekly_tokens
+        data.weekly_cost_cny = per.weekly_cost_cny
+        data.total_cost_cny = per.total_cost_cny
+        data.per_model_amount = copy.deepcopy(per.per_model)
+        data.per_model_cost = copy.deepcopy(per.per_model)
+        data.errors = list(per.errors)
 
         if successes:
             data.last_success_at = datetime.now()
             data.last_updated = data.last_success_at.strftime("%H:%M:%S")
-            data.status = "partial" if data.errors else "ok"
-            data.is_stale = bool(data.errors)
+            data.status = "partial" if per.errors else "ok"
+            data.is_stale = bool(per.errors)
             with cls._cache_lock:
+                cls._provider_snapshots[provider.id] = copy.deepcopy(data)
                 cls._last_snapshot = copy.deepcopy(data)
         else:
-            data.status = "error"
-            data.is_stale = data.last_success_at is not None
+            data.status = "error" if per.status != "not_configured" else "not_configured"
+            data.is_stale = per.is_stale
+
         for error in data.errors:
             config_manager.logger().warning(
-                "Fetch failed: source=%s code=%s message=%s",
-                error.source, error.code, error.message,
+                "Fetch failed: provider=%s source=%s code=%s",
+                provider.id,
+                error.source,
+                error.code,
             )
         return data
 

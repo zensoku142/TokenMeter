@@ -155,6 +155,33 @@ QLineEdit:hover, QPlainTextEdit:hover, QSpinBox:hover, QComboBox:hover {{
 QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QComboBox:focus {{
     border-color: {C_ACCENT_2};
 }}
+QComboBox QAbstractItemView {{
+    color: {C_TEXT};
+    background: {C_SURFACE};
+    border: 1px solid {C_BORDER};
+    selection-background-color: {C_ACCENT};
+    selection-color: {C_VALUE};
+    outline: 0;
+    padding: 4px;
+}}
+QComboBox QAbstractItemView::item {{
+    padding: 6px 10px;
+    min-height: 24px;
+}}
+QComboBox QAbstractItemView::item:hover {{
+    background: {C_GLASS_CARD_HOVER};
+}}
+QComboBox::drop-down {{
+    border: 0;
+    width: 28px;
+}}
+QComboBox::down-arrow {{
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid {C_SUBTEXT};
+    margin-right: 8px;
+}}
 QScrollArea {{ background: transparent; border: 0; }}
 QScrollBar:horizontal {{ background: {C_ROW_BG}; height: 8px; border-radius: 4px; }}
 QScrollBar::handle:horizontal {{ background: {C_DEEP_BLUE}; min-width: 36px; border-radius: 4px; }}

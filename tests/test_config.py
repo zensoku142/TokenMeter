@@ -11,9 +11,19 @@ import config_manager
 
 
 class ConfigTests(unittest.TestCase):
+    def test_boolean_and_provider_values_are_validated(self):
+        self.assertFalse(
+            config_manager.validate_config({"EDGE_HIDE_ENABLED": "false"})[
+                "EDGE_HIDE_ENABLED"
+            ]
+        )
+        with self.assertRaises(ValueError):
+            config_manager.validate_config({"ACTIVE_PROVIDER": "unknown"})
+
     def test_legacy_default_compact_size_is_migrated(self):
-        Path("C:/tmp").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir="C:/tmp") as directory:
+        temp_root = Path.cwd() / ".test-appdata" / "tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             config_path = Path(directory) / "config.json"
             config_path.write_text(
                 json.dumps({"WIDGET_COMPACT_SIZE": 120}), encoding="utf-8"
@@ -40,8 +50,9 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(custom_values["WIDGET_COMPACT_SIZE"], 112)
 
     def test_backups_exclude_secrets_and_are_limited(self):
-        Path("C:/tmp").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir="C:/tmp") as directory:
+        temp_root = Path.cwd() / ".test-appdata" / "tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             root = Path(directory)
             config_path = root / "config.json"
             old_config = config_manager._config

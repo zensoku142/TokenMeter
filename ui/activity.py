@@ -102,7 +102,7 @@ def activity_levels(days: Iterable[TokenActivityDay]) -> dict[date, int]:
 
 
 def compact_tokens(value: int) -> str:
-    # 面板沿用 Codex 个人资料的中文“万”档位，Token 语义由卡片标题提供。
+    # 保持 v1.0 的“万 Token”统一口径，避免同一面板在数值变化时切换单位。
     scaled = value / 10_000
     decimals = 4 if value and abs(value) < 100 else 2
     text = f"{scaled:.{decimals}f}".rstrip("0").rstrip(".")
