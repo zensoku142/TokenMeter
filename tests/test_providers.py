@@ -30,29 +30,92 @@ class MiMoProviderTests(unittest.TestCase):
     def test_real_usage_shape_reports_month_and_remaining_tokens(self, get):
         get.side_effect = self.config
         provider = MiMoProvider()
-        provider._session.get = Mock(return_value=response({
-            "code": 0,
-            "data": {
-                "monthUsage": {"items": [
-                    {"name": "month_total_token", "used": 8_020_433_896, "limit": 11_000_000_000}
-                ]},
-                "usage": {"items": [
-                    {"name": "plan_total_token", "used": 4_841_862_467, "limit": 11_000_000_000},
-                    {"name": "compensation_total_token", "used": 10, "limit": 10},
-                ]},
-            },
-        }))
+
+        def balance_response(url, **kwargs):
+            return response({
+                "code": 0,
+                "data": {
+                    "balance": "124.07",
+                    "frozenBalance": "0.00",
+                    "currency": "CNY",
+                    "giftBalance": "124.07",
+                    "cashBalance": "0.00",
+                },
+            })
+
+        def usage_response(url, **kwargs):
+            return response({
+                "code": 0,
+                "data": {
+                    "tokenUsage": {
+                        "inputToken": 551046842,
+                        "outputToken": 1503444,
+                        "cacheToken": 544156672,
+                        "totalToken": 552550286,
+                    },
+                    "costUsage": {
+                        "totalCost": "43.30",
+                        "currentMonthCost": "16.17",
+                    },
+                },
+            })
+
+        def detail_response(url, **kwargs):
+            return response({
+                "code": 0,
+                "data": [
+                    {
+                        "date": "2026-07-04",
+                        "model": "mimo-v2.5-pro",
+                        "consumedAmount": "9.280356",
+                        "inputHitToken": 62931840,
+                        "inputMissToken": 2216402,
+                        "outputToken": 176309,
+                        "totalToken": 65324551,
+                    },
+                    {
+                        "date": "2026-07-03",
+                        "model": "mimo-v2.5-pro",
+                        "consumedAmount": "6.647988",
+                        "inputHitToken": 107101312,
+                        "inputMissToken": 991771,
+                        "outputToken": 165857,
+                        "totalToken": 108258940,
+                    },
+                ],
+            })
+
+        def dispatcher(url, **kwargs):
+            if "/api/v1/balance" in url:
+                return balance_response(url, **kwargs)
+            if "/api/v1/usage/detail/list" in url:
+                return detail_response(url, **kwargs)
+            return usage_response(url, **kwargs)
+
+        provider._session.get = Mock(side_effect=dispatcher)
+        provider._session.post = Mock(side_effect=dispatcher)
 
         balance, balance_error = provider.fetch_balance()
         summary, summary_error = provider.fetch_summary()
+        payloads, payload_errors = provider.fetch_payloads([(7, 2026)])
 
         self.assertIsNone(balance_error)
         self.assertIsNone(summary_error)
-        self.assertIsNone(balance.amount)
-        self.assertEqual(balance.token_estimate, 6_158_137_533)
-        self.assertEqual(summary.month_tokens, 8_020_433_896)
-        self.assertIsNone(summary.month_cost)
-        self.assertEqual(provider._session.get.call_count, 1)
+        self.assertEqual(payload_errors, [])
+        # 余额：账户余额来自 balance.balance，单位 CNY
+        self.assertEqual(str(balance.amount), "124.07")
+        self.assertEqual(balance.currency, "CNY")
+        # 月度用量：来自 tokenUsage.totalToken
+        self.assertEqual(summary.month_tokens, 552550286)
+        self.assertEqual(str(summary.month_cost), "16.17")
+        # 日明细：确认拿到了 2 天数据且 token/费用字段齐全
+        self.assertTrue(payloads and payloads[0]["days"])
+        first_day = payloads[0]["days"][0]
+        usage_types = {u["type"] for u in first_day["data"][0]["usage"]}
+        self.assertIn("PROMPT_CACHE_HIT_TOKEN", usage_types)
+        self.assertIn("PROMPT_CACHE_MISS_TOKEN", usage_types)
+        self.assertIn("RESPONSE_TOKEN", usage_types)
+        self.assertIn("cost_cny", usage_types)
 
     @patch("api.providers.mimo.config_manager.get")
     def test_body_auth_error_is_not_reported_as_zero(self, get):
@@ -67,8 +130,12 @@ class MiMoProviderTests(unittest.TestCase):
     def test_missing_cookie_does_not_send_request(self, _get):
         provider = MiMoProvider()
         provider._session.get = Mock()
+        provider._session.post = Mock()
         self.assertFalse(provider.is_configured())
+        balance, _ = provider.fetch_balance()
+        self.assertIsNone(balance)
         provider._session.get.assert_not_called()
+        provider._session.post.assert_not_called()
 
 
 class DeepSeekProviderTests(unittest.TestCase):

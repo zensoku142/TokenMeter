@@ -118,8 +118,30 @@ def activity_levels(days: Iterable[TokenActivityDay]) -> dict[date, int]:
 
 
 def compact_tokens(value: int) -> str:
-    # 保持 v1.0 的“万 Token”统一口径，避免同一面板在数值变化时切换单位。
-    scaled = value / 10_000
-    decimals = 4 if value and abs(value) < 100 else 2
-    text = f"{scaled:.{decimals}f}".rstrip("0").rstrip(".")
-    return f"{text}万"
+    """把整数 token 数量压缩为中文可读短文本。
+
+    默认以"万"为单位（< 1 万也以 "X 万" 输出，保持单位一致）；
+    当数值 ≥ 1 亿时切换为"亿"。保留最多 2 位小数，末尾 0 会
+    被去掉。
+    """
+    if value is None:
+        return "--"
+    try:
+        amount = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if amount == 0:
+        return "0万"
+
+    def _fmt(denominator: int) -> str:
+        scaled = amount / denominator
+        text = f"{scaled:.2f}".rstrip("0").rstrip(".")
+        # 若因四舍五入退化为 0，直接返回 "0" 以便外层补单位。
+        return "0" if text.lstrip("-") == "0" else text
+
+    abs_amount = abs(amount)
+    if abs_amount >= 100_000_000:
+        yi = _fmt(100_000_000)
+        return f"{yi}亿"
+    wan = _fmt(10_000)
+    return f"{wan}万"

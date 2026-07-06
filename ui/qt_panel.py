@@ -544,20 +544,17 @@ class MainPanel(QFrame):
             provider_id = data.per_provider[0].provider_id
             provider_name = data.per_provider[0].provider_name
             self._title_label.setText(f"API 使用监控 · {provider_name}")
-        is_mimo = provider_id == "mimo"
-        self.today_card.set_title("今日使用金额" if not is_mimo else "今日用量")
-        self.balance_card.set_title("账户余额" if not is_mimo else "套餐剩余")
+        self.today_card.set_title("今日使用金额")
+        self.balance_card.set_title("账户余额")
         self.month_card.set_title("本月累计")
         self.today_card.set_values(
             money(data.today_cost_cny),
-            "平台暂不提供按日明细" if is_mimo else tokens(data.today_tokens),
+            tokens(data.today_tokens),
             "",
         )
         self.balance_card.set_values(
-            tokens(data.balance_tokens) if is_mimo else money(data.balance_cny),
-            "剩余 Token" if is_mimo else (
-                f"约 {tokens(data.balance_tokens)}" if data.balance_tokens else "账户可用余额"
-            ),
+            money(data.balance_cny),
+            f"约 {tokens(data.balance_tokens)}" if data.balance_tokens else "账户可用余额",
             "",
         )
         self.month_card.set_values(
@@ -568,9 +565,7 @@ class MainPanel(QFrame):
         self.activity.set_activity(data.daily_usage)
         source_days = [day for day in self.activity.days if day.has_source_data]
         total = sum(day.token_count for day in source_days)
-        if is_mimo:
-            summary = "MiMo 控制台暂不提供逐日明细"
-        elif not source_days:
+        if not source_days:
             summary = "暂无 Token 活动"
         else:
             first = min(day.date for day in source_days)

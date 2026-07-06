@@ -56,7 +56,7 @@ def test_token_axis_uses_readable_units():
     assert format_token_axis(60_000_000) == "6000万"
 
 
-def test_panel_token_values_use_wan_units():
+def test_panel_token_values_use_readable_units():
     data = sample_data()
     data.today_tokens = 1_500_000
     data.balance_tokens = 250_000_000
@@ -65,12 +65,12 @@ def test_panel_token_values_use_wan_units():
     panel.update_data(data)
 
     assert panel.today_card.detail.text() == "150万"
-    assert panel.balance_card.detail.text() == "约 25000万"
+    assert panel.balance_card.detail.text() == "约 2.5亿"
     assert panel.month_card.detail.text() == "6000万"
     statistics = [label.text() for label in panel.statistics._values]
     assert "6000万" in statistics
-    assert "28000万" in statistics
-    assert panel.activity_summary.text().endswith("28000万")
+    assert "2.8亿" in statistics
+    assert panel.activity_summary.text().endswith("2.8亿")
     panel.close()
 
 

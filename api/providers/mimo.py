@@ -1,8 +1,8 @@
-"""Xiaomi MiMo Token Plan usage provider.
+"""Xiaomi MiMo platform provider.
 
-MiMo does not publish a billing-history API.  The web console exposes monthly
-plan quota through ``/api/v1/tokenPlan/usage``; this adapter therefore reports
-plan tokens only and deliberately leaves daily usage and monetary cost absent.
+Uses the platform API at ``platform.xiaomimimo.com`` to fetch balance,
+monthly usage summary, and per-day usage details — all authenticated via
+browser cookie.
 """
 
 from __future__ import annotations
@@ -12,27 +12,40 @@ from typing import Any
 import requests
 
 import config_manager
-from api.providers.base import FetchError, Provider, ProviderBalance, ProviderSummary, build_session, safe_int
+from api.providers.base import (
+    FetchError,
+    Provider,
+    ProviderBalance,
+    ProviderSummary,
+    build_session,
+    _decimal,
+)
+
+_MIMO_PLATFORM = "https://platform.xiaomimimo.com"
 
 
 class MiMoProvider(Provider):
     id = "mimo"
     name = "小米 MiMo"
     default_currency = "CNY"
-    default_base = "https://platform.xiaomimimo.com"
+    default_base = _MIMO_PLATFORM
     official_api_hosts = {"platform.xiaomimimo.com"}
+    # TokenScope2 的接口会同时返回余额 (balance)、月度费用和逐日用量，
+    # 所以这里把 supports 开关打开，让 data.store 可以走通用路径，
+    # 与 DeepSeek 一致聚合 today_cost_cny / today_tokens / daily_usage。
+    supports_daily_usage = True
+    supports_cost = True
     credential_fields = {
         "COOKIE": {
             "label": "Cookie",
             "secret": True,
             "multiline": True,
-            "hint": "通常包含 api-platform_serviceToken、userId、api-platform_slh 和 api-platform_ph",
+            "hint": "登录 platform.xiaomimimo.com 后复制浏览器 Cookie",
         },
         "API_PLATFORM_PH": {
-            "label": "api-platform_ph（兼容旧配置）",
-            "secret": True,
-            "optional": True,
-            "hint": "完整 Cookie 已包含该项时无需单独填写",
+            "label": "api-platform_ph",
+            "secret": False,
+            "hint": "浏览器请求 URL 中 ?api-platform_ph= 后面的值",
         },
         "API_KEY": {
             "label": "推理 API Key（用量查询不使用）",
@@ -49,46 +62,108 @@ class MiMoProvider(Provider):
 
     def __init__(self) -> None:
         self._session = build_session()
-        self._usage_cache: dict[str, Any] | None = None
-        self._usage_error: Exception | None = None
 
+    # ------------------------------------------------------------------ helpers
     def is_configured(self) -> bool:
-        return bool(str(config_manager.get("MIMO_COOKIE", "")).strip())
+        return bool(
+            str(config_manager.get("MIMO_COOKIE", "")).strip()
+            or str(config_manager.get("MIMO_API_KEY", "")).strip()
+        )
 
     def _base_url(self) -> str:
-        configured = str(config_manager.get("MIMO_BASE", "")).strip().rstrip("/")
-        if configured in {"https://api.xiaomimimo.com", "api.xiaomimimo.com"}:
-            return self.default_base
-        return configured or self.default_base
+        custom = str(config_manager.get("MIMO_BASE", "")).strip()
+        # 迁移早期版本默认指向 api.xiaomimimo.com；用量/余额端点只在 platform
+        # platform.xiaomimimo.com 提供，因此把旧默认值替换为当前默认值。
+        if custom in {"https://api.xiaomimimo.com", "api.xiaomimimo.com"}:
+            custom = ""
+        return custom or _MIMO_PLATFORM
 
-    def _headers(self) -> dict[str, str]:
+    def _platform_headers(self) -> dict[str, str]:
         cookie = str(config_manager.get("MIMO_COOKIE", "")).strip()
+        # 浏览器的 Cookie 头要求"name=value; name2=value2"，把粘贴时
+        # 带入的换行/制表/多余空白规范化为单个空格，保证分号分隔。
+        # 同时只保留每一项，避免空的空段。
+        cookie_lines = [
+            token.strip()
+            for token in " ".join(cookie.splitlines()).split(";")
+            if token.strip()
+        ]
+        cookie = "; ".join(cookie_lines)
+        # 将 api-platform_ph 注入 cookie 作为登录态的一部分，平台会同时
+        # 校验 URL 参数与 cookie 中的对应项。
         ph = str(config_manager.get("MIMO_API_PLATFORM_PH", "")).strip()
-        if ph and "api-platform_ph=" not in cookie:
-            # api-platform_ph 本身是登录 Cookie；保留浏览器复制出的编码，不能二次解码。
-            cookie = f"{cookie.rstrip('; ')}; api-platform_ph={ph}" if cookie else f"api-platform_ph={ph}"
+        if ph and "api-platform_ph" not in cookie:
+            ph_decoded = ph.replace("%2F", "/").replace("%3D", "=")
+            cookie = f'{cookie}; api-platform_ph="{ph_decoded}"'
         return {
-            "accept": "application/json",
+            "accept": "*/*",
+            "accept-language": "zh",
             "content-type": "application/json",
-            "cookie": cookie,
-            "referer": f"{self._base_url()}/console/plan-manage",
             "x-timezone": "Asia/Shanghai",
-            "user-agent": "TokenSpider/1.1",
+            "origin": self._base_url(),
+            "sec-ch-ua": '"Google Chrome";v="149", "Chromium";v="149", '
+            '"Not)A;Brand";v="24"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "cookie": cookie,
+            "referer": f"{self._base_url()}/console/usage",
+            "user-agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/149.0.0.0 Safari/537.36"
+            ),
         }
 
-    def _get(self, path: str) -> dict[str, Any]:
+    def _url(self, path: str) -> str:
+        """构造完整 URL，并在末尾附加 ``api-platform_ph``。
+
+        ``ph`` 直接作为原始查询串附加，避免对用户从浏览器复制的百分
+        比编码（如 ``%2F``）被二次编码。
+        """
+        base = self._base_url()
+        url = f"{base}{path}"
+        ph = str(config_manager.get("MIMO_API_PLATFORM_PH", "")).strip()
+        if ph:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}api-platform_ph={ph}"
+        return url
+
+    def _get(self, path: str) -> Any:
         if not self.is_configured():
             raise RuntimeError("NOT_CONFIGURED")
         try:
             response = self._session.get(
-                f"{self._base_url()}{path}",
-                headers=self._headers(),
+                self._url(path),
+                headers=self._platform_headers(),
                 timeout=(5, 15),
             )
         except requests.Timeout as exc:
             raise RuntimeError("NETWORK_TIMEOUT") from exc
         except requests.RequestException as exc:
             raise RuntimeError("NETWORK_ERROR") from exc
+        return self._check_response(response)
+
+    def _post(self, path: str, body: dict[str, Any]) -> Any:
+        if not self.is_configured():
+            raise RuntimeError("NOT_CONFIGURED")
+        try:
+            response = self._session.post(
+                self._url(path),
+                json=body,
+                headers=self._platform_headers(),
+                timeout=(5, 15),
+            )
+        except requests.Timeout as exc:
+            raise RuntimeError("NETWORK_TIMEOUT") from exc
+        except requests.RequestException as exc:
+            raise RuntimeError("NETWORK_ERROR") from exc
+        return self._check_response(response)
+
+    @staticmethod
+    def _check_response(response: requests.Response) -> Any:
         if response.status_code in (401, 403):
             raise RuntimeError("AUTH_EXPIRED")
         if response.status_code == 429:
@@ -108,30 +183,9 @@ class MiMoProvider(Provider):
         if payload.get("code") not in (0, "0", None):
             raise RuntimeError("API_ERROR")
         data = payload.get("data")
-        if not isinstance(data, dict):
+        if not isinstance(data, (dict, list)):
             raise RuntimeError("INVALID_RESPONSE")
         return data
-
-    def _usage(self) -> dict[str, Any]:
-        if self._usage_cache is None and self._usage_error is None:
-            try:
-                self._usage_cache = self._get("/api/v1/tokenPlan/usage")
-            except Exception as exc:
-                self._usage_error = exc
-        if self._usage_error is not None:
-            raise self._usage_error
-        return self._usage_cache or {}
-
-    @staticmethod
-    def _item(data: dict[str, Any], group: str, name: str) -> dict[str, Any] | None:
-        section = data.get(group)
-        items = section.get("items", []) if isinstance(section, dict) else []
-        if not isinstance(items, list):
-            return None
-        for item in items:
-            if isinstance(item, dict) and item.get("name") == name:
-                return item
-        return None
 
     @staticmethod
     def _error(source: str, exc: Exception) -> FetchError:
@@ -148,38 +202,89 @@ class MiMoProvider(Provider):
         }
         return FetchError(code, source, messages.get(code, f"MiMo 请求失败（{code}）"))
 
+    # -------------------------------------------------------------- fetches
     def fetch_balance(self) -> tuple[ProviderBalance | None, FetchError | None]:
         try:
-            item = self._item(self._usage(), "usage", "plan_total_token")
-            if item is None:
-                return None, FetchError("NO_DATA", "MiMo 套餐", "未找到套餐 Token 用量")
-            used = safe_int(item.get("used"))
-            limit = safe_int(item.get("limit"))
-            return ProviderBalance(currency="", amount=None, token_estimate=max(0, limit - used)), None
+            data = self._get("/api/v1/balance")
         except Exception as exc:
-            return None, self._error("MiMo 套餐", exc)
+            return None, self._error("MiMo 余额", exc)
+        balance_str = str(data.get("balance", "0") or "0")
+        currency = str(data.get("currency", "CNY") or "CNY")
+        balance = _decimal(balance_str)
+        # 账户为按量付费模式时，平台不返回套餐剩余 token；
+        # 以 amount 作为余额主字段，让 UI 的账户余额/费用部分正常展示。
+        return ProviderBalance(
+            currency=currency,
+            amount=balance,
+            token_estimate=0,
+        ), None
 
     def fetch_summary(self) -> tuple[ProviderSummary | None, FetchError | None]:
         try:
-            data = self._usage()
-            month_item = self._item(data, "monthUsage", "month_total_token")
-            plan_item = self._item(data, "usage", "plan_total_token")
-            item = month_item or plan_item
-            if item is None:
-                return None, FetchError("NO_DATA", "MiMo 用量", "未找到本月 Token 用量")
-            used = safe_int(item.get("used"))
-            remaining = 0
-            if plan_item is not None:
-                remaining = max(0, safe_int(plan_item.get("limit")) - safe_int(plan_item.get("used")))
-            return ProviderSummary(month_cost=None, month_tokens=used, remaining_tokens=remaining), None
+            data = self._get("/api/v1/usage")
         except Exception as exc:
             return None, self._error("MiMo 用量", exc)
+        cost_usage = data.get("costUsage") or {}
+        token_usage = data.get("tokenUsage") or {}
+        month_cost = _decimal(cost_usage.get("currentMonthCost"))
+        month_tokens = int(str(token_usage.get("totalToken", 0) or 0))
+        return ProviderSummary(
+            month_cost=month_cost,
+            month_tokens=month_tokens,
+            remaining_tokens=0,
+        ), None
 
     def fetch_payloads(
         self, months: list[tuple[int, int]]
     ) -> tuple[list[dict[str, Any]], list[FetchError]]:
-        # 控制台仅返回套餐/月度汇总，不提供可靠的逐日明细或人民币费用。
-        return [], []
+        """抓取指定月份的每日用量，合并为标准 ``{days, total}`` 结构。
+
+        每一行包含：date/model/consumedAmount/inputHitToken/inputMissToken/
+        outputToken/totalToken。按日期聚合后交给 data.store 做统一展示。
+        """
+        payloads: list[dict[str, Any]] = []
+        errors: list[FetchError] = []
+        for month, year in sorted(set(months)):
+            try:
+                rows = self._post(
+                    "/api/v1/usage/detail/list",
+                    {"year": year, "month": month},
+                )
+            except RuntimeError as exc:
+                errors.append(self._error("MiMo 用量明细", exc))
+                continue
+            except Exception as exc:
+                errors.append(self._error("MiMo 用量明细", exc))
+                continue
+            if not isinstance(rows, list):
+                errors.append(FetchError("INVALID_RESPONSE", "MiMo 用量明细", "返回格式错误"))
+                continue
+            by_date: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                day_str = str(row.get("date", ""))
+                if not day_str:
+                    continue
+                if day_str not in by_date:
+                    by_date[day_str] = {"date": day_str, "data": []}
+                model = str(row.get("model", "unknown"))
+                consumed = str(row.get("consumedAmount", "0") or "0")
+                input_hit = int(row.get("inputHitToken", 0) or 0)
+                input_miss = int(row.get("inputMissToken", 0) or 0)
+                output = int(row.get("outputToken", 0) or 0)
+                by_date[day_str]["data"].append({
+                    "model": model,
+                    "usage": [
+                        {"type": "PROMPT_CACHE_HIT_TOKEN", "amount": str(input_hit)},
+                        {"type": "PROMPT_CACHE_MISS_TOKEN", "amount": str(input_miss)},
+                        {"type": "RESPONSE_TOKEN", "amount": str(output)},
+                        {"type": "cost_cny", "amount": consumed},
+                    ],
+                })
+            days = sorted(by_date.values(), key=lambda d: d["date"])
+            payloads.append({"days": days, "total": []})
+        return payloads, errors
 
 
 __all__ = ["MiMoProvider"]

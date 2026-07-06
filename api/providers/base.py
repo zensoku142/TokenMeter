@@ -63,7 +63,7 @@ def build_session() -> requests.Session:
         read=2,
         backoff_factor=0.5,
         status_forcelist=(502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
+        allowed_methods=frozenset({"GET", "POST"}),
         respect_retry_after_header=False,
         raise_on_status=False,
     )

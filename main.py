@@ -11,7 +11,7 @@ from ui.qt_theme import APP_STYLE, app_icon
 from ui.qt_tray import SystemTray
 from ui.qt_widget import FloatingWidget
 
-__version__ = "1.1.8"
+__version__ = "1.1.9"
 
 ERROR_ALREADY_EXISTS = 183
 SINGLE_INSTANCE_MUTEX = "Local\\TokenSpider.SingleInstance"

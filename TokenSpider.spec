@@ -62,7 +62,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='TokenSpider-v1.1.8-windows-x64',
+    name='TokenSpider-v1.1.9-windows-x64',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
