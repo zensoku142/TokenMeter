@@ -26,6 +26,7 @@ from app_identity import (
     GITHUB_RELEASES_API_URL,
     GITHUB_REPOSITORY,
     LEGACY_MAIN_RELEASE_ASSET_TEMPLATE,
+    LEGACY_UPDATER_RELEASE_ASSET_TEMPLATE,
     MAIN_EXECUTABLE_NAME,
     MAIN_RELEASE_ASSET_TEMPLATE,
     SHA256_RELEASE_ASSET_NAME,
@@ -49,7 +50,7 @@ _RELEASE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _UPDATER_NAME_RE = re.compile(
-    r"^TokenScopeUpdater-v(?P<version>[0-9A-Za-z.-]+)-windows-x64\.exe$",
+    r"^(?:TokenScopeUpdater|TokenSpiderUpdater)-v(?P<version>[0-9A-Za-z.-]+)-windows-x64\.exe$",
     re.IGNORECASE,
 )
 _SHA256_LINE_RE = re.compile(r"^(?P<sha>[A-Fa-f0-9]{64})\s+\*?(?P<name>.+)$")
@@ -704,11 +705,17 @@ def _select_main_asset(version: str, assets: Iterable[object]) -> ReleaseAsset:
 
 
 def _select_updater_asset(version: str, assets: Iterable[object]) -> ReleaseAsset:
-    expected_name = UPDATER_RELEASE_ASSET_TEMPLATE.format(version=version).lower()
-    for asset in assets:
-        candidate = _asset_from_payload(asset)
-        if candidate and candidate.name.lower() == expected_name:
-            return candidate
+    expected_names = [
+        UPDATER_RELEASE_ASSET_TEMPLATE.format(version=version).lower(),
+        LEGACY_UPDATER_RELEASE_ASSET_TEMPLATE.format(version=version).lower(),
+    ]
+    # Some existing releases may still carry the pre-rename updater asset name.
+    # Keep accepting it so old release metadata can still drive in-app updates.
+    for name in expected_names:
+        for asset in assets:
+            candidate = _asset_from_payload(asset)
+            if candidate and candidate.name.lower() == name:
+                return candidate
     for asset in assets:
         candidate = _asset_from_payload(asset)
         if not candidate:

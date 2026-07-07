@@ -15,6 +15,7 @@ UPDATER_EXECUTABLE_NAME = "TokenScopeUpdater.exe"
 MAIN_RELEASE_ASSET_TEMPLATE = "TokenScope-v{version}-windows-x64.exe"
 LEGACY_MAIN_RELEASE_ASSET_TEMPLATE = "TokenSpider-v{version}-windows-x64.exe"
 UPDATER_RELEASE_ASSET_TEMPLATE = "TokenScopeUpdater-v{version}-windows-x64.exe"
+LEGACY_UPDATER_RELEASE_ASSET_TEMPLATE = "TokenSpiderUpdater-v{version}-windows-x64.exe"
 SHA256_RELEASE_ASSET_NAME = "SHA256SUMS.txt"
 
 GITHUB_REPOSITORY = "chenyifei142/TokenScope"
