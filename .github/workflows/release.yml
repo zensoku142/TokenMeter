@@ -40,7 +40,36 @@ jobs:
             "make_latest=true" >> $env:GITHUB_OUTPUT
           }
 
+      - name: Resolve release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $path = "release-notes/${{ github.ref_name }}.md"
+          # Release 正文需要保持仓库里原有的人写风格；有对应文件时优先使用，
+          # 避免 action 只上传附件却生成空白正文。
+          if (Test-Path $path) {
+            "has_body=true" >> $env:GITHUB_OUTPUT
+            "body_path=$path" >> $env:GITHUB_OUTPUT
+          } else {
+            "has_body=false" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Publish GitHub Release
+        if: steps.notes.outputs.has_body == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ steps.channel.outputs.is_prerelease }}
+          make_latest: ${{ steps.channel.outputs.make_latest }}
+          body_path: ${{ steps.notes.outputs.body_path }}
+          files: |
+            dist/TokenSpider-v*-windows-x64.exe
+            dist/TokenSpiderUpdater-v*-windows-x64.exe
+            dist/SHA256SUMS.txt
+
+      - name: Publish GitHub Release Without Body
+        if: steps.notes.outputs.has_body != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
