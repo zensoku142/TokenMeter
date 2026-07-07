@@ -560,3 +560,19 @@ def test_settings_window_wraps_content_in_scroll_area():
     assert scroll_area.widgetResizable() is True
     assert scroll_area.widget() is window.content
     window.close()
+
+
+def test_settings_window_keeps_dark_background_after_scroll_wrap():
+    with (
+        patch("ui.qt_settings.config_manager.load_config", return_value=config_manager.all_config()),
+        patch("ui.qt_settings.config_manager.all_config", return_value=config_manager.all_config()),
+    ):
+        window = SettingsWindow()
+
+    window.show()
+    APP.processEvents()
+    image = window.grab().toImage()
+    sample = image.pixelColor(12, 12)
+
+    assert max(sample.red(), sample.green(), sample.blue()) < 245
+    window.close()

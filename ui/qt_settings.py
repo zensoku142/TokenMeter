@@ -32,7 +32,7 @@ import config_manager
 from api.providers import PROVIDERS, list_providers
 from api.providers.base import FetchError
 from data.store import TokenData
-from ui.qt_theme import C_GREEN, C_RED, C_SUBTEXT
+from ui.qt_theme import C_GREEN, C_PANEL, C_RED, C_SUBTEXT
 from ui.qt_update import AppUpdateController
 
 _CARD_PADDING = 18
@@ -78,8 +78,12 @@ class SettingsWindow(QDialog):
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # 1.3.1 改成滚动容器后，Qt 会让 viewport/content 回退到系统默认底色；
+        # 这里显式继承深色面板背景，避免设置页在 Windows 上出现整块白底。
+        self.scroll_area.viewport().setStyleSheet(f"background: {C_PANEL};")
         root.addWidget(self.scroll_area)
         self.content = QWidget()
+        self.content.setStyleSheet(f"background: {C_PANEL};")
         self.scroll_area.setWidget(self.content)
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(24, 20, 24, 20)

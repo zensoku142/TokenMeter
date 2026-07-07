@@ -4,7 +4,7 @@ from __future__ import annotations
 
 APP_DISPLAY_NAME = "TokenSpider"
 APP_STORAGE_NAME = "TokenSpider"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 # Keep the storage/mutex prefix stable so users who tested the temporary
 # TokenScope naming can still reuse the same local state after reverting.
