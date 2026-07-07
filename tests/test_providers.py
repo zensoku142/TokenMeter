@@ -187,5 +187,56 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(usage, [{"type": "cost_cny", "amount": "0.03"}])
 
 
+    @patch("api.providers.mimo.config_manager.get")
+    def test_ph_is_extracted_from_cookie_and_appended_to_url(self, get):
+        ph = "kmi9pTH8JkU4%2FTg3Yjo8Yw%3D%3D"
+        cookie = f"api-platform_serviceToken=test; userId=1; api-platform_ph={ph}"
+
+        def cfg(key, default=None):
+            return {
+                "MIMO_COOKIE": cookie,
+                "MIMO_API_PLATFORM_PH": "",
+                "MIMO_BASE": "https://platform.xiaomimimo.com",
+            }.get(key, default)
+
+        get.side_effect = cfg
+        provider = MiMoProvider()
+        self.assertEqual(provider.extract_cookie_value(cookie, "api-platform_ph"), ph)
+        # 请求头里 cookie 保持原样，不会重复注入 ph
+        headers = provider._platform_headers()
+        self.assertIn(f"api-platform_ph={ph}", headers["cookie"])
+        self.assertIn("api-platform_ph=" + ph, provider._url("/api/v1/balance"))
+
+    @patch("api.providers.mimo.config_manager.get")
+    def test_ph_falls_back_to_credential_when_missing_from_cookie(self, get):
+        ph = "fallback-ph=="
+
+        def cfg(key, default=None):
+            return {
+                "MIMO_COOKIE": "api-platform_serviceToken=test; userId=1",
+                "MIMO_API_PLATFORM_PH": ph,
+                "MIMO_BASE": "https://platform.xiaomimimo.com",
+            }.get(key, default)
+
+        get.side_effect = cfg
+        provider = MiMoProvider()
+        self.assertEqual(provider.extract_cookie_value("xxx", "api-platform_ph"), "")
+        headers = provider._platform_headers()
+        # 注入后的 cookie 中应包含 ``api-platform_ph``
+        self.assertIn("api-platform_ph=", headers["cookie"])
+        # URL 同样会带上 ph
+        self.assertIn("api-platform_ph=" + ph, provider._url("/api/v1/usage"))
+
+    def test_cookie_normalization_squeezes_whitespace(self):
+        raw = "a=1;\n b=2;\nc=3"
+        normalized = MiMoProvider.normalize_cookie(raw)
+        self.assertEqual(normalized, "a=1; b=2; c=3")
+        # 双引号包裹的值会被正确抽取
+        self.assertEqual(
+            MiMoProvider.extract_cookie_value('api-platform_ph="abc=="; userId=1', "api-platform_ph"),
+            "abc==",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

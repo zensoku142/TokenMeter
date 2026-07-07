@@ -246,6 +246,25 @@ class SettingsWindow(QDialog):
                 draft[field] = widget.toPlainText().strip()
             else:
                 draft[field] = widget.text().strip()
+        # 小米 MiMo：若 Cookie 中已自带 ``api-platform_ph`` 且用户没有显式填
+        # 写过对应的输入框，则自动回填，避免用户重复复制相同内容。
+        if self._rendered_provider_id == "mimo":
+            cookie_value = draft.get("COOKIE", "") or ""
+            ph_widget = self._provider_widgets.get("API_PLATFORM_PH")
+            if cookie_value and ph_widget is not None:
+                ph_in_cookie = _extract_cookie_value(cookie_value, "api-platform_ph")
+                if ph_in_cookie:
+                    current_ph = (
+                        ph_widget.toPlainText().strip()
+                        if isinstance(ph_widget, QPlainTextEdit)
+                        else ph_widget.text().strip()
+                    )
+                    if not current_ph:
+                        if isinstance(ph_widget, QPlainTextEdit):
+                            ph_widget.setPlainText(ph_in_cookie)
+                        else:
+                            ph_widget.setText(ph_in_cookie)
+                        draft["API_PLATFORM_PH"] = ph_in_cookie
         self._provider_drafts[self._rendered_provider_id] = draft
 
     def _render_credentials(self, provider_id: str) -> None:
@@ -286,6 +305,30 @@ class SettingsWindow(QDialog):
                 edit.setText(initial)
             self._provider_widgets[field] = edit
             self.credentials_layout.addWidget(row_widget)
+        # 小米 MiMo：若 Cookie 中已含 ``api-platform_ph`` 则自动回填，
+        # 避免用户再去 URL 里复制一次；若用户此前已经填写过
+        # ``api-platform_ph`` 或 cookie 里没有，则保持原样。
+        if provider_id == "mimo":
+            cookie_widget = self._provider_widgets.get("COOKIE")
+            ph_widget = self._provider_widgets.get("API_PLATFORM_PH")
+            if cookie_widget is not None and ph_widget is not None:
+                cookie_text = (
+                    cookie_widget.toPlainText().strip()
+                    if isinstance(cookie_widget, QPlainTextEdit)
+                    else cookie_widget.text().strip()
+                )
+                ph_text = (
+                    ph_widget.toPlainText().strip()
+                    if isinstance(ph_widget, QPlainTextEdit)
+                    else ph_widget.text().strip()
+                )
+                if cookie_text and not ph_text:
+                    ph_in_cookie = _extract_cookie_value(cookie_text, "api-platform_ph")
+                    if ph_in_cookie:
+                        if isinstance(ph_widget, QPlainTextEdit):
+                            ph_widget.setPlainText(ph_in_cookie)
+                        else:
+                            ph_widget.setText(ph_in_cookie)
         self._rendered_provider_id = provider_id
         self._sync_window_size()
 
@@ -439,3 +482,28 @@ class SettingsWindow(QDialog):
             self.feedback.setStyleSheet(f"color: {C_RED};")
             self.feedback.setText(message)
         self._worker = None
+
+
+def _normalize_cookie(raw: str) -> str:
+    """规范粘贴的 Cookie: 去掉换行/多乙空白, 并以 ``; `` 连接."""
+    tokens = [
+        token.strip()
+        for token in " ".join(str(raw).splitlines()).split(";")
+        if token.strip()
+    ]
+    return "; ".join(tokens)
+
+
+def _extract_cookie_value(raw: str, name: str) -> str:
+    """在 ``k=v; k2=v2`` 字符串中定位 ``name`` 的值.
+
+    会去掉值周围的双引号；未找到返回空字符串.
+    """
+    for token in " ".join(str(raw).splitlines()).split(";"):
+        token = token.strip()
+        if not token or "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        if key.strip() == name:
+            return value.strip().strip('"')
+    return ""

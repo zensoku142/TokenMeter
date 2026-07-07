@@ -64,6 +64,36 @@ class MiMoProvider(Provider):
         self._session = build_session()
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def normalize_cookie(raw: str) -> str:
+        """把粘贴得到的 Cookie 规范化为 ``k=v; k2=v2``。
+
+        会去除多余空白、制表与换行，保证请求头和 ``api-platform_ph`` 查找
+        时不会因格式失败。
+        """
+        tokens = [
+            token.strip()
+            for token in " ".join(str(raw).splitlines()).split(";")
+            if token.strip()
+        ]
+        return "; ".join(tokens)
+
+    @staticmethod
+    def extract_cookie_value(raw: str, name: str) -> str:
+        """在 ``k=v; k2=v2`` 字符串中定位 ``name`` 的值。
+
+        会去掉值周围的双引号；未找到返回空字符串。对 ``api-platform_ph``
+        这类值可能含 ``/``、``=``、百分编码，因此按第一个 ``=`` 分割。
+        """
+        for token in " ".join(str(raw).splitlines()).split(";"):
+            token = token.strip()
+            if not token or "=" not in token:
+                continue
+            key, _, value = token.partition("=")
+            if key.strip() == name:
+                return value.strip().strip('"')
+        return ""
+
     def is_configured(self) -> bool:
         return bool(
             str(config_manager.get("MIMO_COOKIE", "")).strip()
@@ -79,22 +109,17 @@ class MiMoProvider(Provider):
         return custom or _MIMO_PLATFORM
 
     def _platform_headers(self) -> dict[str, str]:
-        cookie = str(config_manager.get("MIMO_COOKIE", "")).strip()
-        # 浏览器的 Cookie 头要求"name=value; name2=value2"，把粘贴时
-        # 带入的换行/制表/多余空白规范化为单个空格，保证分号分隔。
-        # 同时只保留每一项，避免空的空段。
-        cookie_lines = [
-            token.strip()
-            for token in " ".join(cookie.splitlines()).split(";")
-            if token.strip()
-        ]
-        cookie = "; ".join(cookie_lines)
-        # 将 api-platform_ph 注入 cookie 作为登录态的一部分，平台会同时
-        # 校验 URL 参数与 cookie 中的对应项。
-        ph = str(config_manager.get("MIMO_API_PLATFORM_PH", "")).strip()
-        if ph and "api-platform_ph" not in cookie:
-            ph_decoded = ph.replace("%2F", "/").replace("%3D", "=")
-            cookie = f'{cookie}; api-platform_ph="{ph_decoded}"'
+        cookie_raw = str(config_manager.get("MIMO_COOKIE", "")).strip()
+        cookie = self.normalize_cookie(cookie_raw)
+        # 若 Cookie 中已经自带 ``api-platform_ph``，以它为准，不再向 Cookie
+        # 头注入额外值；否则尝试从 ``MIMO_API_PLATFORM_PH`` 注入。两种方式
+        # 只会取一个，避免在 Cookie 中出现重复的 api-platform_ph 项。
+        ph = self.extract_cookie_value(cookie, "api-platform_ph")
+        if not ph:
+            ph = str(config_manager.get("MIMO_API_PLATFORM_PH", "")).strip()
+            if ph:
+                ph_decoded = ph.replace("%2F", "/").replace("%3D", "=")
+                cookie = f'{cookie}; api-platform_ph="{ph_decoded}"'
         return {
             "accept": "*/*",
             "accept-language": "zh",
@@ -121,11 +146,15 @@ class MiMoProvider(Provider):
         """构造完整 URL，并在末尾附加 ``api-platform_ph``。
 
         ``ph`` 直接作为原始查询串附加，避免对用户从浏览器复制的百分
-        比编码（如 ``%2F``）被二次编码。
+        比编码（如 ``%2F``）被二次编码。如果 Cookie 中已包含
+        ``api-platform_ph``，则优先使用它，保持与请求头一致。
         """
         base = self._base_url()
         url = f"{base}{path}"
-        ph = str(config_manager.get("MIMO_API_PLATFORM_PH", "")).strip()
+        cookie_raw = str(config_manager.get("MIMO_COOKIE", "")).strip()
+        ph = self.extract_cookie_value(self.normalize_cookie(cookie_raw), "api-platform_ph")
+        if not ph:
+            ph = str(config_manager.get("MIMO_API_PLATFORM_PH", "")).strip()
         if ph:
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}api-platform_ph={ph}"
