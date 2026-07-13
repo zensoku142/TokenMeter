@@ -416,6 +416,27 @@ class SettingsWindow(QDialog):
         self._cookie_finish_button.setVisible(False)
         self._cookie_acquire_status.setText("Cookie 已自动填入，请保存设置。")
 
+    def sync_persisted_cookie(self, provider_id: str, cookie_text: str) -> None:
+        """Keep an open settings draft aligned with an externally renewed cookie."""
+
+        provider_cls = PROVIDERS.get(provider_id)
+        if not provider_cls:
+            return
+        values = provider_cls.acquired_cookie_values(cookie_text)
+        if not values:
+            return
+        self._provider_drafts.setdefault(provider_id, {}).update(values)
+        if self._rendered_provider_id != provider_id:
+            return
+        for field, value in values.items():
+            widget = self._provider_widgets.get(field)
+            if isinstance(widget, QPlainTextEdit):
+                widget.setPlainText(value)
+            elif isinstance(widget, QLineEdit):
+                widget.setText(value)
+        if self._cookie_acquire_status is not None:
+            self._cookie_acquire_status.setText("Cookie 已在后台自动续期并保存。")
+
     def _cookie_acquire_failed(self, message: str) -> None:
         if self._rendered_provider_id == getattr(self, "_cookie_acquire_provider_id", ""):
             self._cookie_acquire_button.setEnabled(True)

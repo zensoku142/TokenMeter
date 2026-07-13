@@ -480,6 +480,9 @@ class MiMoProvider(Provider):
         stop_event: threading.Event,
         use_edge: bool = False,
         user_data_dir: str | None = None,
+        auto_collect: bool = False,
+        headless: bool = False,
+        total_timeout_seconds: float | None = None,
     ) -> str:
         return browser_cookie.acquire_cookie_via_chrome(
             stop_event,
@@ -490,6 +493,9 @@ class MiMoProvider(Provider):
             empty_cookie_error="MIMO_COOKIE_EMPTY",
             use_edge=use_edge,
             user_data_dir=user_data_dir,
+            auto_collect=auto_collect,
+            headless=headless,
+            total_timeout_seconds=total_timeout_seconds,
         )
 
     # ---------------------------------------------------------- chrome errors

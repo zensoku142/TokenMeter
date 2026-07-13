@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QHBoxLayout, QMenu, QSystemTrayIcon,
 import config_manager
 from data.store import TokenData
 from api.providers.base import FetchError
+from api.providers.mimo import MiMoProvider
 from ui.geometry import (
     WorkArea,
     clamp_window,
@@ -61,6 +62,60 @@ class FetchTask(QRunnable):
         self.signals.finished.emit(self.request_id, result)
 
 
+class MiMoRenewalSignals(QObject):
+    finished = Signal(str, str)
+
+
+class MiMoRenewalTask(QRunnable):
+    """Renew MiMo cookies through the retained browser profile off the UI thread."""
+
+    _NO_VISIBLE_RETRY = {
+        "CHROME_NOT_FOUND",
+        "USER_DATA_DIR_FAILED",
+        "NO_FREE_CDP_PORT",
+        "CHROME_LAUNCH_FAILED",
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.signals = MiMoRenewalSignals()
+        self._stop_event = threading.Event()
+
+    def cancel(self) -> None:
+        self._stop_event.set()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            cookie = MiMoProvider.acquire_cookie_via_chrome(
+                self._stop_event,
+                auto_collect=True,
+                headless=True,
+                total_timeout_seconds=20,
+            )
+        except RuntimeError as exc:
+            code = str(exc)
+            if self._stop_event.is_set() or code in self._NO_VISIBLE_RETRY:
+                self.signals.finished.emit("", code)
+                return
+            try:
+                cookie = MiMoProvider.acquire_cookie_via_chrome(
+                    self._stop_event,
+                    auto_collect=True,
+                    headless=False,
+                )
+            except RuntimeError as visible_exc:
+                self.signals.finished.emit("", str(visible_exc))
+                return
+            except Exception:
+                self.signals.finished.emit("", "ACQUIRE_UNEXPECTED")
+                return
+        except Exception:
+            self.signals.finished.emit("", "ACQUIRE_UNEXPECTED")
+            return
+        self.signals.finished.emit(cookie, "")
+
+
 def _fetch_tokens_safely(lightweight: bool = False) -> TokenData:
     """Fetch token data from the active provider and keep the worker thread
     from dying if a provider or config error is raised."""
@@ -90,6 +145,8 @@ class FloatingWidget(QWidget):
         self._closed = False
         self._auth_expired_notified = False
         self._auth_expired_provider_id: str | None = None
+        self._mimo_renewal_task: MiMoRenewalTask | None = None
+        self._mimo_renewal_attempted = False
         self._transitioning = False
         self._expand_horizontal = "right"
         self._expand_vertical = "down"
@@ -716,21 +773,84 @@ class FloatingWidget(QWidget):
             # 只在鉴权错误解除后恢复通知资格，避免定时刷新重复弹窗。
             self._auth_expired_notified = False
             self._auth_expired_provider_id = None
+            self._mimo_renewal_attempted = False
             return
-        if getattr(self, "_auth_expired_notified", False):
-            return
-        self._auth_expired_notified = True
         provider_id = (
             result.per_provider[0].provider_id
             if result.per_provider
             else str(config_manager.get("ACTIVE_PROVIDER", ""))
         )
+        if provider_id == "mimo":
+            if getattr(self, "_auth_expired_notified", False):
+                return
+            if getattr(self, "_mimo_renewal_task", None) is not None:
+                return
+            if getattr(self, "_mimo_renewal_attempted", False):
+                self._show_mimo_renewal_failure("AUTH_EXPIRED")
+                return
+            self._start_mimo_cookie_renewal()
+            return
+        if getattr(self, "_auth_expired_notified", False):
+            return
+        self._auth_expired_notified = True
         self._auth_expired_provider_id = provider_id
         tray = getattr(self, "tray", None)
         if tray is not None:
             tray.showMessage(
                 "TokenSpider：登录凭据已失效",
                 f"{auth_error.message}\n点击此通知即可重新获取 Cookie。",
+                QSystemTrayIcon.MessageIcon.Warning,
+                10_000,
+            )
+
+    def _start_mimo_cookie_renewal(self) -> None:
+        if self._closed or getattr(self, "_mimo_renewal_task", None) is not None:
+            return
+        task = MiMoRenewalTask()
+        self._mimo_renewal_task = task
+        self._mimo_renewal_attempted = True
+        task.signals.finished.connect(self._finish_mimo_cookie_renewal)
+        self._thread_pool.start(task)
+
+    @Slot(str, str)
+    def _finish_mimo_cookie_renewal(self, cookie_text: str, error_code: str) -> None:
+        self._mimo_renewal_task = None
+        if self._closed:
+            return
+        if cookie_text:
+            values = MiMoProvider.acquired_cookie_values(cookie_text)
+            try:
+                config_manager.save_config(
+                    {
+                        "MIMO_COOKIE": values.get("COOKIE", ""),
+                        "MIMO_API_PLATFORM_PH": values.get("API_PLATFORM_PH", ""),
+                    }
+                )
+            except Exception:
+                config_manager.logger().exception("MiMo cookie renewal could not be saved")
+                error_code = "ACQUIRE_UNEXPECTED"
+            else:
+                settings_window = getattr(self, "_settings_window", None)
+                if settings_window is not None:
+                    settings_window.sync_persisted_cookie("mimo", cookie_text)
+                self._auth_expired_notified = False
+                self._auth_expired_provider_id = None
+                self.refresh()
+                return
+
+        self._show_mimo_renewal_failure(error_code)
+
+    def _show_mimo_renewal_failure(self, error_code: str) -> None:
+        self._auth_expired_notified = True
+        self._auth_expired_provider_id = "mimo"
+        message = MiMoProvider.describe_acquire_error(
+            RuntimeError(error_code or "ACQUIRE_UNEXPECTED")
+        )
+        tray = getattr(self, "tray", None)
+        if tray is not None:
+            tray.showMessage(
+                "TokenSpider：MiMo 自动续期失败",
+                f"{message}\n点击此通知可手动重新获取 Cookie。",
                 QSystemTrayIcon.MessageIcon.Warning,
                 10_000,
             )
@@ -810,6 +930,8 @@ class FloatingWidget(QWidget):
         self._edge_hide_timer.stop()
         self._edge_leave_timer.stop()
         self._edge_hover_check.stop()
+        if self._mimo_renewal_task is not None:
+            self._mimo_renewal_task.cancel()
         self._thread_pool.clear()
         event.accept()
         QApplication.instance().quit()

@@ -9,6 +9,7 @@ import socket
 import struct
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -285,6 +286,51 @@ def format_cookie_string(
     return "; ".join(f"{name}={values[name]}" for name in names if values.get(name))
 
 
+def _unexpired_cookies(
+    cookies: list[dict[str, Any]], now: float | None = None
+) -> list[dict[str, Any]]:
+    current_time = time.time() if now is None else now
+    result: list[dict[str, Any]] = []
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        try:
+            expires_at = float(cookie.get("expires"))
+        except (TypeError, ValueError):
+            expires_at = -1
+        if expires_at > 0 and expires_at <= current_time:
+            continue
+        result.append(cookie)
+    return result
+
+
+def has_valid_required_cookies(
+    cookies: list[dict[str, Any]],
+    *,
+    allowed_domains: tuple[str, ...],
+    cookie_names: tuple[str, ...],
+    now: float | None = None,
+) -> bool:
+    """Return whether all required first-party cookies are currently usable."""
+
+    valid_names: set[str] = set()
+    normalized_domains = tuple(domain.lstrip(".").lower() for domain in allowed_domains)
+    for cookie in _unexpired_cookies(cookies, now):
+        name = str(cookie.get("name") or "")
+        if name not in cookie_names:
+            continue
+        domain = str(cookie.get("domain") or "").lstrip(".").lower()
+        if domain and not any(
+            domain == item or domain.endswith(f".{item}")
+            for item in normalized_domains
+        ):
+            continue
+        if not str(cookie.get("value") or "").strip('"'):
+            continue
+        valid_names.add(name)
+    return all(name in valid_names for name in cookie_names)
+
+
 def acquire_cookie_via_chrome(
     stop_event: threading.Event,
     *,
@@ -295,8 +341,15 @@ def acquire_cookie_via_chrome(
     empty_cookie_error: str,
     use_edge: bool = False,
     user_data_dir: str | None = None,
+    auto_collect: bool = False,
+    headless: bool = False,
+    total_timeout_seconds: float | None = None,
 ) -> str:
-    """Open an isolated browser profile, then read scoped first-party cookies via CDP."""
+    """Open an isolated browser profile, then read scoped first-party cookies via CDP.
+
+    Manual collection waits for the caller to signal completion. Automatic
+    collection polls until every provider-required cookie is present and valid.
+    """
 
     executable = find_chrome_executable(use_edge=use_edge)
     if not executable:
@@ -317,8 +370,11 @@ def acquire_cookie_via_chrome(
         "--remote-debugging-address=127.0.0.1",
         "--no-first-run",
         "--disable-default-apps",
-        f"--app={acquire_url}",
     ]
+    if headless:
+        args.extend(("--headless=new", "--disable-gpu", acquire_url))
+    else:
+        args.append(f"--app={acquire_url}")
     startupinfo = None
     try:
         startupinfo = subprocess.STARTUPINFO()
@@ -339,17 +395,43 @@ def acquire_cookie_via_chrome(
     websocket_url = ""
     try:
         _wait_browser_ready(port, stop_event)
-        stop_event.wait(timeout=_ACQUIRE_TOTAL_TIMEOUT_SECONDS)
         preferred_host = urlparse(acquire_url).hostname or ""
-        websocket_url = _pick_websocket_endpoint(port, preferred_host)
-        cookie_text = format_cookie_string(
-            _cdp_fetch_cookies_via_ws(websocket_url),
-            allowed_domains=allowed_domains,
-            cookie_names=cookie_names,
+        total_timeout = (
+            _ACQUIRE_TOTAL_TIMEOUT_SECONDS
+            if total_timeout_seconds is None
+            else max(1.0, float(total_timeout_seconds))
         )
-        if not cookie_text:
-            raise RuntimeError(empty_cookie_error)
-        return normalize_cookie(cookie_text)
+        if not auto_collect:
+            stop_event.wait(timeout=total_timeout)
+            websocket_url = _pick_websocket_endpoint(port, preferred_host)
+            cookie_text = format_cookie_string(
+                _cdp_fetch_cookies_via_ws(websocket_url),
+                allowed_domains=allowed_domains,
+                cookie_names=cookie_names,
+            )
+            if not cookie_text:
+                raise RuntimeError(empty_cookie_error)
+            return normalize_cookie(cookie_text)
+
+        deadline = time.monotonic() + total_timeout
+        required_names = cookie_names or ()
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            websocket_url = _pick_websocket_endpoint(port, preferred_host)
+            cookies = _unexpired_cookies(_cdp_fetch_cookies_via_ws(websocket_url))
+            if required_names and has_valid_required_cookies(
+                cookies,
+                allowed_domains=allowed_domains,
+                cookie_names=required_names,
+            ):
+                return normalize_cookie(
+                    format_cookie_string(
+                        cookies,
+                        allowed_domains=allowed_domains,
+                        cookie_names=cookie_names,
+                    )
+                )
+            stop_event.wait(0.5)
+        raise RuntimeError(empty_cookie_error)
     except RuntimeError:
         raise
     except Exception as exc:

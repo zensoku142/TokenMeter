@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from data.store import FetchError, PerProviderData, TokenData
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from ui.qt_panel import MainPanel
-from ui.qt_widget import FloatingWidget
+from ui.qt_widget import FloatingWidget, MiMoRenewalTask
 
 APP = QApplication.instance() or QApplication([])
 
@@ -29,6 +29,10 @@ def widget_stub():
     widget._refresh_timer = Mock()
     widget.tray = Mock()
     widget.open_settings = Mock()
+    widget._auth_expired_notified = False
+    widget._auth_expired_provider_id = None
+    widget._mimo_renewal_task = None
+    widget._mimo_renewal_attempted = False
     return widget
 
 
@@ -96,7 +100,7 @@ class RefreshTests(unittest.TestCase):
         widget._finish_refresh(1, expired)
         self.assertEqual(widget.tray.showMessage.call_count, 2)
 
-    def test_auth_expired_notification_click_starts_the_affected_provider_flow(self):
+    def test_mimo_auth_expired_starts_silent_renewal(self):
         widget = widget_stub()
         widget._request_id = 1
         expired = TokenData(
@@ -105,13 +109,64 @@ class RefreshTests(unittest.TestCase):
         )
 
         widget._finish_refresh(1, expired)
-        self.assertEqual(widget._auth_expired_provider_id, "mimo")
+        task = widget._thread_pool.start.call_args.args[0]
+        self.assertIsInstance(task, MiMoRenewalTask)
+        self.assertTrue(widget._mimo_renewal_attempted)
+        widget.tray.showMessage.assert_not_called()
 
-        widget.handle_auth_expired_notification_click()
-        widget.open_settings.assert_called_once_with(
-            provider_id="mimo", start_cookie_acquisition=True
+    @patch("ui.qt_widget.config_manager.save_config")
+    def test_successful_mimo_renewal_saves_only_cookie_credentials(self, save_config):
+        widget = widget_stub()
+        widget._mimo_renewal_task = Mock()
+        widget._mimo_renewal_attempted = True
+        widget._settings_window = Mock()
+        widget.refresh = Mock()
+
+        widget._finish_mimo_cookie_renewal(
+            "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
+            "",
         )
-        self.assertIsNone(widget._auth_expired_provider_id)
+
+        save_config.assert_called_once_with(
+            {
+                "MIMO_COOKIE": "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
+                "MIMO_API_PLATFORM_PH": "ph",
+            }
+        )
+        widget._settings_window.sync_persisted_cookie.assert_called_once_with(
+            "mimo",
+            "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
+        )
+        widget.refresh.assert_called_once_with()
+        self.assertIsNone(widget._mimo_renewal_task)
+
+    @patch("ui.qt_widget.config_manager.save_config", side_effect=OSError("failed"))
+    def test_failed_mimo_renewal_save_keeps_manual_recovery_available(self, _save_config):
+        widget = widget_stub()
+        widget._mimo_renewal_task = Mock()
+
+        widget._finish_mimo_cookie_renewal(
+            "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
+            "",
+        )
+
+        self.assertEqual(widget._auth_expired_provider_id, "mimo")
+        self.assertTrue(widget._auth_expired_notified)
+        self.assertEqual(widget.tray.showMessage.call_count, 1)
+
+    @patch("ui.qt_widget.MiMoProvider.acquire_cookie_via_chrome")
+    def test_mimo_renewal_falls_back_to_visible_browser(self, acquire_cookie):
+        acquire_cookie.side_effect = [RuntimeError("MIMO_COOKIE_EMPTY"), "fresh-cookie"]
+        task = MiMoRenewalTask()
+        finished = Mock()
+        task.signals.finished.connect(finished)
+
+        task.run()
+
+        self.assertEqual(acquire_cookie.call_count, 2)
+        self.assertTrue(acquire_cookie.call_args_list[0].kwargs["headless"])
+        self.assertFalse(acquire_cookie.call_args_list[1].kwargs["headless"])
+        finished.assert_called_once_with("fresh-cookie", "")
 
     def test_status_summary_distinguishes_configuration_and_request_errors(self):
         cases = (
