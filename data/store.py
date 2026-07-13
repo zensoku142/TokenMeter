@@ -5,10 +5,10 @@ from __future__ import annotations
 import copy
 import threading
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import api.deepseek as ds  # 兼容 v1.0 中对 data.store.ds 的测试和扩展引用。
 import config_manager
@@ -222,7 +222,11 @@ def token_breakdown_for_day(
 def provider_observed_at(provider_id: str, observed_at: datetime) -> datetime:
     """将刷新时刻转换为提供商估算日界所使用的时区。"""
     if provider_id == "mimo":
-        return observed_at.astimezone(ZoneInfo("Asia/Shanghai"))
+        try:
+            return observed_at.astimezone(ZoneInfo("Asia/Shanghai"))
+        except ZoneInfoNotFoundError:
+            # Windows 打包环境可能没有 IANA 时区数据库；MiMo 的平台日界固定为 UTC+8。
+            return observed_at.astimezone(timezone(timedelta(hours=8), "Asia/Shanghai"))
     # DeepSeek 未返回账单时区；按已确认的产品约定使用运行设备本地时区。
     return observed_at.astimezone()
 

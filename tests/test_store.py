@@ -1,9 +1,10 @@
 import os
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfoNotFoundError
 
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
@@ -195,6 +196,14 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(provider_usage_day("mimo", observed), date(2026, 7, 14))
         self.assertEqual(provider_observed_at("mimo", observed).hour, 0)
         self.assertEqual(provider_usage_day("deepseek", observed), observed.astimezone().date())
+
+    def test_mimo_usage_day_falls_back_to_utc_plus_eight_without_tzdata(self):
+        observed = datetime(2026, 7, 13, 16, 30, tzinfo=timezone.utc)
+        with patch("data.store.ZoneInfo", side_effect=ZoneInfoNotFoundError("missing")):
+            converted = provider_observed_at("mimo", observed)
+        self.assertEqual(converted.date(), date(2026, 7, 14))
+        self.assertEqual(converted.hour, 0)
+        self.assertEqual(converted.utcoffset(), timedelta(hours=8))
 
     def test_minute_cache_failure_does_not_block_daily_usage_refresh(self):
         provider = FakeProvider(payloads=[payload("2026-07-03", 7, ".2")])
