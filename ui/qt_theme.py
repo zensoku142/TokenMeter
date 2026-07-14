@@ -301,7 +301,7 @@ QToolButton#themeButton[selected="true"] {{
     background: {tokens.accent_soft};
 }}
 QFrame#activityModeSegment,
-QFrame#minuteDateSegment {{
+QWidget#minuteDateEdit {{
     background: {tokens.surface};
     border: 1px solid {tokens.border};
     border-radius: 6px;
@@ -322,16 +322,94 @@ QToolButton#activityModeButton:checked {{
     color: #FFFFFF;
     background: #2076FA;
 }}
-QToolButton#minuteDateButton {{
-    min-width: 20px;
-    max-width: 20px;
-    min-height: 22px;
-    max-height: 22px;
+QToolButton#minuteDatePreviousButton,
+QToolButton#minuteDateTextButton,
+QToolButton#minuteDateNextButton {{
+    min-height: 24px;
+    max-height: 24px;
     padding: 0;
+    color: {tokens.text};
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    font-size: 11px;
+}}
+QToolButton#minuteDatePreviousButton,
+QToolButton#minuteDateTextButton {{
+    border-right: 1px solid {tokens.border};
+}}
+QToolButton#minuteDatePreviousButton {{
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+}}
+QToolButton#minuteDateNextButton {{
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+}}
+QToolButton#minuteDatePreviousButton:hover,
+QToolButton#minuteDateTextButton:hover,
+QToolButton#minuteDateNextButton:hover {{
+    color: {tokens.value};
+    background: {tokens.accent_soft};
+}}
+QToolButton#minuteDatePreviousButton:pressed,
+QToolButton#minuteDateTextButton:pressed,
+QToolButton#minuteDateNextButton:pressed {{
+    color: #FFFFFF;
+    background: {tokens.accent};
+}}
+QToolButton#minuteDatePreviousButton:disabled,
+QToolButton#minuteDateTextButton:disabled,
+QToolButton#minuteDateNextButton:disabled {{
+    color: {tokens.disabled};
+    background: transparent;
+}}
+QFrame#minuteCalendarPopup {{
+    color: {tokens.text};
+    background: {tokens.elevated};
+    border: 1px solid {tokens.border};
+    border-radius: 8px;
+}}
+QLabel#minuteCalendarMonth {{
+    color: {tokens.value};
+    background: transparent;
+    border: 0;
+    font-size: 12px;
+}}
+QToolButton#minuteCalendarNavButton {{
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0;
+    color: {tokens.accent};
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    font-size: 16px;
+}}
+QToolButton#minuteCalendarNavButton:hover {{
+    background: {tokens.accent_soft};
+}}
+QToolButton#minuteCalendarNavButton:disabled {{
+    color: {tokens.disabled};
+    background: transparent;
+}}
+QCalendarWidget#minuteCalendar {{
+    color: {tokens.text};
     background: transparent;
     border: 0;
 }}
-QLabel#minuteDateLabel {{ color: {tokens.text}; font-size: 11px; }}
+QCalendarWidget#minuteCalendar QAbstractItemView {{
+    color: {tokens.text};
+    background: transparent;
+    alternate-background-color: transparent;
+    selection-background-color: transparent;
+    selection-color: {tokens.text};
+    border: 0;
+    outline: 0;
+    font-size: 11px;
+}}
 QToolButton#minuteLegendButton {{
     min-height: 22px;
     padding: 0;

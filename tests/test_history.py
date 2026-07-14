@@ -225,6 +225,28 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(history.minute_usage_for_day("deepseek", expired_day), [])
                 self.assertTrue(history.minute_usage_for_day("deepseek", retained_day))
 
+    def test_minute_usage_dates_include_snapshot_only_days_and_are_provider_scoped(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                totals = {token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES}
+                for provider, usage_day in (
+                    ("mimo", date(2026, 7, 13)),
+                    ("mimo", date(2026, 7, 12)),
+                    ("deepseek", date(2026, 7, 11)),
+                ):
+                    history.save_estimated_minute_usage(
+                        provider,
+                        usage_day,
+                        totals,
+                        datetime.combine(usage_day, datetime.min.time()),
+                    )
+
+                self.assertEqual(
+                    history.minute_usage_dates("mimo"),
+                    ["2026-07-12", "2026-07-13"],
+                )
+                self.assertEqual(history.minute_usage_dates("deepseek"), ["2026-07-11"])
+
 
 if __name__ == "__main__":
     unittest.main()

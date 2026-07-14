@@ -219,6 +219,33 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.status, "partial")
         self.assertIn("LOCAL_STORAGE", {error.code for error in data.errors})
 
+    def test_fetch_exposes_retained_minute_dates_and_history(self):
+        provider = FakeProvider(payloads=[payload("2026-07-03", 7, ".2")])
+        provider.supports_estimated_minute_usage = True
+        historical_rows = [
+            {"minute": 10, "token_type": "RESPONSE_TOKEN", "token_amount": 5}
+        ]
+
+        with (
+            patch("data.store.history.clear_expired_minute_usage"),
+            patch(
+                "data.store.history.minute_usage_for_day",
+                side_effect=lambda _provider, usage_day: (
+                    historical_rows if usage_day == date(2026, 7, 2) else []
+                ),
+            ),
+            patch(
+                "data.store.history.minute_usage_dates",
+                return_value=["2026-07-02", "2026-07-03"],
+            ),
+            patch("data.store.history.save_estimated_minute_usage", return_value="baseline"),
+        ):
+            data = self.fetch_with(provider)
+
+        self.assertEqual(data.minute_usage_days, ["2026-07-02", "2026-07-03"])
+        self.assertEqual(data.minute_usage_history["2026-07-02"], historical_rows)
+        self.assertEqual(data.minute_usage_history["2026-07-03"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

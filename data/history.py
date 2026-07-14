@@ -373,7 +373,7 @@ def save_estimated_minute_usage(
 
 
 def minute_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
-    """读取当天临时估算数据；稀疏行由界面补齐为 1,440 个分钟点。"""
+    """读取指定日期的临时估算数据；稀疏行由界面补齐为 1,440 个分钟点。"""
     with _connect() as connection:
         rows = connection.execute(
             """SELECT minute_index, token_type, token_amount
@@ -390,6 +390,22 @@ def minute_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]
         }
         for minute_index, token_type, token_amount in rows
     ]
+
+
+def minute_usage_dates(provider: str) -> list[str]:
+    """读取指定提供商仍保留分时缓存的日期，按日期升序返回。"""
+    with _connect() as connection:
+        rows = connection.execute(
+            """SELECT usage_date
+                 FROM (
+                     SELECT usage_date FROM minute_usage WHERE provider = ?
+                     UNION
+                     SELECT usage_date FROM minute_usage_snapshot WHERE provider = ?
+                 )
+                 ORDER BY usage_date""",
+            (provider, provider),
+        ).fetchall()
+    return [str(usage_date) for (usage_date,) in rows]
 
 
 def total_cost(provider: str | None = None) -> Decimal:

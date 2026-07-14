@@ -6,9 +6,21 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pyqtgraph as pg
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QDate, QLocale, QPoint, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+    QShortcut,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
+    QCalendarWidget,
     QButtonGroup,
     QFrame,
     QGridLayout,
@@ -97,6 +109,286 @@ class DraggableHeader(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.released.emit(event.globalPosition().toPoint())
             event.accept()
+
+
+class MinuteCalendarWidget(QCalendarWidget):
+    """Compact calendar grid whose cell states follow the application theme."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("minuteCalendar")
+        self.setNavigationBarVisible(False)
+        self.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
+        self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
+        self.setGridVisible(False)
+        self.setLocale(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
+        self.setAccessibleName("分时日期日历")
+        self.setFixedSize(264, 190)
+        self.refresh_theme()
+
+    def refresh_theme(self) -> None:
+        tokens = current_theme()
+        header_format = QTextCharFormat()
+        header_format.setForeground(QColor(tokens.subtext))
+        for day in Qt.DayOfWeek:
+            self.setWeekdayTextFormat(day, header_format)
+        self.updateCells()
+
+    def paintCell(self, painter: QPainter, rect, value: QDate) -> None:
+        tokens = current_theme()
+        in_month = value.year() == self.yearShown() and value.month() == self.monthShown()
+        in_range = self.minimumDate() <= value <= self.maximumDate()
+        selectable = in_month and in_range
+        selected = selectable and value == self.selectedDate()
+        today = selectable and value == QDate.currentDate() and not selected
+        cell = rect.adjusted(4, 2, -4, -2)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if selected:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(tokens.accent))
+            painter.drawRoundedRect(cell, 6, 6)
+            text_color = QColor("#FFFFFF")
+        else:
+            if today:
+                painter.setPen(QPen(QColor(tokens.accent), 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(cell, 6, 6)
+            text_color = QColor(tokens.text if selectable else tokens.disabled)
+        painter.setPen(text_color)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(value.day()))
+        painter.restore()
+
+
+class MinuteCalendarPopup(QFrame):
+    """Popup calendar with compact month navigation and range-aware selection."""
+
+    dateSelected = Signal(QDate)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("minuteCalendarPopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(288)
+        self._selected_date = QDate.currentDate()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(11, 9, 11, 11)
+        layout.setSpacing(4)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(4)
+        self.previous_month_button = self._month_button("‹", "上个月")
+        self.month_label = QLabel()
+        self.month_label.setObjectName("minuteCalendarMonth")
+        self.month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.next_month_button = self._month_button("›", "下个月")
+        header.addWidget(self.previous_month_button)
+        header.addWidget(self.month_label, 1)
+        header.addWidget(self.next_month_button)
+        layout.addLayout(header)
+
+        self.calendar = MinuteCalendarWidget(self)
+        layout.addWidget(self.calendar, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._escape_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._escape_shortcut.activated.connect(self.close)
+        self.previous_month_button.clicked.connect(lambda: self._change_month(-1))
+        self.next_month_button.clicked.connect(lambda: self._change_month(1))
+        self.calendar.clicked.connect(self._select_date)
+        self.calendar.activated.connect(self._select_date)
+        self._update_month_header()
+
+    def _month_button(self, text: str, tooltip: str) -> QToolButton:
+        button = QToolButton(self)
+        button.setObjectName("minuteCalendarNavButton")
+        button.setText(text)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setFixedSize(28, 26)
+        return button
+
+    def setDateRange(self, minimum: QDate, maximum: QDate) -> None:
+        self.calendar.setDateRange(minimum, maximum)
+        self._update_month_header()
+
+    def setDate(self, value: QDate) -> None:
+        if not value.isValid():
+            return
+        self._selected_date = value
+        self.calendar.setSelectedDate(value)
+        self.calendar.setCurrentPage(value.year(), value.month())
+        self._update_month_header()
+
+    def refresh_theme(self) -> None:
+        self.calendar.refresh_theme()
+        self.update()
+
+    def _month_intersects_range(self, first: QDate) -> bool:
+        last = QDate(first.year(), first.month(), first.daysInMonth())
+        return last >= self.calendar.minimumDate() and first <= self.calendar.maximumDate()
+
+    def _change_month(self, offset: int) -> None:
+        shown = QDate(self.calendar.yearShown(), self.calendar.monthShown(), 1)
+        target = shown.addMonths(offset)
+        if not self._month_intersects_range(target):
+            return
+        self.calendar.setCurrentPage(target.year(), target.month())
+        self._update_month_header()
+
+    def _update_month_header(self) -> None:
+        shown = QDate(self.calendar.yearShown(), self.calendar.monthShown(), 1)
+        self.month_label.setText(f"{shown.year()}年{shown.month()}月")
+        self.previous_month_button.setEnabled(self._month_intersects_range(shown.addMonths(-1)))
+        self.next_month_button.setEnabled(self._month_intersects_range(shown.addMonths(1)))
+
+    def _select_date(self, value: QDate) -> None:
+        in_shown_month = (
+            value.year() == self.calendar.yearShown()
+            and value.month() == self.calendar.monthShown()
+        )
+        if (
+            not in_shown_month
+            or value < self.calendar.minimumDate()
+            or value > self.calendar.maximumDate()
+        ):
+            self.setDate(self._selected_date)
+            return
+        self._selected_date = value
+        self.dateSelected.emit(value)
+        self.close()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class MinuteDateEdit(QWidget):
+    """Fixed-size previous/date/next selector used by the minute chart."""
+
+    dateChanged = Signal(QDate)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("minuteDateEdit")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedSize(118, 26)
+        self._minimum_date = QDate(1752, 9, 14)
+        self._maximum_date = QDate(9999, 12, 31)
+        self._date = QDate.currentDate()
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(0)
+        self.previous_button = self._button("‹", "前一天", "minuteDatePreviousButton", 20)
+        self.date_button = self._button("", "选择分时日期", "minuteDateTextButton", 76)
+        self.next_button = self._button("›", "后一天", "minuteDateNextButton", 20)
+        layout.addWidget(self.previous_button)
+        layout.addWidget(self.date_button)
+        layout.addWidget(self.next_button)
+
+        self.popup = MinuteCalendarPopup(self)
+        self.previous_button.clicked.connect(lambda: self._change_day(-1))
+        self.next_button.clicked.connect(lambda: self._change_day(1))
+        self.date_button.clicked.connect(self.showCalendarPopup)
+        self.popup.dateSelected.connect(self.setDate)
+        self._sync_display()
+
+    def _button(self, text: str, tooltip: str, name: str, width: int) -> QToolButton:
+        button = QToolButton(self)
+        button.setObjectName(name)
+        button.setText(text)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setFixedSize(width, 24)
+        return button
+
+    def date(self) -> QDate:
+        return self._date
+
+    def minimumDate(self) -> QDate:
+        return self._minimum_date
+
+    def maximumDate(self) -> QDate:
+        return self._maximum_date
+
+    def setDateRange(self, minimum: QDate, maximum: QDate) -> None:
+        if not minimum.isValid() or not maximum.isValid() or minimum > maximum:
+            return
+        self._minimum_date = minimum
+        self._maximum_date = maximum
+        self.popup.setDateRange(minimum, maximum)
+        self.setDate(self._date)
+        self._update_button_states()
+
+    def setDate(self, value: QDate) -> None:
+        if not value.isValid():
+            return
+        bounded = value
+        if bounded < self._minimum_date:
+            bounded = self._minimum_date
+        elif bounded > self._maximum_date:
+            bounded = self._maximum_date
+        changed = bounded != self._date
+        self._date = bounded
+        self._sync_display()
+        if changed:
+            self.dateChanged.emit(bounded)
+
+    def _sync_display(self) -> None:
+        self.date_button.setText(self._date.toString("yyyy-MM-dd"))
+        self.popup.setDate(self._date)
+        self._update_button_states()
+
+    def _update_button_states(self) -> None:
+        enabled = self.isEnabled()
+        self.previous_button.setEnabled(enabled and self._date > self._minimum_date)
+        self.date_button.setEnabled(enabled)
+        self.next_button.setEnabled(enabled and self._date < self._maximum_date)
+
+    def _change_day(self, offset: int) -> None:
+        self.setDate(self._date.addDays(offset))
+
+    def showCalendarPopup(self) -> None:
+        if not self.isEnabled():
+            return
+        if self.popup.isVisible():
+            self.popup.close()
+            return
+        self.popup.setDate(self._date)
+        self.popup.adjustSize()
+        below = self.mapToGlobal(QPoint(0, self.height() + 2))
+        above = self.mapToGlobal(QPoint(0, -self.popup.height() - 2))
+        screen = QGuiApplication.screenAt(below) or self.screen()
+        available = screen.availableGeometry()
+        x = max(available.left(), min(below.x(), available.right() - self.popup.width() + 1))
+        y = below.y()
+        if y + self.popup.height() - 1 > available.bottom() and above.y() >= available.top():
+            y = above.y()
+        self.popup.move(x, max(available.top(), y))
+        self.popup.show()
+        self.popup.raise_()
+        self.popup.calendar.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        if not enabled:
+            self.popup.close()
+        self._update_button_states()
+
+    def refresh_theme(self) -> None:
+        self.popup.refresh_theme()
+        self.update()
+
+    def closeEvent(self, event) -> None:
+        self.popup.close()
+        super().closeEvent(event)
 
 
 class StatusDot(QWidget):
@@ -963,6 +1255,14 @@ class MainPanel(QFrame):
         self._resolved_theme = current_theme().name
         self._theme_feedback_message = ""
         self._button_specs: list[tuple[QToolButton, str, QStyle.StandardPixmap, str]] = []
+        self._minute_provider_id = ""
+        self._minute_current_date = ""
+        self._minute_current_rows: list[dict] = []
+        self._minute_current_status = "unavailable"
+        self._minute_usage_history: dict[str, list[dict]] = {}
+        self._minute_usage_days: list[str] = []
+        self._minute_selected_date = ""
+        self._minute_follows_latest = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(1, 1, 1, 1)
@@ -1120,24 +1420,15 @@ class MainPanel(QFrame):
         mode_layout.addWidget(self.annual_activity_button)
         mode_layout.addWidget(self.minute_activity_button)
 
-        self.minute_previous_button = self._minute_date_button("‹", "前一天（仅缓存当天估算数据）")
-        self.minute_date_label = QLabel("今天")
-        self.minute_date_label.setObjectName("minuteDateLabel")
-        self.minute_date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.minute_date_label.setMinimumWidth(70)
-        self.minute_next_button = self._minute_date_button("›", "后一天不可选择")
-        self.minute_previous_button.setEnabled(False)
-        self.minute_next_button.setEnabled(False)
-        self.minute_date_label.setToolTip("估算分时仅保存当天数据")
-        self.minute_date_segment = QFrame()
-        self.minute_date_segment.setObjectName("minuteDateSegment")
-        date_layout = QHBoxLayout(self.minute_date_segment)
-        date_layout.setContentsMargins(1, 1, 1, 1)
-        date_layout.setSpacing(0)
-        date_layout.addWidget(self.minute_previous_button)
-        date_layout.addWidget(self.minute_date_label)
-        date_layout.addWidget(self.minute_next_button)
-        self.minute_controls: list[QWidget] = [self.minute_date_segment]
+        self.minute_date_edit = MinuteDateEdit()
+        self.minute_date_edit.setEnabled(False)
+        self.minute_date_edit.dateChanged.connect(self._on_minute_date_changed)
+        # 保留旧属性名，避免现有测试或外部调用方因复合控件替换而失效。
+        self.minute_previous_button = self.minute_date_edit.previous_button
+        self.minute_date_label = self.minute_date_edit.date_button
+        self.minute_next_button = self.minute_date_edit.next_button
+        self.minute_date_segment = self.minute_date_edit
+        self.minute_controls: list[QWidget] = [self.minute_date_edit]
         self.minute_estimate_label = QLabel("估算")
         self.minute_estimate_label.setObjectName("muted")
         estimate_tooltip = "按刷新间隔均摊：两次成功刷新之间的累计 Token 差额，非平台原始分钟明细"
@@ -1281,18 +1572,113 @@ class MainPanel(QFrame):
         button.setFixedSize(72, 22)
         return button
 
-    def _minute_date_button(self, text: str, tooltip: str) -> QToolButton:
-        button = QToolButton()
-        button.setObjectName("minuteDateButton")
-        button.setText(text)
-        button.setToolTip(tooltip)
-        button.setAccessibleName(tooltip)
-        button.setFixedSize(20, 22)
-        return button
+    def _on_minute_date_changed(self, value: QDate) -> None:
+        selected_date = value.toString("yyyy-MM-dd")
+        if selected_date not in self._minute_usage_days:
+            return
+        self._minute_selected_date = selected_date
+        self._minute_follows_latest = selected_date == self._minute_current_date
+        self._render_minute_date(loading=False)
+
+    def _update_minute_data(self, data: TokenData, loading: bool) -> None:
+        previous_current_date = self._minute_current_date
+        was_following_latest = (
+            self._minute_follows_latest
+            or not self._minute_selected_date
+            or self._minute_selected_date == previous_current_date
+        )
+        provider_id = (
+            data.per_provider[0].provider_id
+            if data.per_provider
+            else str(config_manager.get("ACTIVE_PROVIDER", ""))
+        )
+        provider_changed = bool(
+            self._minute_provider_id
+            and provider_id
+            and provider_id != self._minute_provider_id
+        )
+        if provider_id:
+            self._minute_provider_id = provider_id
+
+        self._minute_current_date = data.minute_usage_date
+        self._minute_current_rows = data.minute_usage
+        self._minute_current_status = data.minute_usage_status
+        self._minute_usage_history = dict(data.minute_usage_history)
+        self._minute_usage_days = []
+
+        current_date = QDate.fromString(data.minute_usage_date, "yyyy-MM-dd")
+        if current_date.isValid():
+            try:
+                retention_days = max(
+                    1, int(config_manager.get("MINUTE_USAGE_RETENTION_DAYS", 3))
+                )
+            except (TypeError, ValueError):
+                retention_days = 3
+            minimum_date = current_date.addDays(-(retention_days - 1))
+            self._minute_usage_days = [
+                minimum_date.addDays(offset).toString("yyyy-MM-dd")
+                for offset in range(retention_days)
+            ]
+
+            if (
+                provider_changed
+                or not self._minute_selected_date
+                or self._minute_selected_date not in self._minute_usage_days
+                or (previous_current_date != data.minute_usage_date and was_following_latest)
+            ):
+                self._minute_selected_date = data.minute_usage_date
+            self._minute_follows_latest = (
+                self._minute_selected_date == self._minute_current_date
+            )
+
+            blocker = QSignalBlocker(self.minute_date_edit)
+            self.minute_date_edit.setDateRange(minimum_date, current_date)
+            self.minute_date_edit.setDate(
+                QDate.fromString(self._minute_selected_date, "yyyy-MM-dd")
+            )
+            del blocker
+        else:
+            self._minute_selected_date = ""
+            self._minute_follows_latest = True
+
+        self.minute_date_edit.setEnabled(
+            current_date.isValid() and data.minute_usage_status != "unavailable"
+        )
+        self._render_minute_date(loading)
+
+    def _render_minute_date(self, loading: bool) -> None:
+        selected_date = self._minute_selected_date
+        if selected_date == self._minute_current_date:
+            rows = self._minute_current_rows
+            status = self._minute_current_status
+            status_hint = {
+                "failed": "；刷新失败，当前显示最近结果",
+                "storage_error": "；分时缓存读取失败",
+                "adjusted": "；平台已校正当前数据",
+            }.get(status, "")
+            tooltip = f"选择分时日期{status_hint}"
+        else:
+            rows = self._minute_usage_history.get(selected_date, [])
+            status = "recorded" if rows else "empty"
+            tooltip = f"选择分时日期；当前查看 {selected_date}"
+        self.minute_date_edit.date_button.setToolTip(tooltip)
+        self.minute_date_edit.date_button.setAccessibleName(tooltip)
+        self.minute_chart.set_rows(
+            rows,
+            status,
+            loading=loading and selected_date == self._minute_current_date,
+        )
+        self.activity_summary.setText(
+            self.minute_chart.summary_text()
+            if self._activity_view == "minute"
+            else self._annual_activity_summary
+        )
 
     def _set_activity_view(self, view: str) -> None:
         minute_view = view == "minute"
         self._activity_view = view
+        if not minute_view:
+            self.minute_date_edit.popup.close()
         activity_height = (
             ACTIVITY_SECTION_HEIGHT if minute_view else ANNUAL_ACTIVITY_SECTION_HEIGHT
         )
@@ -1414,6 +1800,7 @@ class MainPanel(QFrame):
         self.set_theme_mode(mode, resolved)
         self.status_dot.refresh_theme()
         self.minute_chart.refresh_theme()
+        self.minute_date_edit.refresh_theme()
         self._refresh_minute_control_colors()
         self._refresh_icons()
         self.update()
@@ -1467,23 +1854,7 @@ class MainPanel(QFrame):
                 summary = f"过去 12 个月共使用 {compact_tokens(total)}"
         self._annual_activity_summary = summary
 
-        minute_date = f"今天 {data.minute_usage_date[5:]}" if len(data.minute_usage_date) == 10 else "今天"
-        minute_hint = {
-            "failed": "（刷新失败）",
-            "storage_error": "（缓存失败）",
-            "adjusted": "（平台已校正）",
-        }.get(data.minute_usage_status, "")
-        self.minute_date_label.setText(f"{minute_date}{minute_hint}")
-        self.minute_chart.set_rows(
-            data.minute_usage,
-            data.minute_usage_status,
-            loading=loading,
-        )
-        self.activity_summary.setText(
-            self.minute_chart.summary_text()
-            if self._activity_view == "minute"
-            else self._annual_activity_summary
-        )
+        self._update_minute_data(data, loading)
         for button in self.minute_legend_buttons.values():
             button.setEnabled(data.minute_usage_status != "unavailable")
         self._refresh_minute_control_colors()

@@ -8,8 +8,9 @@ os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QPointF, QSize, Qt
+from PySide6.QtCore import QDate, QEvent, QPoint, QPointF, QSize, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from app_update import CheckResult, ReleaseAsset, ReleaseInfo, SemVer
 import config_manager
-from data.store import TokenData
+from data.store import PerProviderData, TokenData
 from ui.geometry import WorkArea
 from ui.qt_ball import FloatingUsageBall
 from ui.qt_panel import (
@@ -34,6 +35,7 @@ from ui.qt_panel import (
     PANEL_HEIGHT,
     PANEL_MAX_WIDTH,
     PANEL_MIN_WIDTH,
+    MinuteDateEdit,
     STATISTICS_SECTION_HEIGHT,
     STATUS_SECTION_HEIGHT,
     TOP_SECTION_HEIGHT,
@@ -352,6 +354,147 @@ def test_minute_chart_handles_zero_cache_denominator_and_panel_defaults_to_annua
     chart.close()
 
 
+def test_minute_date_edit_uses_three_segments_and_only_date_button_opens_popup():
+    picker = MinuteDateEdit()
+    picker.setDateRange(QDate(2026, 7, 12), QDate(2026, 7, 14))
+    picker.setDate(QDate(2026, 7, 14))
+    picker.show()
+    APP.processEvents()
+
+    assert picker.size() == QSize(118, 26)
+    assert picker.previous_button.size() == QSize(20, 24)
+    assert picker.date_button.size() == QSize(76, 24)
+    assert picker.next_button.size() == QSize(20, 24)
+    assert picker.date_button.text() == "2026-07-14"
+    assert picker.previous_button.isEnabled()
+    assert not picker.next_button.isEnabled()
+
+    picker.previous_button.click()
+    APP.processEvents()
+    assert picker.date() == QDate(2026, 7, 13)
+    assert not picker.popup.isVisible()
+
+    picker.previous_button.click()
+    assert picker.date() == QDate(2026, 7, 12)
+    assert not picker.previous_button.isEnabled()
+
+    picker.next_button.click()
+    picker.next_button.click()
+    APP.processEvents()
+    assert picker.date() == QDate(2026, 7, 14)
+    assert not picker.popup.isVisible()
+
+    picker.date_button.click()
+    APP.processEvents()
+    assert picker.popup.isVisible()
+    assert picker.popup.windowFlags() & Qt.WindowType.Popup
+    QTest.keyClick(picker.popup, Qt.Key.Key_Escape)
+    APP.processEvents()
+    assert not picker.popup.isVisible()
+    picker.close()
+
+
+def test_minute_date_edit_calendar_range_month_navigation_and_disabled_state():
+    picker = MinuteDateEdit()
+    picker.setDateRange(QDate(2026, 6, 30), QDate(2026, 7, 14))
+    picker.setDate(QDate(2026, 7, 14))
+    picker.show()
+    picker.date_button.click()
+    APP.processEvents()
+
+    assert picker.popup.month_label.text() == "2026年7月"
+    assert picker.popup.calendar.firstDayOfWeek() == Qt.DayOfWeek.Monday
+    assert not picker.popup.calendar.isNavigationBarVisible()
+    assert picker.popup.previous_month_button.isEnabled()
+    assert not picker.popup.next_month_button.isEnabled()
+    assert (
+        picker.popup.calendar.weekdayTextFormat(Qt.DayOfWeek.Saturday).foreground().color()
+        == picker.popup.calendar.weekdayTextFormat(Qt.DayOfWeek.Monday).foreground().color()
+    )
+
+    picker.popup._select_date(QDate(2026, 6, 30))
+    assert picker.date() == QDate(2026, 7, 14)
+
+    picker.setEnabled(False)
+    assert not picker.popup.isVisible()
+    assert not picker.previous_button.isEnabled()
+    assert not picker.date_button.isEnabled()
+    assert not picker.next_button.isEnabled()
+    picker.close()
+
+
+def test_minute_date_selection_renders_history_and_refresh_keeps_user_choice():
+    panel = MainPanel()
+    data = sample_data()
+    data.per_provider = [PerProviderData("mimo", "小米 MiMo")]
+    data.minute_usage_date = "2026-07-14"
+    data.minute_usage_status = "recorded"
+    data.minute_usage = [
+        {"minute": 10, "token_type": "RESPONSE_TOKEN", "token_amount": 20}
+    ]
+    data.minute_usage_days = ["2026-07-13", "2026-07-14"]
+    data.minute_usage_history = {
+        "2026-07-13": [
+            {"minute": 10, "token_type": "RESPONSE_TOKEN", "token_amount": 10}
+        ]
+    }
+
+    with patch(
+        "ui.qt_panel.config_manager.get",
+        side_effect=lambda key, default=None: 3 if key == "MINUTE_USAGE_RETENTION_DAYS" else default,
+    ):
+        panel.update_data(data)
+        panel.minute_previous_button.click()
+        assert panel.minute_date_edit.date() == QDate(2026, 7, 13)
+        assert panel.minute_chart._values["RESPONSE_TOKEN"][10] == 10
+
+        panel.update_data(data)
+        assert panel.minute_date_edit.date() == QDate(2026, 7, 13)
+
+        next_day = sample_data()
+        next_day.per_provider = [PerProviderData("mimo", "小米 MiMo")]
+        next_day.minute_usage_date = "2026-07-15"
+        next_day.minute_usage_status = "recorded"
+        next_day.minute_usage = [
+            {"minute": 10, "token_type": "RESPONSE_TOKEN", "token_amount": 30}
+        ]
+        next_day.minute_usage_days = ["2026-07-13", "2026-07-14", "2026-07-15"]
+        next_day.minute_usage_history = data.minute_usage_history
+        panel.update_data(next_day)
+        assert panel.minute_date_edit.date() == QDate(2026, 7, 13)
+
+        switched = sample_data()
+        switched.per_provider = [PerProviderData("deepseek", "DeepSeek")]
+        switched.minute_usage_date = "2026-07-15"
+        switched.minute_usage_status = "recorded"
+        panel.update_data(switched)
+        assert panel.minute_date_edit.date() == QDate(2026, 7, 15)
+
+    panel.close()
+
+
+def test_minute_date_follows_latest_across_day_when_user_stayed_on_current_date():
+    panel = MainPanel()
+    first = sample_data()
+    first.per_provider = [PerProviderData("mimo", "小米 MiMo")]
+    first.minute_usage_date = "2026-07-14"
+    first.minute_usage_status = "recorded"
+    second = sample_data()
+    second.per_provider = [PerProviderData("mimo", "小米 MiMo")]
+    second.minute_usage_date = "2026-07-15"
+    second.minute_usage_status = "recorded"
+
+    with patch(
+        "ui.qt_panel.config_manager.get",
+        side_effect=lambda key, default=None: 3 if key == "MINUTE_USAGE_RETENTION_DAYS" else default,
+    ):
+        panel.update_data(first)
+        panel.update_data(second)
+
+    assert panel.minute_date_edit.date() == QDate(2026, 7, 15)
+    panel.close()
+
+
 def test_statistics_show_cached_historical_total_with_scope_tooltip():
     statistics = StatisticsCard()
     statistics.set_data(sample_data())
@@ -403,6 +546,7 @@ def test_panel_uses_fixed_v3_layout_budget_and_fluent_actions():
     )
     assert [button.width() for button in panel.minute_legend_buttons.values()] == [64, 54, 44]
     assert panel.activity_mode_segment.size() == QSize(148, 26)
+    assert panel.minute_date_edit.size() == QSize(118, 26)
     assert panel.annual_activity_button.size() == QSize(72, 22)
     assert panel.activity_summary.minimumWidth() == 200
     assert all(

@@ -280,6 +280,8 @@ class TokenData:
     minute_usage: list[dict[str, Any]] = field(default_factory=list)
     minute_usage_status: str = "unavailable"
     minute_usage_date: str = ""
+    minute_usage_days: list[str] = field(default_factory=list)
+    minute_usage_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     _last_snapshot: ClassVar["TokenData | None"] = None
     _provider_snapshots: ClassVar[dict[str, "TokenData"]] = {}
@@ -321,6 +323,8 @@ class TokenData:
         successes = 0
         minute_rows: list[dict[str, Any]] = []
         minute_status = "unavailable"
+        minute_days: list[str] = []
+        minute_history: dict[str, list[dict[str, Any]]] = {}
         if getattr(provider, "supports_estimated_minute_usage", False):
             try:
                 # 每次启动/刷新均按设置的保留天数清理；失败不能影响原有账单刷新。
@@ -329,6 +333,13 @@ class TokenData:
                     provider.id, current_day, retention_days
                 )
                 minute_rows = history.minute_usage_for_day(provider.id, current_day)
+                minute_days = history.minute_usage_dates(provider.id)
+                minute_history = {
+                    usage_date: history.minute_usage_for_day(
+                        provider.id, date.fromisoformat(usage_date)
+                    )
+                    for usage_date in minute_days
+                }
                 minute_status = "empty"
             except Exception:
                 config_manager.logger().exception("Minute usage cleanup failed for %s", provider.id)
@@ -439,6 +450,13 @@ class TokenData:
                                 retention_days,
                             )
                             minute_rows = history.minute_usage_for_day(provider.id, current_day)
+                            minute_days = history.minute_usage_dates(provider.id)
+                            minute_history = {
+                                usage_date: history.minute_usage_for_day(
+                                    provider.id, date.fromisoformat(usage_date)
+                                )
+                                for usage_date in minute_days
+                            }
                         except Exception:
                             config_manager.logger().exception(
                                 "Minute usage save failed for %s", provider.id
@@ -488,6 +506,8 @@ class TokenData:
         data.minute_usage = minute_rows
         data.minute_usage_status = minute_status
         data.minute_usage_date = current_day.isoformat()
+        data.minute_usage_days = minute_days
+        data.minute_usage_history = minute_history
 
         if successes:
             data.last_success_at = datetime.now()
