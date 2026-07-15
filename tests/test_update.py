@@ -32,22 +32,22 @@ def test_release_asset_selection_prefers_tokenspider_and_requires_updater():
             "assets": [
                 {
                     "name": "TokenSpider-v1.3.0-windows-x64.exe",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/TokenSpider-v1.3.0-windows-x64.exe",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/TokenSpider-v1.3.0-windows-x64.exe",
                     "size": 10,
                 },
                 {
                     "name": "TokenScope-v1.3.0-windows-x64.exe",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/TokenScope-v1.3.0-windows-x64.exe",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/TokenScope-v1.3.0-windows-x64.exe",
                     "size": 11,
                 },
                 {
                     "name": "TokenSpiderUpdater-v1.3.0-windows-x64.exe",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/TokenSpiderUpdater-v1.3.0-windows-x64.exe",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/TokenSpiderUpdater-v1.3.0-windows-x64.exe",
                     "size": 5,
                 },
                 {
                     "name": "SHA256SUMS.txt",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/SHA256SUMS.txt",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/SHA256SUMS.txt",
                     "size": 2,
                 },
             ],
@@ -70,17 +70,17 @@ def test_release_asset_selection_accepts_legacy_tokenscope_names():
             "assets": [
                 {
                     "name": "TokenScope-v1.3.0-windows-x64.exe",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/TokenScope-v1.3.0-windows-x64.exe",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/TokenScope-v1.3.0-windows-x64.exe",
                     "size": 11,
                 },
                 {
                     "name": "TokenScopeUpdater-v1.3.0-windows-x64.exe",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/TokenScopeUpdater-v1.3.0-windows-x64.exe",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/TokenScopeUpdater-v1.3.0-windows-x64.exe",
                     "size": 5,
                 },
                 {
                     "name": "SHA256SUMS.txt",
-                    "browser_download_url": "https://github.com/chenyifei142/TokenSpider/releases/download/v1.3.0/SHA256SUMS.txt",
+                    "browser_download_url": "https://github.com/zensoku142/TokenSpider/releases/download/v1.3.0/SHA256SUMS.txt",
                     "size": 2,
                 },
             ],

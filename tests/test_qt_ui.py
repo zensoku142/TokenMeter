@@ -84,17 +84,17 @@ def sample_release(version: str = "1.3.4") -> ReleaseInfo:
         is_prerelease=False,
         app_asset=ReleaseAsset(
             name=f"TokenSpider-v{version}-windows-x64.exe",
-            download_url=f"https://github.com/chenyifei142/TokenSpider/releases/download/v{version}/TokenSpider-v{version}-windows-x64.exe",
+            download_url=f"https://github.com/zensoku142/TokenSpider/releases/download/v{version}/TokenSpider-v{version}-windows-x64.exe",
             size=10,
         ),
         updater_asset=ReleaseAsset(
             name=f"TokenSpiderUpdater-v{version}-windows-x64.exe",
-            download_url=f"https://github.com/chenyifei142/TokenSpider/releases/download/v{version}/TokenSpiderUpdater-v{version}-windows-x64.exe",
+            download_url=f"https://github.com/zensoku142/TokenSpider/releases/download/v{version}/TokenSpiderUpdater-v{version}-windows-x64.exe",
             size=5,
         ),
         checksum_asset=ReleaseAsset(
             name="SHA256SUMS.txt",
-            download_url=f"https://github.com/chenyifei142/TokenSpider/releases/download/v{version}/SHA256SUMS.txt",
+            download_url=f"https://github.com/zensoku142/TokenSpider/releases/download/v{version}/SHA256SUMS.txt",
             size=2,
         ),
     )

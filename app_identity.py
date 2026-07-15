@@ -4,7 +4,7 @@ from __future__ import annotations
 
 APP_DISPLAY_NAME = "TokenSpider"
 APP_STORAGE_NAME = "TokenSpider"
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 
 # Keep the storage/mutex prefix stable so users who tested the temporary
 # TokenScope naming can still reuse the same local state after reverting.
@@ -18,7 +18,7 @@ UPDATER_RELEASE_ASSET_TEMPLATE = "TokenSpiderUpdater-v{version}-windows-x64.exe"
 LEGACY_UPDATER_RELEASE_ASSET_TEMPLATE = "TokenScopeUpdater-v{version}-windows-x64.exe"
 SHA256_RELEASE_ASSET_NAME = "SHA256SUMS.txt"
 
-GITHUB_REPOSITORY = "chenyifei142/TokenSpider"
+GITHUB_REPOSITORY = "zensoku142/TokenSpider"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPOSITORY}/releases"
 GITHUB_RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases"
 GITHUB_LATEST_RELEASE_API_URL = f"{GITHUB_RELEASES_API_URL}/latest"
