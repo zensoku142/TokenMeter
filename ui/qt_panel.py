@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from math import ceil, floor
 
 import pyqtgraph as pg
 from PySide6.QtCore import QDate, QLocale, QPoint, QSignalBlocker, QSize, Qt, Signal
@@ -770,6 +771,7 @@ class MinuteUsageChart(QWidget):
         self._updating_region = False
         self._bars: dict[str, pg.BarGraphItem] = {}
         self._lines: dict[str, pg.PlotDataItem] = {}
+        self._line_points: dict[str, pg.ScatterPlotItem] = {}
         self._bar_width = 0.8
         self._nav_bars: pg.BarGraphItem | None = None
         self._nav_line: pg.PlotDataItem | None = None
@@ -779,6 +781,8 @@ class MinuteUsageChart(QWidget):
         self._has_initial_range = False
         self._sparse_mode = False
         self._active_minutes: list[int] = []
+        self._display_bucket_indexes: list[int] = []
+        self._bucket_display_positions: dict[int, int] = {}
         self._x_bounds = (-0.5, 1439.5)
 
         layout = QVBoxLayout(self)
@@ -938,12 +942,66 @@ class MinuteUsageChart(QWidget):
         self.state_label.show()
         self.chart_container.hide()
 
+    @staticmethod
+    def _smooth_curve_data(
+        x_values: list[float], y_values: list[int], samples_per_segment: int = 8
+    ) -> tuple[list[float], list[float]]:
+        """用有界单调 Hermite 曲线连接原始节点，避免平滑后产生虚假峰值或负数。"""
+        if len(x_values) != len(y_values):
+            raise ValueError("平滑曲线的横纵坐标数量必须一致")
+        if len(x_values) < 2:
+            return list(x_values), [float(value) for value in y_values]
+
+        deltas = [
+            (y_values[index + 1] - y_values[index])
+            / (x_values[index + 1] - x_values[index])
+            for index in range(len(x_values) - 1)
+        ]
+        tangents = [float(deltas[0])]
+        for previous, following in zip(deltas, deltas[1:]):
+            if previous == 0 or following == 0 or previous * following < 0:
+                tangents.append(0.0)
+            else:
+                tangents.append(2.0 * previous * following / (previous + following))
+        tangents.append(float(deltas[-1]))
+
+        smooth_x: list[float] = []
+        smooth_y: list[float] = []
+        for index in range(len(x_values) - 1):
+            x_start = x_values[index]
+            x_end = x_values[index + 1]
+            width = x_end - x_start
+            y_start = float(y_values[index])
+            y_end = float(y_values[index + 1])
+            lower, upper = sorted((y_start, y_end))
+            for sample in range(samples_per_segment):
+                position = sample / samples_per_segment
+                position_squared = position * position
+                position_cubed = position_squared * position
+                value = (
+                    (2 * position_cubed - 3 * position_squared + 1) * y_start
+                    + (position_cubed - 2 * position_squared + position)
+                    * width
+                    * tangents[index]
+                    + (-2 * position_cubed + 3 * position_squared) * y_end
+                    + (position_cubed - position_squared)
+                    * width
+                    * tangents[index + 1]
+                )
+                smooth_x.append(x_start + position * width)
+                smooth_y.append(min(upper, max(lower, value)))
+        smooth_x.append(x_values[-1])
+        smooth_y.append(float(y_values[-1]))
+        return smooth_x, smooth_y
+
     def _render_series(self) -> None:
-        x = self._bucket_centers
         hit = self._values["PROMPT_CACHE_HIT_TOKEN"]
         miss = self._values["PROMPT_CACHE_MISS_TOKEN"]
         output = self._values["RESPONSE_TOKEN"]
-        total = [output[index] + miss[index] + hit[index] for index in range(len(x))]
+        total = [
+            output[index] + miss[index] + hit[index]
+            for index in range(len(self._bucket_starts))
+        ]
         active_indexes = [index for index, amount in enumerate(total) if amount > 0]
         self._active_minutes = [self._bucket_starts[index] for index in active_indexes]
         self._sparse_mode = len(active_indexes) <= self.SPARSE_POINT_LIMIT
@@ -951,7 +1009,14 @@ class MinuteUsageChart(QWidget):
         self.navigator.clear()
         self._bars = {}
         self._lines = {}
-        nav_x = [x[index] for index in active_indexes]
+        self._line_points = {}
+        # 两种图表都只排列有总消耗的桶；映射保留真实桶索引，供刻度、悬浮和统计使用。
+        self._display_bucket_indexes = active_indexes
+        self._bucket_display_positions = {
+            bucket_index: display_position
+            for display_position, bucket_index in enumerate(active_indexes)
+        }
+        display_x = [float(index) for index in range(len(active_indexes))]
         if self._chart_type == "bar":
             for z_value, token_type in enumerate(
                 (
@@ -962,39 +1027,55 @@ class MinuteUsageChart(QWidget):
                 start=2,
             ):
                 bars = pg.BarGraphItem(
-                    x=x,
-                    y0=[0] * len(x),
-                    height=[0] * len(x),
-                    width=0.8 * self._interval_minutes,
+                    x=display_x,
+                    y0=[0] * len(display_x),
+                    height=[0] * len(display_x),
+                    width=0.8,
                 )
                 bars.setZValue(z_value)
                 self.plot.addItem(bars)
                 self._bars[token_type] = bars
             self._nav_bars = pg.BarGraphItem(
-                x=nav_x,
+                x=display_x,
                 height=[total[index] for index in active_indexes],
-                width=float(self._interval_minutes),
+                width=1.0,
                 pen=None,
             )
             self._nav_bars.setZValue(2)
             self.navigator.addItem(self._nav_bars)
             self._nav_line = None
         else:
+            line_x = display_x
             for z_value, (token_type, _label) in enumerate(self.SERIES, start=2):
+                node_values = [
+                    self._values[token_type][index] for index in active_indexes
+                ]
+                curve_x, curve_y = self._smooth_curve_data(line_x, node_values)
                 line = pg.PlotDataItem(
-                    x=nav_x,
-                    y=[self._values[token_type][index] for index in active_indexes],
-                    symbol="o",
-                    symbolSize=5,
+                    x=curve_x,
+                    y=curve_y,
                     antialias=True,
                 )
                 line.setZValue(z_value)
                 self.plot.addItem(line)
                 self._lines[token_type] = line
+                points = pg.ScatterPlotItem(
+                    x=line_x,
+                    y=node_values,
+                    symbol="o",
+                    size=4,
+                    antialias=True,
+                )
+                points.setZValue(z_value + 0.5)
+                self.plot.addItem(points)
+                self._line_points[token_type] = points
             self._nav_bars = None
+            nav_curve_x, nav_curve_y = self._smooth_curve_data(
+                line_x, [total[index] for index in active_indexes]
+            )
             self._nav_line = pg.PlotDataItem(
-                x=nav_x,
-                y=[total[index] for index in active_indexes],
+                x=nav_curve_x,
+                y=nav_curve_y,
                 antialias=True,
             )
             self._nav_line.setZValue(2)
@@ -1010,7 +1091,7 @@ class MinuteUsageChart(QWidget):
         self._hover_bar = None
         if self._chart_type == "bar":
             self._hover_bar = pg.BarGraphItem(
-                x=[0], height=[0], width=0.8 * self._interval_minutes
+                x=[0], height=[0], width=0.8
             )
             self._hover_bar.setZValue(8)
             self._hover_bar.hide()
@@ -1026,58 +1107,63 @@ class MinuteUsageChart(QWidget):
         self._apply_visibility()
 
     def _apply_x_range(self, active_indexes: list[int]) -> None:
-        """主图按活跃时间桶取景，导航条始终保留全天真实时间轴。"""
+        """主图和导航都按有效时间桶压缩，刻度再映射回真实时间。"""
         self._updating_region = True
         try:
-            self._x_bounds = (-0.5, 1439.5)
-            self.plot.getViewBox().setLimits(
-                xMin=-0.5,
-                xMax=1439.5,
-                minXRange=self._interval_minutes,
-                maxXRange=1440,
-            )
-            self.navigator.getViewBox().setLimits(
-                xMin=-0.5, xMax=1439.5, minXRange=self._interval_minutes
-            )
+            point_count = len(active_indexes)
+            right_bound = max(0.5, point_count - 0.5)
+            self._x_bounds = (-0.5, right_bound)
+            full_span = max(1.0, right_bound + 0.5)
+            for widget in (self.plot, self.navigator):
+                widget.getViewBox().setLimits(
+                    xMin=-0.5,
+                    xMax=right_bound,
+                    minXRange=1,
+                    maxXRange=full_span,
+                )
             self.region.setBounds(self._x_bounds)
             self.navigator.setXRange(*self._x_bounds, padding=0)
             self.navigator.getAxis("bottom").setTicks(
-                [[(minute, f"{minute // 60:02d}:00") for minute in range(0, 1441, 240)]]
+                [self._compact_axis_ticks(-0.5, right_bound, 6)]
             )
-            first_index = active_indexes[0]
-            last_index = active_indexes[-1]
-            first = self._bucket_starts[first_index]
-            last = min(
-                1439,
-                self._bucket_starts[last_index] + self._interval_minutes - 1,
-            )
-            span = last_index - first_index + 1
-            if self._sparse_mode and span <= self.SPARSE_POINT_LIMIT:
-                low, high = first - 0.5, last + 0.5
-            else:
-                high = min(1439.5, last + 0.5)
-                visible_minutes = self.DEFAULT_VISIBLE_BUCKETS * self._interval_minutes
-                low = max(-0.5, high - visible_minutes)
-                high = min(1439.5, low + visible_minutes)
+            visible_count = min(self.DEFAULT_VISIBLE_BUCKETS, point_count)
+            high = right_bound
+            low = max(-0.5, high - max(1, visible_count))
             self.region.setRegion((low, high))
             self.plot.setXRange(low, high, padding=0)
             self._update_main_ticks(low, high)
         finally:
             self._updating_region = False
 
-    def _update_main_ticks(self, low: float, high: float) -> None:
-        span = max(1.0, high - low)
-        step = next(
-            (candidate for candidate in (1, 2, 5, 10, 15, 30, 60, 120, 240) if span / candidate <= 8),
-            240,
-        )
-        first = max(0, int((low + step - 1) // step) * step)
-        last = min(1439, int(high))
-        ticks = [
-            (minute, f"{minute // 60:02d}:{minute % 60:02d}")
-            for minute in range(first, last + 1, step)
+    def _compact_axis_ticks(
+        self, low: float, high: float, max_ticks: int
+    ) -> list[tuple[float, str]]:
+        if not self._display_bucket_indexes:
+            return []
+        first = max(0, ceil(low))
+        last = min(len(self._display_bucket_indexes) - 1, floor(high))
+        if first > last:
+            first = last = max(
+                0,
+                min(len(self._display_bucket_indexes) - 1, int(round(low))),
+            )
+        count = last - first + 1
+        step = max(1, ceil(max(0, count - 1) / max(1, max_ticks - 1)))
+        positions = list(range(first, last + 1, step))
+        if positions[-1] != last:
+            positions.append(last)
+        return [
+            (
+                float(position),
+                self._bucket_start_text(self._display_bucket_indexes[position]),
+            )
+            for position in positions
         ]
-        self.plot.getAxis("bottom").setTicks([ticks])
+
+    def _update_main_ticks(self, low: float, high: float) -> None:
+        self.plot.getAxis("bottom").setTicks(
+            [self._compact_axis_ticks(low, high, 8)]
+        )
 
     def refresh_theme(self) -> None:
         tokens = current_theme()
@@ -1104,8 +1190,10 @@ class MinuteUsageChart(QWidget):
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
                 line.setPen(pen)
-                line.setSymbolPen(pg.mkPen(color, width=1.0))
-                line.setSymbolBrush(pg.mkBrush(color))
+            points = self._line_points.get(token_type)
+            if points is not None:
+                points.setPen(pg.mkPen(color, width=1.0))
+                points.setBrush(pg.mkBrush(color))
         if self._nav_bars is not None:
             nav_brush = QColor(tokens.accent)
             nav_brush.setAlpha(190)
@@ -1143,8 +1231,11 @@ class MinuteUsageChart(QWidget):
         if self._chart_type == "line":
             for token_type, line in self._lines.items():
                 line.setVisible(self._visible[token_type])
+                points = self._line_points.get(token_type)
+                if points is not None:
+                    points.setVisible(self._visible[token_type])
             return
-        x = self._bucket_centers
+        x = [float(index) for index in range(len(self._display_bucket_indexes))]
         baseline = [0] * len(x)
         for token_type in (
             "RESPONSE_TOKEN",
@@ -1155,7 +1246,10 @@ class MinuteUsageChart(QWidget):
             if bars is None:
                 continue
             visible = self._visible[token_type]
-            values = self._values[token_type]
+            values = [
+                self._values[token_type][bucket_index]
+                for bucket_index in self._display_bucket_indexes
+            ]
             bars.setOpts(x=x, y0=baseline, height=values, width=self._bar_width)
             bars.setVisible(visible)
             if visible:
@@ -1207,12 +1301,10 @@ class MinuteUsageChart(QWidget):
             self.BAR_MAX_WIDTH_PX,
             max(
                 self.BAR_MIN_WIDTH_PX,
-                0.7 * self._interval_minutes / units_per_pixel,
+                0.7 / units_per_pixel,
             ),
         )
-        self._bar_width = min(
-            0.84 * self._interval_minutes, target_pixels * units_per_pixel
-        )
+        self._bar_width = min(0.84, target_pixels * units_per_pixel)
         for bars in self._bars.values():
             bars.setOpts(width=self._bar_width)
         if self._hover_bar is not None:
@@ -1240,16 +1332,17 @@ class MinuteUsageChart(QWidget):
             else []
         )
         total = sum(bucket_values)
-        hover_ceiling = total if self._chart_type == "bar" else max(bucket_values, default=0)
-        hit_width = (
-            self._bar_width
-            if self._chart_type == "bar"
-            else float(self._interval_minutes)
+        hover_ceiling = (
+            total if self._chart_type == "bar" else max(bucket_values, default=0)
+        )
+        hit_width = self._bar_width if self._chart_type == "bar" else 1.0
+        bucket_x = self._bucket_display_positions.get(
+            bucket_index if bucket_index is not None else -1
         )
         if (
             bucket_index is None
-            or abs(point.x() - self._bucket_centers[bucket_index])
-            > hit_width / 2
+            or bucket_x is None
+            or abs(point.x() - bucket_x) > hit_width / 2
             or not 0 <= point.y() <= hover_ceiling
         ):
             self._hide_hover()
@@ -1264,11 +1357,16 @@ class MinuteUsageChart(QWidget):
         return self._bucket_starts[bucket_index]
 
     def _bucket_index_at_x(self, value: float) -> int | None:
-        if not self._bucket_centers:
+        if not self._display_bucket_indexes:
             return None
-        first_center = self._bucket_centers[0]
-        bucket_index = int(round((value - first_center) / self._interval_minutes))
-        return max(0, min(len(self._bucket_centers) - 1, bucket_index))
+        display_position = max(
+            0,
+            min(
+                len(self._display_bucket_indexes) - 1,
+                int(round(value)),
+            ),
+        )
+        return self._display_bucket_indexes[display_position]
 
     def _bucket_index_for_minute(self, minute: int) -> int:
         return max(
@@ -1284,11 +1382,15 @@ class MinuteUsageChart(QWidget):
 
     def _bucket_time_text(self, bucket_index: int) -> str:
         start = self._bucket_starts[bucket_index]
-        start_text = f"{start // 60:02d}:{start % 60:02d}"
+        start_text = self._bucket_start_text(bucket_index)
         end = self._bucket_end(bucket_index)
         if start == end:
             return start_text
         return f"{start_text}–{end // 60:02d}:{end % 60:02d}"
+
+    def _bucket_start_text(self, bucket_index: int) -> str:
+        start = self._bucket_starts[bucket_index]
+        return f"{start // 60:02d}:{start % 60:02d}"
 
     def _show_hover(self, minute: int, local: QPoint) -> None:
         bucket_index = self._bucket_index_for_minute(minute)
@@ -1296,12 +1398,16 @@ class MinuteUsageChart(QWidget):
         end_minute = self._bucket_end(bucket_index)
         values = tuple(self._values[key][bucket_index] for key, _label in self.SERIES)
         total = sum(values)
+        hover_x = self._bucket_display_positions.get(bucket_index)
+        if hover_x is None:
+            self._hide_hover()
+            return
         if self._hover_line is not None:
-            self._hover_line.setPos(self._bucket_centers[bucket_index])
+            self._hover_line.setPos(hover_x)
             self._hover_line.show()
         if self._hover_bar is not None:
             self._hover_bar.setOpts(
-                x=[self._bucket_centers[bucket_index]],
+                x=[hover_x],
                 height=[total],
                 width=self._bar_width,
             )
