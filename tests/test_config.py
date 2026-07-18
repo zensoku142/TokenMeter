@@ -10,6 +10,7 @@ from unittest.mock import patch
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
 import config_manager
+from config import credentials
 
 
 class ConfigTests(unittest.TestCase):
@@ -50,15 +51,15 @@ class ConfigTests(unittest.TestCase):
 
     def test_credentials_fall_back_in_order_and_copy_forward(self):
         with (
-            patch.object(config_manager.os, "name", "nt"),
+            patch.object(credentials.os, "name", "nt"),
             patch.object(
-                config_manager,
-                "_read_credential_target",
+                credentials,
+                "read_credential_target",
                 side_effect=["", "legacy-secret"],
             ) as read_target,
-            patch.object(config_manager, "_write_credential") as write_credential,
+            patch.object(credentials, "write_credential") as write_credential,
         ):
-            self.assertEqual(config_manager._read_credential("MIMO_COOKIE"), "legacy-secret")
+            self.assertEqual(credentials.read_credential("MIMO_COOKIE"), "legacy-secret")
 
         self.assertEqual(
             [call.args[0] for call in read_target.call_args_list],
@@ -69,26 +70,26 @@ class ConfigTests(unittest.TestCase):
     def test_e2e_mode_does_not_read_real_credentials(self):
         with (
             patch.dict(
-                config_manager.os.environ,
+                credentials.os.environ,
                 {"TOKENMETER_E2E_DISABLE_CREDENTIALS": "1"},
             ),
-            patch.object(config_manager, "_read_credential_target") as read_target,
+            patch.object(credentials, "read_credential_target") as read_target,
         ):
-            self.assertEqual(config_manager._read_credential("MIMO_COOKIE"), "")
+            self.assertEqual(credentials.read_credential("MIMO_COOKIE"), "")
 
         read_target.assert_not_called()
 
     def test_credential_copy_failure_still_returns_legacy_value(self):
         with (
-            patch.object(config_manager.os, "name", "nt"),
+            patch.object(credentials.os, "name", "nt"),
             patch.object(
-                config_manager,
-                "_read_credential_target",
+                credentials,
+                "read_credential_target",
                 side_effect=["", "", "scope-secret"],
             ),
-            patch.object(config_manager, "_write_credential", side_effect=OSError),
+            patch.object(credentials, "write_credential", side_effect=OSError),
         ):
-            self.assertEqual(config_manager._read_credential("DEEPSEEK_AUTH"), "scope-secret")
+            self.assertEqual(credentials.read_credential("DEEPSEEK_AUTH"), "scope-secret")
 
     def test_deepseek_peak_pricing_defaults_and_period_validation(self):
         defaults = config_manager.validate_config({})
@@ -303,7 +304,9 @@ class ConfigTests(unittest.TestCase):
 
             migrate.assert_not_called()
             self.assertEqual(active, source.resolve())
-            self.assertEqual(state["pending_data_dir"], str(target))
+            self.assertEqual(state["data_dir"], str(source.resolve()))
+            saved_state = json.loads(location_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved_state["pending_data_dir"], str(target))
             self.assertFalse(any(target.iterdir()))
 
     def test_data_directory_rejects_relative_unc_and_nested_paths(self):
