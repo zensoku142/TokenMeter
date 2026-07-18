@@ -223,10 +223,11 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(second.month_tokens, 7)
         self.assertIsNone(second_error)
 
+    @patch("api.providers.deepseek.config_manager.logger")
     @patch("api.providers.deepseek.platform_api.get_user_summary")
     @patch("api.providers.deepseek.official_api.get_balance")
     def test_official_balance_failure_returns_web_fallback_warning(
-        self, get_official_balance, get_summary
+        self, get_official_balance, get_summary, logger
     ):
         config = self.provider_config()
         config["DEEPSEEK_API_KEY"] = "sk-test"
@@ -246,6 +247,10 @@ class DeepSeekProviderTests(unittest.TestCase):
 
         self.assertEqual(str(balance.amount), "12.5")
         self.assertEqual(warning.code, "OFFICIAL_BALANCE_FALLBACK")
+        logged = str(logger.mock_calls)
+        self.assertNotIn("sk-test", logged)
+        self.assertNotIn("Bearer test", logged)
+        self.assertNotIn("session=test", logged)
 
     @patch("api.providers.deepseek.config_manager.get")
     @patch("api.providers.deepseek.platform_api.get_usage_cost")
