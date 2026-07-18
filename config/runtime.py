@@ -8,39 +8,57 @@ import json
 import logging
 import os
 import sys
+from contextlib import suppress
 from ctypes import wintypes
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+import data_directory
 from app_identity import APP_STORAGE_NAME, SINGLE_INSTANCE_MUTEX
+from config import state as state_store
 from config.credentials import (
-    credential_target as _credential_target,
+    credential_target as _credential_target,  # noqa: F401 - 旧私有入口兼容
+)
+from config.credentials import (
     read_credential as _read_credential,
-    read_credential_target as _read_credential_target,
+)
+from config.credentials import (
+    read_credential_target as _read_credential_target,  # noqa: F401 - 旧私有入口兼容
+)
+from config.credentials import (
     write_credential as _write_credential,
 )
-from config.defaults import DEFAULT_CONFIG, FIELD_META, OFFICIAL_HOSTS, SECRET_KEYS
+from config.defaults import (
+    DEFAULT_CONFIG,
+    FIELD_META,  # noqa: F401 - 根模块字段元数据兼容
+    OFFICIAL_HOSTS,  # noqa: F401 - 根模块常量兼容
+    SECRET_KEYS,
+)
 from config.migration import (
     migrate_data_dir as _migrate_data_dir,
+)
+from config.migration import (
     normalize_data_dir as _normalize_data_dir,
+)
+from config.migration import (
     validate_separate_dirs as _validate_separate_dirs,
 )
 from config.store import (
-    is_official_base_url,
+    is_official_base_url,  # noqa: F401 - 设置页继续从根模块调用
     load_public_config,
-    public_values as _public_values,
     validate_config,
     validate_value,
 )
-from config import state as state_store
+from config.store import (
+    public_values as _public_values,
+)
 from data_directory import (
     application_dir,
     legacy_data_dir,
     resolve_data_dir,
 )
-import data_directory
 
 APP_NAME = APP_STORAGE_NAME
 
@@ -152,10 +170,8 @@ def _initialize_data_dir() -> tuple[Path, dict[str, Any]]:
         except (OSError, ValueError) as exc:
             active_dir = source_dir
             state = {"data_dir": str(source_dir), "migration_error": str(exc)}
-            try:
+            with suppress(OSError):
                 _write_location_state(state)
-            except OSError:
-                pass
         else:
             # 数据目录切换也保留原目录，避免迁移成功后立即失去回滚能力。
             active_dir = pending_dir

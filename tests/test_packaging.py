@@ -80,7 +80,10 @@ def test_release_build_hashes_only_the_installer_after_smoke_test():
 
 def test_release_workflow_uses_installer_pipeline_order():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert "python -m pip install -r requirements.txt pyinstaller pytest" in workflow
+    assert (
+        "python -m pip install -r requirements-dev.txt -r requirements-build.txt"
+        in workflow
+    )
     steps = [
         "- name: Run tests",
         "- name: Build PyInstaller onedir",

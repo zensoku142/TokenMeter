@@ -58,6 +58,16 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+开发与发布依赖分别维护，避免运行环境安装测试或打包工具：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m ruff check .
+pyright
+python -m pip install -r requirements-build.txt
+```
+
 ## 首次配置
 
 1. 启动程序并点击悬浮球展开面板。
@@ -77,6 +87,8 @@ Windows 凭据管理器按 `TokenMeter/`、`TokenSpider/`、`TokenScope/` 顺序
 
 更新检查访问 `zensoku142/TokenMeter` 的 GitHub Releases。发现新版本后，程序只下载 `TokenMeter-Setup-vX.Y.Z-x64.exe` 和 `SHA256SUMS.txt`，校验 SHA256 后静默覆盖原安装目录。安装包使用固定 AppId，并保留 `data` 与现有快捷方式；失败时原版本文件仍可从原快捷方式启动。
 
+SHA256 用于确认下载文件的完整性，不等同于由独立密钥提供的发布签名；后续可在不降低现有校验的前提下增加 Authenticode 或 Ed25519 验证。
+
 ## 卸载
 
 默认卸载只删除程序文件和快捷方式，保留安装目录中的 `data`。如需清理配置、历史记录或浏览器会话，请在确认不再需要后手动删除该目录。
@@ -92,7 +104,7 @@ Qt 测试建议在可用的 Windows 桌面会话中运行。
 ## 构建
 
 ```powershell
-python -m pip install pyinstaller
+python -m pip install -r requirements-build.txt
 .\.venv\Scripts\pyinstaller.exe --clean --noconfirm TokenMeter.spec
 python scripts/build_release.py
 ```

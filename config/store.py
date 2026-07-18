@@ -111,9 +111,12 @@ def load_public_config(path: Path) -> dict[str, Any]:
     if compact_size < 88 or compact_size in (96, 108, 120):
         value["WIDGET_COMPACT_SIZE"] = 88
     panel_size = value.get("WIDGET_EXPANDED_SIZE", [820, 564])
-    if isinstance(panel_size, (list, tuple)) and len(panel_size) == 2:
-        if int(panel_size[0]) < 680 or int(panel_size[1]) < 564:
-            value["WIDGET_EXPANDED_SIZE"] = [820, 564]
+    if (
+        isinstance(panel_size, (list, tuple))
+        and len(panel_size) == 2
+        and (int(panel_size[0]) < 680 or int(panel_size[1]) < 564)
+    ):
+        value["WIDGET_EXPANDED_SIZE"] = [820, 564]
     return value
 
 

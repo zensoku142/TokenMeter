@@ -1,0 +1,15 @@
+{
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "basic",
+  "include": [
+    "main.py",
+    "config_manager.py",
+    "config",
+    "api/providers/base.py",
+    "api/providers/deepseek.py",
+    "api/deepseek.py",
+    "app_update.py"
+  ]
+}

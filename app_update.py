@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import shutil
 import subprocess
@@ -640,12 +639,12 @@ def _release_from_state(state: dict[str, object]) -> ReleaseInfo | None:
         setup_asset = ReleaseAsset(
             name=str(state["latest_setup_asset_name"]),
             download_url=str(state["latest_setup_asset_url"]),
-            size=int(state.get("latest_setup_asset_size", 0)),
+            size=int(str(state.get("latest_setup_asset_size", 0))),
         )
         checksum_asset = ReleaseAsset(
             name=str(state["latest_checksum_asset_name"]),
             download_url=str(state["latest_checksum_asset_url"]),
-            size=int(state.get("latest_checksum_asset_size", 0)),
+            size=int(str(state.get("latest_checksum_asset_size", 0))),
         )
     except KeyError:
         return None

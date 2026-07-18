@@ -7,7 +7,6 @@ import sys
 from ctypes import wintypes
 
 import config_manager
-
 from app_identity import APP_DISPLAY_NAME, APP_VERSION, SINGLE_INSTANCE_MUTEX
 
 __version__ = APP_VERSION
@@ -58,7 +57,8 @@ class App:
         from ui.qt_tray import SystemTray
         from ui.qt_widget import FloatingWidget
 
-        self.qt_app = QApplication.instance() or QApplication(sys.argv)
+        instance = QApplication.instance()
+        self.qt_app = instance if isinstance(instance, QApplication) else QApplication(sys.argv)
         self.qt_app.setQuitOnLastWindowClosed(False)
         self.qt_app.setApplicationName(APP_DISPLAY_NAME)
         configure_theme(self.qt_app, config_manager.get("UI_THEME", "dark"))

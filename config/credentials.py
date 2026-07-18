@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+from contextlib import suppress
 from ctypes import wintypes
 
 from app_identity import APP_STORAGE_NAME
@@ -73,10 +74,8 @@ def read_credential_target(target: str) -> str:
         return ""
     finally:
         if pointer:
-            try:
+            with suppress(Exception):
                 _advapi32.CredFree(pointer)
-            except Exception:
-                pass
 
 
 def read_credential(key: str) -> str:
@@ -90,10 +89,8 @@ def read_credential(key: str) -> str:
         if value:
             if prefix != "TokenMeter":
                 # 复制失败不影响本次继续使用旧凭据，且旧目标会一直保留。
-                try:
+                with suppress(OSError):
                     write_credential(key, value)
-                except OSError:
-                    pass
             return value
     return ""
 

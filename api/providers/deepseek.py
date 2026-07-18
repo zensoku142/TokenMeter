@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
 import threading
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import api.deepseek as platform_api
@@ -12,8 +12,14 @@ import api.deepseek_official as official_api
 import config_manager
 from api import browser_cookie
 from api.deepseek import APIError
-from api.providers.base import FetchError, Provider, ProviderBalance, ProviderSummary, _decimal, safe_int
-
+from api.providers.base import (
+    FetchError,
+    Provider,
+    ProviderBalance,
+    ProviderSummary,
+    _decimal,
+    safe_int,
+)
 
 TOKEN_TYPES = {
     "PROMPT_CACHE_HIT_TOKEN",
