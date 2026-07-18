@@ -274,14 +274,19 @@ class FloatingWidget(QWidget):
         if callable(sync_panel):
             sync_panel(mode, resolved)
         if self._settings_window is not None:
-            self._settings_window.set_theme_mode(mode)
+            # 关闭竞态或嵌入调用方可能暂时挂接普通 QDialog；主题广播不能因此中断。
+            sync_settings = getattr(self._settings_window, "set_theme_mode", None)
+            if callable(sync_settings):
+                sync_settings(mode)
 
     def _set_theme_feedback(self, message: str, tone: str) -> None:
         panel_feedback = getattr(self.panel, "set_theme_feedback", None)
         if callable(panel_feedback):
             panel_feedback(message, tone)
         if self._settings_window is not None and self._settings_window.isVisible():
-            self._settings_window.set_theme_feedback(message, tone)
+            settings_feedback = getattr(self._settings_window, "set_theme_feedback", None)
+            if callable(settings_feedback):
+                settings_feedback(message, tone)
 
     @staticmethod
     def _compact_size() -> int:
