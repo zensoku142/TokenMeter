@@ -10,6 +10,7 @@ import struct
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -20,6 +21,349 @@ import config_manager
 _CDP_PORT_RANGE = range(9222, 9323)
 _CDP_TIMEOUT_SECONDS = 10
 _ACQUIRE_TOTAL_TIMEOUT_SECONDS = 180
+
+
+@dataclass(frozen=True)
+class BrowserFetchResult:
+    """A same-origin request completed by the retained Chromium profile.
+
+    Credential values intentionally remain inside ``cookie`` / Chromium memory
+    and must never be sent to the application logger or UI.
+    """
+
+    status_code: int
+    payload: Any
+    cookie: str
+
+
+class _CdpConnection:
+    """Small synchronous CDP client used by the browser-session helpers."""
+
+    def __init__(self, websocket_url: str) -> None:
+        parsed = urlparse(websocket_url)
+        if parsed.scheme != "ws" or not parsed.hostname or not parsed.port:
+            raise RuntimeError("CDP_INVALID_WS_URL")
+        self._host = parsed.hostname
+        self._port = int(parsed.port)
+        self._path = parsed.path or "/"
+        if parsed.query:
+            self._path = f"{self._path}?{parsed.query}"
+        self._next_id = 1
+        self._events: list[dict[str, Any]] = []
+        self._sock = socket.create_connection((self._host, self._port), timeout=_CDP_TIMEOUT_SECONDS)
+        try:
+            request = (
+                f"GET {self._path} HTTP/1.1\r\n"
+                f"Host: {self._host}:{self._port}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "\r\n"
+            )
+            self._sock.sendall(request.encode("ascii"))
+            response = bytearray()
+            while b"\r\n\r\n" not in response:
+                chunk = self._sock.recv(2048)
+                if not chunk:
+                    raise RuntimeError("CDP_WS_HANDSHAKE_FAILED")
+                response.extend(chunk)
+            header_text = response[: response.index(b"\r\n\r\n")].decode("ascii", errors="replace")
+            if "101" not in header_text:
+                raise RuntimeError("CDP_WS_HANDSHAKE_FAILED")
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except (AttributeError, OSError):
+            pass
+
+    def _send_json(self, value: dict[str, Any]) -> None:
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        length = len(payload)
+        header = bytearray((0x81,))
+        if length <= 125:
+            header.append(0x80 | length)
+        elif length <= 0xFFFF:
+            header.append(0x80 | 126)
+            header.extend(struct.pack(">H", length))
+        else:
+            header.append(0x80 | 127)
+            header.extend(struct.pack(">Q", length))
+        # Chromium accepts the all-zero client mask while retaining RFC-compliant framing.
+        self._sock.sendall(bytes(header) + bytes(4) + payload)
+
+    def _read_json(self) -> dict[str, Any]:
+        first, second = _recv_exact(self._sock, 2)
+        opcode = first & 0x0F
+        if not first & 0x80 or opcode not in (1, 2):
+            raise RuntimeError("CDP_UNEXPECTED_FRAME")
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            (length,) = struct.unpack(">H", _recv_exact(self._sock, 2))
+        elif length == 127:
+            (length,) = struct.unpack(">Q", _recv_exact(self._sock, 8))
+        mask = _recv_exact(self._sock, 4) if masked else b""
+        body = _recv_exact(self._sock, length)
+        if masked:
+            body = bytes(value ^ mask[index % 4] for index, value in enumerate(body))
+        try:
+            result = json.loads(body.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("CDP_INVALID_JSON") from exc
+        if not isinstance(result, dict):
+            raise RuntimeError("CDP_UNEXPECTED_RESPONSE")
+        return result
+
+    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        request_id = self._next_id
+        self._next_id += 1
+        payload: dict[str, Any] = {"id": request_id, "method": method}
+        if params:
+            payload["params"] = params
+        self._send_json(payload)
+        deadline = time.monotonic() + _CDP_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                response = self._read_json()
+            except socket.timeout:
+                continue
+            # CDP network/page notifications can interleave with command responses.
+            if response.get("id") != request_id:
+                self._events.append(response)
+                continue
+            if "error" in response:
+                raise RuntimeError("CDP_COMMAND_FAILED")
+            result = response.get("result", {})
+            if not isinstance(result, dict):
+                raise RuntimeError("CDP_UNEXPECTED_RESPONSE")
+            return result
+        raise RuntimeError("CDP_COMMAND_TIMEOUT")
+
+    def next_event(self, timeout_seconds: float) -> dict[str, Any] | None:
+        if self._events:
+            return self._events.pop(0)
+        old_timeout = self._sock.gettimeout()
+        self._sock.settimeout(max(0.05, timeout_seconds))
+        try:
+            return self._read_json()
+        except socket.timeout:
+            return None
+        finally:
+            self._sock.settimeout(old_timeout)
+
+
+class ChromeSession:
+    """A short-lived isolated Chromium session, backed by the supplied profile."""
+
+    def __init__(self, process: subprocess.Popen[Any], websocket_url: str) -> None:
+        self._process = process
+        self._websocket_url = websocket_url
+        self._connection = _CdpConnection(websocket_url)
+
+    def cookies(
+        self,
+        *,
+        allowed_domains: tuple[str, ...],
+        cookie_names: tuple[str, ...] | None = None,
+    ) -> str:
+        result = self._connection.call("Network.getAllCookies")
+        cookies = result.get("cookies")
+        if not isinstance(cookies, list):
+            raise RuntimeError("CDP_UNEXPECTED_RESPONSE")
+        return normalize_cookie(
+            format_cookie_string(
+                _unexpired_cookies(cookies),
+                allowed_domains=allowed_domains,
+                cookie_names=cookie_names,
+            )
+        )
+
+    def capture_request_headers(
+        self,
+        *,
+        url_prefix: str,
+        timeout_seconds: float = 5.0,
+    ) -> dict[str, str]:
+        """Reload the page and retain only headers from a matching real request.
+
+        Values are returned to the caller for immediate in-memory browser use.
+        This helper never writes them to disk or logs them.
+        """
+
+        self._connection.call("Network.enable")
+        self._connection.call("Page.reload", {"ignoreCache": False})
+        deadline = time.monotonic() + max(0.1, timeout_seconds)
+        matching_request_ids: set[str] = set()
+        fallback_headers: dict[str, str] = {}
+        while time.monotonic() < deadline:
+            event = self._connection.next_event(deadline - time.monotonic())
+            if not event:
+                continue
+            method = event.get("method")
+            params = event.get("params")
+            if not isinstance(params, dict):
+                continue
+            if method == "Network.requestWillBeSent":
+                request = params.get("request")
+                if not isinstance(request, dict) or not str(request.get("url") or "").startswith(url_prefix):
+                    continue
+                request_id = str(params.get("requestId") or "")
+                if request_id:
+                    matching_request_ids.add(request_id)
+                headers = request.get("headers")
+                if isinstance(headers, dict):
+                    fallback_headers = {str(key): str(value) for key, value in headers.items()}
+            elif method == "Network.requestWillBeSentExtraInfo":
+                request_id = str(params.get("requestId") or "")
+                if request_id not in matching_request_ids:
+                    continue
+                headers = params.get("headers")
+                if isinstance(headers, dict):
+                    return {str(key): str(value) for key, value in headers.items()}
+        return fallback_headers
+
+    def fetch_json(
+        self,
+        *,
+        url: str,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        allowed_domains: tuple[str, ...],
+    ) -> BrowserFetchResult:
+        """Run a request in the page context so Chromium supplies session state.
+
+        The caller may pass only application headers. Cookie, Origin, Referer and
+        browser client-hint headers are deliberately omitted: Chromium owns those
+        values and will attach the current profile's credentials itself.
+        """
+
+        self._connection.call("Network.enable")
+        safe_headers = {
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+            if str(key).lower() not in {"cookie", "origin", "referer", "host"}
+            and not str(key).lower().startswith("sec-")
+        }
+        init: dict[str, Any] = {
+            "method": method.upper(),
+            "credentials": "include",
+            "headers": safe_headers,
+        }
+        if body is not None:
+            init["body"] = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        expression = (
+            "(async () => {"
+            f"const response = await fetch({json.dumps(url)}, {json.dumps(init, ensure_ascii=False)});"
+            "const text = await response.text();"
+            "let payload = null;"
+            "try { payload = JSON.parse(text); } catch (_) {}"
+            "return {status: response.status, payload};"
+            "})()"
+        )
+        evaluated = self._connection.call(
+            "Runtime.evaluate",
+            {"expression": expression, "awaitPromise": True, "returnByValue": True},
+        )
+        value = evaluated.get("result", {}).get("value")
+        if not isinstance(value, dict) or not isinstance(value.get("status"), int):
+            raise RuntimeError("CDP_UNEXPECTED_RESPONSE")
+        return BrowserFetchResult(
+            status_code=int(value["status"]),
+            payload=value.get("payload"),
+            cookie=self.cookies(allowed_domains=allowed_domains),
+        )
+
+    def close(self) -> None:
+        connection = getattr(self, "_connection", None)
+        if connection is not None:
+            try:
+                connection.call("Browser.close")
+            except RuntimeError:
+                pass
+            finally:
+                connection.close()
+                self._connection = None
+        try:
+            self._process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    self._process.kill()
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+
+def open_chrome_session(
+    stop_event: threading.Event,
+    *,
+    acquire_url: str,
+    profile_name: str,
+    use_edge: bool = False,
+    user_data_dir: str | None = None,
+    headless: bool = False,
+) -> ChromeSession:
+    """Start a Chromium profile and return a closable CDP-backed session."""
+
+    executable = find_chrome_executable(use_edge=use_edge)
+    if not executable:
+        raise RuntimeError("CHROME_NOT_FOUND")
+    data_dir = Path(user_data_dir or default_user_data_dir(profile_name))
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError("USER_DATA_DIR_FAILED") from exc
+    port = pick_free_cdp_port()
+    if port < 0:
+        raise RuntimeError("NO_FREE_CDP_PORT")
+    args = [
+        executable,
+        f"--user-data-dir={data_dir}",
+        f"--remote-debugging-port={port}",
+        "--remote-debugging-address=127.0.0.1",
+        "--no-first-run",
+        "--disable-default-apps",
+    ]
+    if headless:
+        args.extend(("--headless=new", "--disable-gpu", acquire_url))
+    else:
+        args.append(f"--app={acquire_url}")
+    startupinfo = None
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    except AttributeError:
+        pass
+    try:
+        process = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            startupinfo=startupinfo,
+        )
+    except OSError as exc:
+        raise RuntimeError("CHROME_LAUNCH_FAILED") from exc
+    try:
+        _wait_browser_ready(port, stop_event)
+        websocket_url = _pick_websocket_endpoint(port, urlparse(acquire_url).hostname or "")
+        return ChromeSession(process, websocket_url)
+    except Exception:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        raise
 
 
 def normalize_cookie(raw: str) -> str:

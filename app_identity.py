@@ -4,7 +4,7 @@ from __future__ import annotations
 
 APP_DISPLAY_NAME = "TokenMeter"
 APP_STORAGE_NAME = "TokenSpider"
-APP_VERSION = "1.10.3"
+APP_VERSION = "1.10.4"
 
 # Keep the legacy storage and mutex identities so upgrades retain user data,
 # credentials, and single-instance coordination across every public rename.

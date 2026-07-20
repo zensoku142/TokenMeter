@@ -6,7 +6,9 @@ selected provider are shown — keeping the dialog small and focused.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Union
 
@@ -63,16 +65,20 @@ class ConnectionWorker(QThread):
         self.finished_with_data.emit(result)
 
 
+@dataclass(frozen=True)
+class _AcquiredCookie:
+    cookie_text: str
+    direct_usable: bool = True
+
+
 class _CookieAcquireWorker(QThread):
     """Run the selected provider's browser collection away from the UI thread."""
 
-    success = Signal(str)
+    success = Signal(object)
     error = Signal(str)
 
     def __init__(self, provider_cls, parent=None):
         super().__init__(parent)
-        import threading
-
         self._stop_event = threading.Event()
         self._provider_cls = provider_cls
 
@@ -88,7 +94,21 @@ class _CookieAcquireWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             self.error.emit(self._provider_cls.describe_acquire_error(exc))
             return
-        self.success.emit(cookie)
+        direct_usable = True
+        if getattr(self._provider_cls, "id", "") == "mimo":
+            # The visible browser only proves that cookies exist. Re-open the
+            # retained profile headlessly and require a real MiMo API success
+            # before any draft credentials are changed.
+            try:
+                cookie = self._provider_cls.recover_verified_cookie_via_chrome(
+                    threading.Event(),
+                    headless=True,
+                )
+            except RuntimeError as exc:
+                self.error.emit(self._provider_cls.describe_acquire_error(exc))
+                return
+            direct_usable = self._provider_cls.is_direct_cookie_usable(cookie)
+        self.success.emit(_AcquiredCookie(cookie, direct_usable))
 
 
 class SettingsWindow(QDialog):
@@ -508,12 +528,32 @@ class SettingsWindow(QDialog):
         self._cookie_acquire_status.setText("正在读取 Cookie…")
         self._cookie_acquire_worker.stop_and_collect()
 
-    def _apply_acquired_cookie(self, provider_id: str, cookie_text: str) -> None:
+    def _apply_acquired_cookie(
+        self,
+        provider_id: str,
+        acquired: _AcquiredCookie | str,
+    ) -> None:
         provider_cls = PROVIDERS.get(provider_id)
         if not provider_cls:
             return
+        if isinstance(acquired, str):
+            # Preserve the existing direct-call seam used by older UI paths and
+            # tests; worker-originated results carry explicit validation state.
+            acquired = _AcquiredCookie(acquired)
+        cookie_text = acquired.cookie_text
         values = provider_cls.acquired_cookie_values(cookie_text)
         if not values:
+            return
+        if not acquired.direct_usable:
+            # A valid Chromium session may rely on storage-backed refresh state.
+            # Do not replace a usable persisted Cookie with a value that requests
+            # cannot replay; the provider will use the retained browser instead.
+            self._cookie_acquire_button.setEnabled(True)
+            self._cookie_acquire_button.setText("一键获取 Cookie")
+            self._cookie_finish_button.setVisible(False)
+            self._cookie_acquire_status.setText(
+                "专用浏览器会话已验证；Cookie 无法由程序直连，当前凭据未覆盖。"
+            )
             return
         # Save the fresh browser session immediately so changing tabs cannot restore stale drafts.
         self._provider_drafts.setdefault(provider_id, {}).update(values)

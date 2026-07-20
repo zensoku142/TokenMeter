@@ -198,10 +198,11 @@ class RefreshTests(unittest.TestCase):
         widget._settings_window = Mock()
         widget.refresh = Mock()
 
-        widget._finish_mimo_cookie_renewal(
-            "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
-            "",
-        )
+        with patch("ui.qt_widget.MiMoProvider.is_direct_cookie_usable", return_value=True):
+            widget._finish_mimo_cookie_renewal(
+                "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
+                "",
+            )
 
         save_config.assert_called_once_with(
             {
@@ -221,28 +222,45 @@ class RefreshTests(unittest.TestCase):
         widget = widget_stub()
         widget._mimo_renewal_task = Mock()
 
-        widget._finish_mimo_cookie_renewal(
-            "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
-            "",
-        )
+        with patch("ui.qt_widget.MiMoProvider.is_direct_cookie_usable", return_value=True):
+            widget._finish_mimo_cookie_renewal(
+                "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
+                "",
+            )
 
         self.assertEqual(widget._auth_expired_provider_id, "mimo")
         self.assertTrue(widget._auth_expired_notified)
         self.assertEqual(widget.tray.showMessage.call_count, 1)
 
-    @patch("ui.qt_widget.MiMoProvider.acquire_cookie_via_chrome")
-    def test_mimo_renewal_falls_back_to_visible_browser(self, acquire_cookie):
-        acquire_cookie.side_effect = [RuntimeError("MIMO_COOKIE_EMPTY"), "fresh-cookie"]
+    @patch("ui.qt_widget.MiMoProvider.recover_verified_cookie_via_chrome")
+    def test_mimo_renewal_falls_back_to_visible_browser(self, recover_cookie):
+        recover_cookie.side_effect = [RuntimeError("MIMO_COOKIE_EMPTY"), "fresh-cookie"]
         task = MiMoRenewalTask()
         finished = Mock()
         task.signals.finished.connect(finished)
 
-        task.run()
+        with patch("ui.qt_widget.MiMoProvider.is_direct_cookie_usable", return_value=True):
+            task.run()
 
-        self.assertEqual(acquire_cookie.call_count, 2)
-        self.assertTrue(acquire_cookie.call_args_list[0].kwargs["headless"])
-        self.assertFalse(acquire_cookie.call_args_list[1].kwargs["headless"])
+        self.assertEqual(recover_cookie.call_count, 2)
+        self.assertTrue(recover_cookie.call_args_list[0].kwargs["headless"])
+        self.assertFalse(recover_cookie.call_args_list[1].kwargs["headless"])
         finished.assert_called_once_with("fresh-cookie", "")
+
+    @patch("ui.qt_widget.config_manager.save_config")
+    def test_browser_only_renewal_does_not_overwrite_cookie_credentials(self, save_config):
+        widget = widget_stub()
+        widget._mimo_renewal_task = Mock()
+        widget.refresh = Mock()
+
+        widget._finish_mimo_cookie_renewal(
+            "session=browser-only",
+            "BROWSER_CONTEXT_ONLY",
+        )
+
+        save_config.assert_not_called()
+        widget.refresh.assert_called_once_with()
+        self.assertFalse(widget._auth_expired_notified)
 
     def test_status_summary_distinguishes_configuration_and_request_errors(self):
         cases = (

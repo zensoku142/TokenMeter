@@ -22,6 +22,7 @@ import struct
 import subprocess
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -57,6 +58,19 @@ _MIMO_CDP_PORT_RANGE = range(9222, 9323)
 _MIMO_CDP_TIMEOUT_SECONDS = 10
 # Cookie 采集总超时（秒），兜底防止 worker 长时间不退出。
 _MIMO_ACQUIRE_TOTAL_TIMEOUT_SECONDS = 180
+
+
+@dataclass(frozen=True)
+class _BrowserContextResult:
+    """Validated MiMo response and refreshed browser cookie snapshot.
+
+    This object is intentionally short-lived. Its credential fields must not be
+    logged, rendered, or persisted unless a direct Cookie-only request succeeds.
+    """
+
+    data: Any
+    cookie: str
+    api_platform_ph: str
 
 
 class MiMoProvider(Provider):
@@ -100,6 +114,8 @@ class MiMoProvider(Provider):
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         super().__init__(config)
         self._session = build_session()
+        self._browser_cookie = ""
+        self._browser_api_platform_ph = ""
 
     def close(self) -> None:
         self._session.close()
@@ -147,9 +163,20 @@ class MiMoProvider(Provider):
 
     def is_configured(self) -> bool:
         return bool(
-            str(self.config_get("MIMO_COOKIE", "")).strip()
+            self._cookie_value()
             or str(self.config_get("MIMO_API_KEY", "")).strip()
         )
+
+    def _cookie_value(self) -> str:
+        return self._browser_cookie or str(self.config_get("MIMO_COOKIE", "")).strip()
+
+    def _api_platform_ph_value(self) -> str:
+        cookie_ph = self.extract_cookie_value(self.normalize_cookie(self._cookie_value()), "api-platform_ph")
+        if cookie_ph:
+            return cookie_ph
+        return self._browser_api_platform_ph or str(
+            self.config_get("MIMO_API_PLATFORM_PH", "")
+        ).strip()
 
     # --------------------------------------------------------- chrome helpers
     @staticmethod
@@ -494,7 +521,9 @@ class MiMoProvider(Provider):
             acquire_url=MIMO_ACQUIRE_URL,
             profile_name="mimo-chrome",
             allowed_domains=("xiaomimimo.com",),
-            cookie_names=MIMO_ACQUIRE_KEYS,
+            # Manual collection keeps every valid first-party cookie. MiMo can
+            # add session fields without TokenMeter silently dropping them.
+            cookie_names=None if not auto_collect else MIMO_ACQUIRE_KEYS,
             empty_cookie_error="MIMO_COOKIE_EMPTY",
             use_edge=use_edge,
             user_data_dir=user_data_dir or MiMoProvider.default_user_data_dir(),
@@ -502,6 +531,141 @@ class MiMoProvider(Provider):
             headless=headless,
             total_timeout_seconds=total_timeout_seconds,
         )
+
+    @staticmethod
+    def _browser_headers(headers: dict[str, str]) -> dict[str, str]:
+        """Keep only authentication-relevant headers for a same-origin fetch."""
+
+        result: dict[str, str] = {"accept": "*/*", "content-type": "application/json", "x-timezone": "Asia/Shanghai"}
+        for name, value in headers.items():
+            normalized = str(name).lower()
+            if normalized == "authorization" or normalized.startswith("x-"):
+                result[str(name)] = str(value)
+        return result
+
+    @staticmethod
+    def _append_ph(url: str, ph: str) -> str:
+        value = ph.strip().strip('"').strip()
+        if not value:
+            return url
+        return f"{url}{'&' if '?' in url else '?'}api-platform_ph={value}"
+
+    @classmethod
+    def _check_browser_response(cls, status_code: int, payload: Any) -> Any:
+        if status_code in (401, 403):
+            raise RuntimeError("AUTH_EXPIRED")
+        if status_code == 429:
+            raise RuntimeError("RATE_LIMITED")
+        if status_code >= 500:
+            raise RuntimeError("SERVER_ERROR")
+        if not 200 <= status_code < 300:
+            raise RuntimeError(f"HTTP_{status_code}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("INVALID_RESPONSE")
+        if payload.get("code") in (401, "401"):
+            raise RuntimeError("AUTH_EXPIRED")
+        if payload.get("code") not in (0, "0", None):
+            raise RuntimeError("API_ERROR")
+        data = payload.get("data")
+        if not isinstance(data, (dict, list)):
+            raise RuntimeError("INVALID_RESPONSE")
+        return data
+
+    @classmethod
+    def _fetch_browser_context(
+        cls,
+        *,
+        path: str,
+        body: dict[str, Any] | None = None,
+        base_url: str = _MIMO_PLATFORM,
+        stop_event: threading.Event | None = None,
+        user_data_dir: str | None = None,
+        headless: bool = True,
+    ) -> _BrowserContextResult:
+        """Fetch one API endpoint inside the retained MiMo browser profile."""
+
+        event = stop_event or threading.Event()
+        session = browser_cookie.open_chrome_session(
+            event,
+            acquire_url=MIMO_ACQUIRE_URL,
+            profile_name="mimo-chrome",
+            user_data_dir=user_data_dir or cls.default_user_data_dir(),
+            headless=headless,
+        )
+        try:
+            # Reloading lets the site refresh a browser-only session before we
+            # issue our own request. The captured values never leave memory.
+            request_headers = session.capture_request_headers(
+                url_prefix=f"{base_url}/api/",
+                timeout_seconds=5.0,
+            )
+            cookie_before = session.cookies(allowed_domains=("xiaomimimo.com",))
+            ph = cls.extract_cookie_value(cookie_before, "api-platform_ph")
+            response = session.fetch_json(
+                url=cls._append_ph(f"{base_url}{path}", ph),
+                method="POST" if body is not None else "GET",
+                body=body,
+                headers=cls._browser_headers(request_headers),
+                allowed_domains=("xiaomimimo.com",),
+            )
+            data = cls._check_browser_response(response.status_code, response.payload)
+            fresh_ph = cls.extract_cookie_value(response.cookie, "api-platform_ph") or ph
+            return _BrowserContextResult(data, response.cookie, fresh_ph)
+        finally:
+            session.close()
+
+    @classmethod
+    def recover_verified_cookie_via_chrome(
+        cls,
+        stop_event: threading.Event,
+        *,
+        headless: bool = True,
+        user_data_dir: str | None = None,
+    ) -> str:
+        """Return a complete Cookie snapshot only after a browser-side API success."""
+
+        context = cls._fetch_browser_context(
+            path="/api/v1/balance",
+            stop_event=stop_event,
+            user_data_dir=user_data_dir,
+            headless=headless,
+        )
+        if not context.cookie:
+            raise RuntimeError("MIMO_COOKIE_EMPTY")
+        return context.cookie
+
+    @classmethod
+    def is_direct_cookie_usable(cls, cookie: str) -> bool:
+        """Return whether a collected Cookie can be replayed outside Chromium.
+
+        A browser-only session is still useful to the fallback path, but must not
+        overwrite the stored Cookie credentials as if it were replayable.
+        """
+
+        normalized = cls.normalize_cookie(cookie)
+        if not normalized:
+            return False
+        provider = cls(
+            {
+                "MIMO_COOKIE": normalized,
+                "MIMO_API_PLATFORM_PH": cls.extract_cookie_value(
+                    normalized, "api-platform_ph"
+                ),
+                "MIMO_BASE": _MIMO_PLATFORM,
+            }
+        )
+        try:
+            response = provider._session.get(
+                provider._url("/api/v1/balance"),
+                headers=provider._platform_headers(),
+                timeout=(5, 15),
+            )
+            provider._check_response(response)
+            return True
+        except (requests.RequestException, RuntimeError, ValueError, TypeError):
+            return False
+        finally:
+            provider.close()
 
     # ---------------------------------------------------------- chrome errors
     ACQUIRE_ERROR_MESSAGES = {
@@ -517,8 +681,12 @@ class MiMoProvider(Provider):
         "CDP_INVALID_RESPONSE": "浏览器调试返回 cookies 结构异常",
         "CDP_UNEXPECTED_RESPONSE": "浏览器调试响应字段缺失",
         "CDP_PAYLOAD_TOO_LARGE": "调试请求体积过大",
+        "CDP_COMMAND_FAILED": "浏览器无法执行 MiMo 会话验证请求",
+        "CDP_COMMAND_TIMEOUT": "浏览器会话验证超时",
         "CDP_HTTP_404": "调试接口未就绪（404）",
         "MIMO_COOKIE_EMPTY": "当前浏览器会话尚未登录 MiMo，请登录后再采集",
+        "AUTH_EXPIRED": "MiMo 浏览器会话未能通过平台验证，请在专用浏览器中重新登录后重试",
+        "BROWSER_CONTEXT_ONLY": "MiMo 会话仅能在专用浏览器中使用，Cookie 不会覆盖当前配置",
         "ACQUIRE_UNEXPECTED": "采集 Cookie 时出现未预期错误",
     }
 
@@ -536,14 +704,14 @@ class MiMoProvider(Provider):
         return custom or _MIMO_PLATFORM
 
     def _platform_headers(self) -> dict[str, str]:
-        cookie_raw = str(self.config_get("MIMO_COOKIE", "")).strip()
+        cookie_raw = self._cookie_value()
         cookie = self.normalize_cookie(cookie_raw)
         # 若 Cookie 中已经自带 ``api-platform_ph``，以它为准，不再向 Cookie
         # 头注入额外值；否则尝试从 ``MIMO_API_PLATFORM_PH`` 注入。两种方式
         # 只会取一个，避免在 Cookie 中出现重复的 api-platform_ph 项。
         ph = self.extract_cookie_value(cookie, "api-platform_ph")
         if not ph:
-            ph = str(self.config_get("MIMO_API_PLATFORM_PH", "")).strip()
+            ph = self._api_platform_ph_value()
             if ph:
                 # 去外层引号，防止把 """" 拼到请求头里。
                 ph_decoded = ph.strip().strip('"').strip().replace("%2F", "/").replace("%3D", "=")
@@ -579,10 +747,7 @@ class MiMoProvider(Provider):
         """
         base = self._base_url()
         url = f"{base}{path}"
-        cookie_raw = str(self.config_get("MIMO_COOKIE", "")).strip()
-        ph = self.extract_cookie_value(self.normalize_cookie(cookie_raw), "api-platform_ph")
-        if not ph:
-            ph = str(self.config_get("MIMO_API_PLATFORM_PH", "")).strip()
+        ph = self._api_platform_ph_value()
         if ph:
             # 去引号并修剪空白，防止 URL 出现 "%22" 或空格导致 404。
             ph = ph.strip().strip('"').strip()
@@ -604,7 +769,18 @@ class MiMoProvider(Provider):
             raise RuntimeError("NETWORK_TIMEOUT") from exc
         except requests.RequestException as exc:
             raise RuntimeError("NETWORK_ERROR") from exc
-        return self._check_response(response)
+        try:
+            return self._check_response(response)
+        except RuntimeError as exc:
+            if str(exc) != "AUTH_EXPIRED":
+                raise
+            auth_error = exc
+        try:
+            return self._fetch_in_browser(path=path)
+        except RuntimeError as recovery_exc:
+            # The original provider contract classifies an unavailable browser
+            # recovery path as the same authentication failure seen by callers.
+            raise auth_error from recovery_exc
 
     def _post(self, path: str, body: dict[str, Any]) -> Any:
         if not self.is_configured():
@@ -620,7 +796,26 @@ class MiMoProvider(Provider):
             raise RuntimeError("NETWORK_TIMEOUT") from exc
         except requests.RequestException as exc:
             raise RuntimeError("NETWORK_ERROR") from exc
-        return self._check_response(response)
+        try:
+            return self._check_response(response)
+        except RuntimeError as exc:
+            if str(exc) != "AUTH_EXPIRED":
+                raise
+            auth_error = exc
+        try:
+            return self._fetch_in_browser(path=path, body=body)
+        except RuntimeError as recovery_exc:
+            raise auth_error from recovery_exc
+
+    def _fetch_in_browser(self, *, path: str, body: dict[str, Any] | None = None) -> Any:
+        """Use the retained browser only after the normal Cookie request is rejected."""
+
+        context = self._fetch_browser_context(path=path, body=body, base_url=self._base_url())
+        # Keep a fresh, complete snapshot for this provider instance. It can make
+        # subsequent direct requests work, but is never persisted implicitly.
+        self._browser_cookie = context.cookie
+        self._browser_api_platform_ph = context.api_platform_ph
+        return context.data
 
     @staticmethod
     def _check_response(response: requests.Response) -> Any:

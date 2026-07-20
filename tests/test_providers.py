@@ -1,4 +1,5 @@
 import os
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -123,9 +124,39 @@ class MiMoProviderTests(unittest.TestCase):
         get.side_effect = self.config
         provider = MiMoProvider()
         provider._session.get = Mock(return_value=response({"code": 401, "data": None}))
-        balance, error = provider.fetch_balance()
+        with patch.object(
+            MiMoProvider, "_fetch_browser_context", side_effect=RuntimeError("BROWSER_NOT_READY")
+        ):
+            balance, error = provider.fetch_balance()
         self.assertIsNone(balance)
         self.assertEqual(error.code, "AUTH_EXPIRED")
+
+    @patch("api.providers.mimo.config_manager.get")
+    def test_auth_error_uses_verified_browser_context_without_persisting_it(self, get):
+        get.side_effect = self.config
+        provider = MiMoProvider()
+        provider._session.get = Mock(return_value=response({"code": 401, "data": None}))
+        browser_context = Mock(
+            data={"balance": "12.5", "currency": "CNY"},
+            cookie="session=fresh; api-platform_ph=ph",
+            api_platform_ph="ph",
+        )
+
+        with patch.object(MiMoProvider, "_fetch_browser_context", return_value=browser_context) as recover:
+            balance, error = provider.fetch_balance()
+
+        self.assertIsNone(error)
+        self.assertEqual(str(balance.amount), "12.5")
+        recover.assert_called_once_with(path="/api/v1/balance", body=None, base_url="https://platform.xiaomimimo.com")
+        self.assertEqual(provider._browser_cookie, "session=fresh; api-platform_ph=ph")
+        self.assertEqual(provider._browser_api_platform_ph, "ph")
+
+    def test_manual_mimo_collection_keeps_all_first_party_cookie_names(self):
+        with patch("api.providers.mimo.browser_cookie.acquire_cookie_via_chrome") as acquire:
+            acquire.return_value = "session=fresh"
+            MiMoProvider.acquire_cookie_via_chrome(threading.Event())
+
+        self.assertIsNone(acquire.call_args.kwargs["cookie_names"])
 
     @patch("api.providers.mimo.config_manager.get", return_value="")
     def test_missing_cookie_does_not_send_request(self, _get):

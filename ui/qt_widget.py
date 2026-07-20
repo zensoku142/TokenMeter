@@ -90,11 +90,9 @@ class MiMoRenewalTask(QRunnable):
     @Slot()
     def run(self) -> None:
         try:
-            cookie = MiMoProvider.acquire_cookie_via_chrome(
+            cookie = MiMoProvider.recover_verified_cookie_via_chrome(
                 self._stop_event,
-                auto_collect=True,
                 headless=True,
-                total_timeout_seconds=20,
             )
         except RuntimeError as exc:
             code = str(exc)
@@ -102,9 +100,8 @@ class MiMoRenewalTask(QRunnable):
                 self.signals.finished.emit("", code)
                 return
             try:
-                cookie = MiMoProvider.acquire_cookie_via_chrome(
+                cookie = MiMoProvider.recover_verified_cookie_via_chrome(
                     self._stop_event,
-                    auto_collect=True,
                     headless=False,
                 )
             except RuntimeError as visible_exc:
@@ -116,7 +113,11 @@ class MiMoRenewalTask(QRunnable):
         except Exception:
             self.signals.finished.emit("", "ACQUIRE_UNEXPECTED")
             return
-        self.signals.finished.emit(cookie, "")
+        direct_usable = MiMoProvider.is_direct_cookie_usable(cookie)
+        self.signals.finished.emit(
+            cookie,
+            "" if direct_usable else "BROWSER_CONTEXT_ONLY",
+        )
 
 
 def _fetch_tokens_safely(lightweight: bool = False) -> TokenData:
@@ -836,7 +837,7 @@ class FloatingWidget(QWidget):
         self._mimo_renewal_task = None
         if self._closed:
             return
-        if cookie_text:
+        if cookie_text and error_code != "BROWSER_CONTEXT_ONLY":
             values = MiMoProvider.acquired_cookie_values(cookie_text)
             try:
                 config_manager.save_config(
@@ -856,6 +857,23 @@ class FloatingWidget(QWidget):
                 self._auth_expired_provider_id = None
                 self.refresh()
                 return
+
+        if cookie_text and error_code == "BROWSER_CONTEXT_ONLY":
+            # The browser session itself was verified, but its authentication
+            # cannot be safely replayed by requests. Keep existing stored
+            # credentials unchanged; normal refresh will use browser fallback.
+            self._auth_expired_notified = False
+            self._auth_expired_provider_id = None
+            tray = getattr(self, "tray", None)
+            if tray is not None:
+                tray.showMessage(
+                    f"{APP_DISPLAY_NAME}：MiMo 浏览器会话已验证",
+                    "网页会话仍有效；TokenMeter 将在 Cookie 直连失败时使用专用浏览器查询。",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    10_000,
+                )
+            self.refresh()
+            return
 
         self._show_mimo_renewal_failure(error_code)
 
