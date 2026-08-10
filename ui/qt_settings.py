@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Union
 
@@ -676,9 +677,16 @@ class SettingsWindow(QDialog):
             hint = str(meta.get("hint") or "")
             secret = bool(meta.get("secret"))
             multiline = bool(meta.get("multiline"))
-            row_widget, edit = self._build_credential_row(label, hint, secret, multiline)
+            directory = bool(meta.get("directory"))
+            row_widget, edit = self._build_credential_row(
+                label, hint, secret, multiline, directory
+            )
             key = f"{upper_id}_{field.upper()}"
             initial = draft.get(field, str(cached.get(key, "")))
+            if directory and initial:
+                initial_path = Path(initial).expanduser()
+                if initial_path.name.lower() == "auth.json":
+                    initial = str(initial_path.parent)
             if isinstance(edit, QPlainTextEdit):
                 edit.setPlainText(initial)
             else:
@@ -735,9 +743,13 @@ class SettingsWindow(QDialog):
         layout.addWidget(self._cookie_acquire_status, 1)
         self.credentials_layout.addWidget(row)
 
-    @staticmethod
     def _build_credential_row(
-        label: str, hint: str, secret: bool, multiline: bool
+        self,
+        label: str,
+        hint: str,
+        secret: bool,
+        multiline: bool,
+        directory: bool = False,
     ) -> tuple[QWidget, Union[QLineEdit, QPlainTextEdit]]:
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
@@ -758,9 +770,37 @@ class SettingsWindow(QDialog):
             editor.setPlaceholderText("未填写" if not hint else hint)
         if secret and isinstance(editor, QLineEdit):
             editor.setEchoMode(QLineEdit.EchoMode.Password)
+        if directory and isinstance(editor, QLineEdit):
+            editor.setReadOnly(True)
+            browse_button = QPushButton("选择…")
+            browse_button.setObjectName("credentialDirectoryBrowseButton")
+            browse_button.clicked.connect(
+                lambda _checked=False, target=editor, title=label: self._choose_credential_directory(
+                    target, title
+                )
+            )
+            default_button = QPushButton("使用默认")
+            default_button.setObjectName("credentialDirectoryDefaultButton")
+            default_button.clicked.connect(
+                lambda _checked=False, target=editor: target.clear()
+            )
         input_row.addWidget(editor, 1)
+        if directory and isinstance(editor, QLineEdit):
+            input_row.addWidget(browse_button)
+            input_row.addWidget(default_button)
         layout.addLayout(input_row)
         return wrapper, editor
+
+    def _choose_credential_directory(self, editor: QLineEdit, label: str) -> None:
+        current = editor.text().strip()
+        initial = Path(current).expanduser() if current else Path.home() / ".codex"
+        if initial.name.lower() == "auth.json":
+            initial = initial.parent
+        selected = QFileDialog.getExistingDirectory(
+            self, f"选择{label}", str(initial)
+        )
+        if selected:
+            editor.setText(selected)
 
     def _load_values(self) -> None:
         values = config_manager.load_config()

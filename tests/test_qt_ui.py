@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -208,6 +209,14 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.update_data(data)
 
     assert panel.provider_quick_combo.currentData() == "codex"
+    assert panel.provider_quick_combo.size() == QSize(132, 28)
+    assert panel.provider_quick_combo.view().objectName() == "headerProviderView"
+    assert panel.provider_quick_combo.view().minimumWidth() == 132
+    panel.show()
+    panel.provider_quick_combo.showPopup()
+    APP.processEvents()
+    assert panel.provider_quick_combo.view().window().size() == QSize(132, 134)
+    panel.provider_quick_combo.hidePopup()
     assert panel.today_card.title_label.text() == "每周额度"
     assert panel.today_card.value.text() == "已用 25%"
     assert not panel.today_card.detail.isHidden()
@@ -1523,6 +1532,46 @@ def test_settings_keep_unsaved_provider_drafts_when_switching():
         window.provider_combo.setCurrentIndex(0)
         assert window._provider_widgets["AUTH"].text() == "draft-token"
         assert window._provider_widgets["AUTH"].echoMode() == QLineEdit.EchoMode.Password
+        window.close()
+
+
+def test_settings_codex_home_uses_read_only_directory_picker():
+    configured = r"C:\Users\example\.codex\auth.json"
+    selected = r"D:\CodexData"
+    values = {
+        **config_manager.all_config(),
+        "ACTIVE_PROVIDER": "codex",
+        "CODEX_HOME": configured,
+    }
+    with (
+        patch("ui.qt_settings.config_manager.load_config", return_value=values),
+        patch("ui.qt_settings.config_manager.all_config", return_value=values),
+        patch(
+            "ui.qt_settings.QFileDialog.getExistingDirectory",
+            return_value=selected,
+        ) as choose_directory,
+    ):
+        window = SettingsWindow()
+        editor = window._provider_widgets["HOME"]
+        browse_button = window.findChild(QPushButton, "credentialDirectoryBrowseButton")
+        default_button = window.findChild(QPushButton, "credentialDirectoryDefaultButton")
+
+        assert isinstance(editor, QLineEdit)
+        assert editor.isReadOnly()
+        assert browse_button is not None
+        assert default_button is not None
+        assert editor.text() == r"C:\Users\example\.codex"
+        browse_button.click()
+        assert editor.text() == selected
+        assert window._values()["CODEX_HOME"] == selected
+        choose_directory.assert_called_once_with(
+            window,
+            "选择Codex 目录（可选）",
+            r"C:\Users\example\.codex",
+        )
+
+        default_button.click()
+        assert editor.text() == ""
         window.close()
 
 

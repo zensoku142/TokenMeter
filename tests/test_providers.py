@@ -27,6 +27,14 @@ def response(payload, status=200):
 
 
 class MultiProviderTests(unittest.TestCase):
+    def test_codex_home_accepts_legacy_auth_file_path(self):
+        home = Path("C:/Users/example/.codex")
+        provider = CodexProvider({"CODEX_HOME": str(home / "auth.json")})
+        try:
+            self.assertEqual(provider._home(), home)
+        finally:
+            provider.close()
+
     def test_codex_reads_subscription_windows_and_credits(self):
         provider = CodexProvider()
         provider._credentials = Mock(return_value=("access", "account", {"email": "a@example.com"}))
@@ -94,8 +102,36 @@ class MultiProviderTests(unittest.TestCase):
                 line(f"{yesterday.isoformat()}T09:00:00+08:00", "session_meta", {}),
                 line(f"{yesterday.isoformat()}T09:01:00+08:00", "event_msg", token_event(6_000)),
             ]
+            resumed = [
+                line(f"{yesterday.isoformat()}T10:00:00+08:00", "session_meta", {}),
+                line(
+                    f"{yesterday.isoformat()}T10:00:01+08:00",
+                    "event_msg",
+                    {"type": "task_started"},
+                ),
+                line(
+                    f"{yesterday.isoformat()}T10:12:01+08:00",
+                    "event_msg",
+                    {"type": "task_complete"},
+                ),
+                # Resuming the same session file a day later must start a new task;
+                # the idle gap between tasks is not chat duration.
+                line(
+                    f"{today.isoformat()}T10:00:01+08:00",
+                    "event_msg",
+                    {"type": "task_started"},
+                ),
+                line(
+                    f"{today.isoformat()}T10:08:01+08:00",
+                    "event_msg",
+                    {"type": "task_complete"},
+                ),
+            ]
             (sessions / "first.jsonl").write_text("\n".join(first) + "\n", encoding="utf-8")
             (sessions / "second.jsonl").write_text("\n".join(second) + "\n", encoding="utf-8")
+            (sessions / "resumed.jsonl").write_text(
+                "\n".join(resumed) + "\n", encoding="utf-8"
+            )
 
             provider = CodexProvider({"CODEX_HOME": str(home)})
             try:

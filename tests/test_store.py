@@ -83,6 +83,7 @@ class StoreTests(unittest.TestCase):
         self.patches = [
             patch("data.store.history.unsynced_months", return_value=[]),
             patch("data.store.history.save_usage"),
+            patch("data.store.history.provider_monthly_payload", return_value=None),
             patch("data.store.history.total_cost", return_value=Decimal("1.25")),
             patch("data.store.history.recent_daily", return_value=[]),
         ]

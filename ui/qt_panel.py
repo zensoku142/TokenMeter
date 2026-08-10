@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from math import ceil, floor
 
 import pyqtgraph as pg
-from PySide6.QtCore import QDate, QLocale, QPoint, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import QDate, QLocale, QPoint, QRect, QRectF, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QSpacerItem,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QToolButton,
     QToolTip,
     QVBoxLayout,
@@ -481,6 +483,166 @@ class MinuteDateEdit(QWidget):
     def closeEvent(self, event) -> None:
         self.popup.close()
         super().closeEvent(event)
+
+
+class ProviderOptionDelegate(QStyledItemDelegate):
+    """Paint the header provider menu without changing its combo-box data model."""
+
+    ROW_HEIGHT = 36
+
+    def __init__(self, combo: QComboBox):
+        super().__init__(combo)
+        self._combo = combo
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        base = super().sizeHint(option, index)
+        return QSize(max(116, base.width()), self.ROW_HEIGHT)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        tokens = current_theme()
+        is_current = index.row() == self._combo.currentIndex()
+        is_hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        row_rect = QRectF(option.rect.adjusted(4, 2, -4, -2))
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        if is_current:
+            painter.setBrush(QColor(tokens.accent_soft))
+            painter.drawRoundedRect(row_rect, 6, 6)
+            painter.setBrush(QColor(tokens.accent))
+            painter.drawRoundedRect(
+                QRectF(row_rect.left(), row_rect.top() + 4, 3, row_rect.height() - 8),
+                1.5,
+                1.5,
+            )
+        elif is_hovered:
+            hover = QColor(tokens.text)
+            hover.setAlpha(18)
+            painter.setBrush(hover)
+            painter.drawRoundedRect(row_rect, 6, 6)
+
+        painter.setPen(QColor(tokens.value if is_current else tokens.text))
+        painter.setFont(option.font)
+        painter.drawText(
+            option.rect.adjusted(16, 0, -36, 0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            str(index.data(Qt.ItemDataRole.DisplayRole) or ""),
+        )
+
+        if is_current:
+            check = fluent_icon("check", size=13, active_color=tokens.accent)
+            if not check.isNull():
+                pixmap = check.pixmap(
+                    QSize(13, 13),
+                    QIcon.Mode.Active,
+                    QIcon.State.Off,
+                )
+                target = QRect(
+                    option.rect.right() - 25,
+                    option.rect.center().y() - 6,
+                    13,
+                    13,
+                )
+                painter.drawPixmap(target, pixmap)
+        painter.restore()
+
+
+class ProviderQuickCombo(QComboBox):
+    """Header-only provider selector with a compact Fluent visual treatment."""
+
+    POPUP_WIDTH = 132
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._popup_open = False
+        self.setItemDelegate(ProviderOptionDelegate(self))
+        self.setMaxVisibleItems(6)
+        popup_view = self.view()
+        popup_view.setObjectName("headerProviderView")
+        popup_view.setMouseTracking(True)
+        popup_view.setMinimumWidth(self.POPUP_WIDTH)
+        popup_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        popup_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def paintEvent(self, _event) -> None:
+        tokens = current_theme()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        control_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if not self.isEnabled():
+            border = tokens.disabled
+            text = tokens.disabled
+        elif self._popup_open or self.hasFocus():
+            border = tokens.accent
+            text = tokens.value
+        elif self.underMouse():
+            border = tokens.border_hover
+            text = tokens.value
+        else:
+            border = tokens.border
+            text = tokens.value
+
+        painter.setPen(QPen(QColor(border), 1))
+        painter.setBrush(QColor(tokens.surface))
+        painter.drawRoundedRect(control_rect, 9, 9)
+        painter.setPen(QColor(text))
+        painter.setFont(self.font())
+        painter.drawText(
+            self.rect().adjusted(12, 0, -32, 0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.currentText(),
+        )
+
+        arrow = fluent_icon("chevron-down", size=12, active_color=tokens.accent)
+        if not arrow.isNull():
+            mode = QIcon.Mode.Active if self._popup_open or self.hasFocus() else QIcon.Mode.Normal
+            pixmap = arrow.pixmap(QSize(12, 12), mode, QIcon.State.Off)
+            painter.drawPixmap(QRect(self.width() - 23, 8, 12, 12), pixmap)
+        painter.end()
+
+    def showPopup(self) -> None:
+        self._popup_open = True
+        self.update()
+        self.view().setMinimumWidth(self.POPUP_WIDTH)
+        super().showPopup()
+        popup = self.view().window()
+        visible_rows = min(self.count(), self.maxVisibleItems())
+        popup_height = visible_rows * ProviderOptionDelegate.ROW_HEIGHT + 26
+        popup.resize(self.POPUP_WIDTH, popup_height)
+        below = self.mapToGlobal(QPoint(0, self.height() + 4))
+        above = self.mapToGlobal(QPoint(0, -popup_height - 4))
+        screen = QGuiApplication.screenAt(below) or self.screen()
+        available = screen.availableGeometry()
+        x = max(available.left(), min(below.x(), available.right() - popup.width() + 1))
+        y = below.y()
+        if y + popup.height() - 1 > available.bottom() and above.y() >= available.top():
+            y = above.y()
+        popup.move(x, max(available.top(), y))
+        popup.raise_()
+
+    def hidePopup(self) -> None:
+        super().hidePopup()
+        self._popup_open = False
+        self.update()
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self.update()
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.update()
 
 
 class StatusDot(QWidget):
@@ -1759,7 +1921,7 @@ class MainPanel(QFrame):
         self._title_label = QLabel(APP_DISPLAY_NAME)
         self._title_label.setObjectName("panelTitle")
         provider_id = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
-        self.provider_quick_combo = QComboBox()
+        self.provider_quick_combo = ProviderQuickCombo()
         self.provider_quick_combo.setObjectName("headerProviderCombo")
         self.provider_quick_combo.setAccessibleName("快速切换数据平台")
         self.provider_quick_combo.setToolTip("一键切换订阅或 API 数据平台")

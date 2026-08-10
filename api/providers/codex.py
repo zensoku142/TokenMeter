@@ -33,8 +33,8 @@ class _SessionUsage:
     size: int
     mtime_ns: int
     offset: int
-    start: datetime | None = None
-    end: datetime | None = None
+    task_start: datetime | None = None
+    longest_task_seconds: int = 0
     last_total: int = 0
     last_cached: int = 0
     peak_total: int = 0
@@ -51,6 +51,7 @@ class CodexProvider(Provider):
             "label": "Codex 目录（可选）",
             "secret": False,
             "optional": True,
+            "directory": True,
             "hint": "默认读取 %USERPROFILE%\\.codex\\auth.json",
         }
     }
@@ -66,9 +67,12 @@ class CodexProvider(Provider):
 
     def _home(self) -> Path:
         configured = str(self.config_get("CODEX_HOME", "")).strip()
-        return Path(configured).expanduser() if configured else Path(
-            os.environ.get("CODEX_HOME", Path.home() / ".codex")
-        ).expanduser()
+        if configured:
+            path = Path(configured).expanduser()
+            # 旧版设置页允许手工输入，部分用户会直接填 auth.json。
+            # Provider 其余逻辑都以 Codex 根目录为基准，因此在这里兼容旧值。
+            return path.parent if path.name.lower() == "auth.json" else path
+        return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
 
     def _credentials(self) -> tuple[str, str | None, dict[str, Any]]:
         path = self._home() / "auth.json"
@@ -158,8 +162,8 @@ class CodexProvider(Provider):
                 size=stat.st_size,
                 mtime_ns=stat.st_mtime_ns,
                 offset=previous.offset,
-                start=previous.start,
-                end=previous.end,
+                task_start=previous.task_start,
+                longest_task_seconds=previous.longest_task_seconds,
                 last_total=previous.last_total,
                 last_cached=previous.last_cached,
                 peak_total=previous.peak_total,
@@ -175,16 +179,49 @@ class CodexProvider(Provider):
                 while line := handle.readline():
                     match = _TIMESTAMP.match(line)
                     observed_at = cls._parse_timestamp(match.group(1)) if match else None
-                    if observed_at is not None:
-                        usage.start = usage.start or observed_at
-                        usage.end = observed_at
+                    is_session_meta = '"session_meta"' in line
+                    is_event_msg = '"event_msg"' in line
+                    has_task_boundary = any(
+                        marker in line
+                        for marker in ('"task_started"', '"task_complete"', '"turn_aborted"')
+                    )
+                    has_token_count = '"token_count"' in line
                     # Session records can contain large prompts; only deserialize the
-                    # small token_count events needed for local statistics.
-                    if '"token_count"' not in line or '"event_msg"' not in line:
+                    # small task-boundary and token-count events needed for local statistics.
+                    if not is_session_meta and not (
+                        is_event_msg and (has_task_boundary or has_token_count)
+                    ):
                         continue
                     try:
                         payload = json.loads(line)
+                        record_type = payload.get("type") if isinstance(payload, dict) else None
                         event = payload.get("payload") if isinstance(payload, dict) else None
+                        event_type = event.get("type") if isinstance(event, dict) else None
+                    except (AttributeError, json.JSONDecodeError):
+                        continue
+                    if observed_at is not None:
+                        if record_type == "session_meta" and usage.task_start is None:
+                            # Older Codex logs may not emit task_started for the first task.
+                            usage.task_start = observed_at
+                        elif record_type == "event_msg" and event_type == "task_started":
+                            usage.task_start = observed_at
+                        elif record_type == "event_msg" and event_type in {
+                            "task_complete",
+                            "turn_aborted",
+                        }:
+                            if usage.task_start is not None and observed_at >= usage.task_start:
+                                task_seconds = int(
+                                    (observed_at - usage.task_start).total_seconds()
+                                )
+                                # A session file can contain tasks resumed days apart. Only an
+                                # individual task's active boundary may contribute to this metric.
+                                usage.longest_task_seconds = max(
+                                    usage.longest_task_seconds, task_seconds
+                                )
+                            usage.task_start = None
+                    if record_type != "event_msg" or event_type != "token_count":
+                        continue
+                    try:
                         info = event.get("info") if isinstance(event, dict) else None
                         total_usage = (
                             info.get("total_token_usage") if isinstance(info, dict) else None
@@ -267,10 +304,7 @@ class CodexProvider(Provider):
         for usage in usages:
             for usage_day, tokens in usage.daily.items():
                 daily[usage_day] = daily.get(usage_day, 0) + tokens
-            if usage.start is not None and usage.end is not None:
-                longest_seconds = max(
-                    longest_seconds, int((usage.end - usage.start).total_seconds())
-                )
+            longest_seconds = max(longest_seconds, usage.longest_task_seconds)
         active_days = {date.fromisoformat(value) for value, tokens in daily.items() if tokens > 0}
         current_streak, longest_streak = self._streaks(active_days)
         total_tokens = sum(daily.values())
