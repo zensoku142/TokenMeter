@@ -3,10 +3,12 @@ import os
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, unquote, urlsplit
+
+import requests
 
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
@@ -42,19 +44,22 @@ class MultiProviderTests(unittest.TestCase):
             return_value=((('2026-08-09', 12_000),), ())
         )
         provider._session.get = Mock(
-            return_value=response(
-                {
-                    "plan_type": "pro",
-                    "rate_limit": {
-                        "primary_window": {
-                            "used_percent": 27,
-                            "reset_at": 1785816000,
-                            "limit_window_seconds": 604800,
+            side_effect=[
+                response(
+                    {
+                        "plan_type": "pro",
+                        "rate_limit": {
+                            "primary_window": {
+                                "used_percent": 27,
+                                "reset_at": 1785816000,
+                                "limit_window_seconds": 604800,
+                            },
                         },
-                    },
-                    "credits": {"has_credits": True, "balance": "14.5"},
-                }
-            )
+                        "credits": {"has_credits": True, "balance": "14.5"},
+                    }
+                ),
+                response({"active_until": "2026-08-11T06:17:00Z"}),
+            ]
         )
         try:
             quota, error = provider.fetch_quota()
@@ -66,7 +71,35 @@ class MultiProviderTests(unittest.TestCase):
         self.assertEqual(quota.metrics[0].value, "14.5")
         self.assertEqual(quota.account_label, "a@example.com")
         self.assertEqual(quota.plan, "pro")
+        self.assertEqual(
+            quota.account_plan_active_until,
+            datetime(2026, 8, 11, 6, 17, tzinfo=timezone.utc),
+        )
         self.assertEqual(quota.activity, (("2026-08-09", 12_000),))
+        self.assertEqual(provider._session.get.call_count, 2)
+        self.assertEqual(
+            provider._session.get.call_args_list[1].kwargs["params"],
+            {"account_id": "account"},
+        )
+
+    def test_codex_subscription_metadata_failure_does_not_discard_quota(self):
+        provider = CodexProvider()
+        provider._credentials = Mock(return_value=("access", "failed-account", {}))
+        provider._local_activity = Mock(return_value=((), ()))
+        provider._session.get = Mock(
+            side_effect=[
+                response({"plan_type": "plus", "rate_limit": {}}),
+                requests.Timeout(),
+            ]
+        )
+        try:
+            quota, error = provider.fetch_quota()
+        finally:
+            provider.close()
+
+        self.assertIsNone(error)
+        self.assertEqual(quota.plan, "plus")
+        self.assertIsNone(quota.account_plan_active_until)
 
     def test_codex_local_sessions_build_activity_and_five_statistics(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -34,7 +34,7 @@ TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它以类�
 - 主面板通过与深浅主题一致的紧凑下拉菜单切换 Provider，当前平台有明确选中标记；订阅平台展示已用/剩余比例和重置倒计时，API 平台动态展示原生币种金额。
 - 悬浮球和系统托盘常驻；Codex 以深浅主题水球显示周额度水位、剩余百分比和重置倒计时，DeepSeek/MiMo 保留金额视图。
 - 提供浅色、深色及跟随 Windows 的主题。
-- Codex 按接口返回的窗口时长展示当前周额度与重置时间，右侧显示近 7 天 Token 使用量；同时保留年度活动、累计/峰值 Token、按单个任务计算的最长聊天和连续使用天数。
+- Codex 按接口返回的窗口时长展示当前周额度与重置时间，并显示订阅套餐和到期日期，不在面板展示账户邮箱；右侧显示近 7 天 Token 使用量，同时保留年度活动、累计/峰值 Token、按单个任务计算的最长聊天和连续使用天数。
 - Codex 默认读取本机 CLI 目录；非默认位置通过只读目录选择器设置，并兼容旧版已保存的 `auth.json` 文件路径。
 - DeepSeek 支持峰谷计价提示；MiMo Cookie 可通过专用 Chrome 会话获取和续期。
 - 网络异常时保留最近一次成功额度，并继续更新本地 Token 活动；本地统计不会覆盖远程额度更新时间。
@@ -152,7 +152,7 @@ TokenMeter/
 
 ## 版本与 Release
 
-当前版本：`1.11.2`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+当前版本：`1.11.3`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 2.0 的 Provider 能力边界、分批计划和已执行基础见 [TokenMeter 2.0 路线图](docs/V2_ROADMAP.md)。
 

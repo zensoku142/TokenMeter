@@ -112,6 +112,13 @@ def format_reset_countdown(value: datetime | None, now: datetime | None = None) 
     return f"{minutes} 分钟后重置"
 
 
+def format_plan_active_until(value: datetime | None) -> tuple[str, str]:
+    if value is None:
+        return "--", ""
+    local_value = value.astimezone() if value.tzinfo is not None else value
+    return local_value.strftime("%m-%d"), local_value.strftime("%Y")
+
+
 class MoneyAxis(pg.AxisItem):
     def __init__(self, *args, currency: str = "CNY", **kwargs):
         super().__init__(*args, **kwargs)
@@ -2647,9 +2654,22 @@ class MainPanel(QFrame):
                     break
                 summaries.append((metric.title, "--" if loading else metric.value, metric.detail))
             if len(summaries) < len(cards) and data.account_plan:
-                summaries.append(("订阅套餐", "--" if loading else data.account_plan, data.account_label))
+                summaries.append(("订阅套餐", "--" if loading else data.account_plan, ""))
+            if len(summaries) < len(cards) and (
+                data.account_plan or data.account_plan_active_until
+            ):
+                expiry_date, expiry_year = format_plan_active_until(
+                    data.account_plan_active_until
+                )
+                summaries.append(
+                    (
+                        "套餐到期",
+                        "--" if loading else expiry_date,
+                        "" if loading else expiry_year,
+                    )
+                )
             while len(summaries) < len(cards):
-                summaries.append(("Codex", "--", "正在读取额度" if loading else data.account_label))
+                summaries.append(("Codex", "--", "正在读取额度" if loading else ""))
             for card, (title, value, detail) in zip(cards, summaries):
                 card.set_title(title)
                 card.set_values(value, detail, "")

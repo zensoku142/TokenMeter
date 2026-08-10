@@ -66,6 +66,7 @@ class ProviderQuota:
     statistics: tuple[QuotaMetric, ...] = ()
     account_label: str = ""
     plan: str = ""
+    account_plan_active_until: datetime | None = None
 
 
 def _decimal(value: Any) -> Decimal:

@@ -57,6 +57,8 @@ class CodexProvider(Provider):
     }
     _session_cache: ClassVar[dict[Path, _SessionUsage]] = {}
     _session_cache_lock: ClassVar[threading.Lock] = threading.Lock()
+    _subscription_cache: ClassVar[dict[str, tuple[datetime, datetime]]] = {}
+    _subscription_cache_ttl = timedelta(hours=6)
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -324,6 +326,40 @@ class CodexProvider(Provider):
     ) -> ProviderQuota | None:
         return ProviderQuota(activity=activity, statistics=statistics) if activity else None
 
+    def _subscription_active_until(
+        self, headers: dict[str, str], account_id: str
+    ) -> datetime | None:
+        now = datetime.now(timezone.utc)
+        with self._session_cache_lock:
+            cached = self._subscription_cache.get(account_id)
+        if cached:
+            cached_at, active_until = cached
+            active_now = datetime.now(active_until.tzinfo)
+            if now - cached_at < self._subscription_cache_ttl and active_until > active_now:
+                return active_until
+        try:
+            response = self._session.get(
+                "https://chatgpt.com/backend-api/subscriptions",
+                headers=headers,
+                params={"account_id": account_id},
+                timeout=(5, 20),
+            )
+        except requests.RequestException:
+            return None
+        if not response.ok:
+            return None
+        try:
+            payload = response.json()
+        except (requests.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        active_until = self._parse_timestamp(str(payload.get("active_until") or ""))
+        if active_until is not None:
+            with self._session_cache_lock:
+                self._subscription_cache[account_id] = (now, active_until)
+        return active_until
+
     def fetch_quota(self) -> tuple[ProviderQuota | None, FetchError | None]:
         activity, statistics = self._local_activity()
         try:
@@ -402,6 +438,12 @@ class CodexProvider(Provider):
             value = "不限量" if credits.get("unlimited") else str(credits.get("balance") or "0")
             metrics.append(QuotaMetric("可用 Credits", value))
         email = str(claims.get("email") or "")
+        subscription_account_id = account_id or str(payload.get("account_id") or "").strip()
+        active_until = (
+            self._subscription_active_until(headers, subscription_account_id)
+            if subscription_account_id
+            else None
+        )
         return ProviderQuota(
             windows=tuple(window for window in windows if window is not None),
             metrics=tuple(metrics),
@@ -409,6 +451,7 @@ class CodexProvider(Provider):
             statistics=statistics,
             account_label=email,
             plan=str(payload.get("plan_type") or ""),
+            account_plan_active_until=active_until,
         ), None
 
 

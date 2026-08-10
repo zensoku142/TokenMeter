@@ -294,6 +294,7 @@ class PerProviderData:
     quota_statistics: list[QuotaMetric] = field(default_factory=list)
     account_label: str = ""
     account_plan: str = ""
+    account_plan_active_until: datetime | None = None
     errors: list[FetchError] = field(default_factory=list)
     status: str = "loading"
     is_stale: bool = False
@@ -320,6 +321,7 @@ class TokenData:
     quota_statistics: list[QuotaMetric] = field(default_factory=list)
     account_label: str = ""
     account_plan: str = ""
+    account_plan_active_until: datetime | None = None
     status: str = "loading"
     last_success_at: datetime | None = None
     last_attempt_at: datetime | None = None
@@ -481,6 +483,7 @@ class TokenData:
         per.quota_statistics = []
         per.account_label = ""
         per.account_plan = ""
+        per.account_plan_active_until = None
         per.errors = []
         per.status = "loading"
         per.is_stale = False
@@ -553,6 +556,7 @@ class TokenData:
                     previous_per.quota_windows
                     or previous_per.quota_metrics
                     or previous_per.account_plan
+                    or previous_per.account_plan_active_until
                 )
             )
             if kept_cached_quota and previous_per is not None:
@@ -562,12 +566,14 @@ class TokenData:
                 per.quota_metrics = copy.deepcopy(previous_per.quota_metrics)
                 per.account_label = previous_per.account_label
                 per.account_plan = previous_per.account_plan
+                per.account_plan_active_until = previous_per.account_plan_active_until
             if quota is not None:
                 if not kept_cached_quota:
                     per.quota_windows = list(quota.windows)
                     per.quota_metrics = list(quota.metrics)
                     per.account_label = quota.account_label
                     per.account_plan = quota.plan
+                    per.account_plan_active_until = quota.account_plan_active_until
                 per.quota_statistics = list(quota.statistics)
                 data.daily_usage = [
                     {"date": usage_day, "tokens": tokens, "cost_cny": 0}
@@ -786,6 +792,7 @@ class TokenData:
         data.quota_statistics = list(per.quota_statistics)
         data.account_label = per.account_label
         data.account_plan = per.account_plan
+        data.account_plan_active_until = per.account_plan_active_until
         data.errors = list(per.errors)
         data.minute_usage = minute_rows
         data.minute_usage_status = minute_status

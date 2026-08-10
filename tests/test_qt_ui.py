@@ -238,6 +238,7 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     assert panel.balance_card.value.text() == "12.5"
     assert panel.month_card.title_label.text() == "订阅套餐"
     assert panel.month_card.value.text() == "pro"
+    assert panel.month_card.detail.isHidden()
     assert not panel.trend.isHidden()
     assert panel.trend.title.text() == "近 7 天 Token 使用量"
     assert "Token：" in panel.trend.tooltip_text(0)
@@ -257,6 +258,39 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.provider_quick_combo.activated.emit(mimo_index)
 
     assert selected_providers == ["mimo"]
+    panel.close()
+
+
+def test_subscription_expiry_replaces_codex_placeholder_without_email():
+    panel = MainPanel()
+    data = sample_data()
+    active_until = datetime(2026, 8, 11, 6, 17, tzinfo=timezone.utc)
+    data.quota_windows = [QuotaWindow("codex-weekly", "每周额度", 25)]
+    data.account_plan = "plus"
+    data.account_label = "a@example.com"
+    data.account_plan_active_until = active_until
+    data.per_provider = [
+        PerProviderData(
+            "codex",
+            "Codex",
+            quota_windows=list(data.quota_windows),
+            account_plan="plus",
+            account_label="a@example.com",
+            account_plan_active_until=active_until,
+        )
+    ]
+
+    panel.update_data(data)
+
+    local_until = active_until.astimezone()
+    assert panel.balance_card.title_label.text() == "订阅套餐"
+    assert panel.balance_card.value.text() == "plus"
+    assert panel.balance_card.detail.isHidden()
+    assert panel.month_card.title_label.text() == "套餐到期"
+    assert panel.month_card.value.text() == local_until.strftime("%m-%d")
+    assert panel.month_card.detail.text() == local_until.strftime("%Y")
+    assert "a@example.com" not in panel.balance_card.value.toolTip()
+    assert "a@example.com" not in panel.month_card.value.toolTip()
     panel.close()
 
 

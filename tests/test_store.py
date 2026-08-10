@@ -259,6 +259,9 @@ class StoreTests(unittest.TestCase):
                     statistics=(QuotaMetric("累计 Token 数", "0.12万"),),
                     account_label="a@example.com",
                     plan="pro",
+                    account_plan_active_until=datetime(
+                        2026, 8, 11, 6, 17, tzinfo=timezone.utc
+                    ),
                 ), None
 
         class FailedQuotaProvider(QuotaProvider):
@@ -285,6 +288,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.quota_metrics[0].value, "12")
         self.assertEqual(data.account_label, "a@example.com")
         self.assertEqual(data.account_plan, "pro")
+        self.assertEqual(
+            data.account_plan_active_until,
+            datetime(2026, 8, 11, 6, 17, tzinfo=timezone.utc),
+        )
         self.assertEqual(data.quota_statistics[0].value, "0.23万")
         self.assertEqual(data.daily_usage[0]["tokens"], 2345)
         self.assertEqual(data.last_success_at, remote_success_at)
