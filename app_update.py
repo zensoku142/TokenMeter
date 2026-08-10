@@ -564,6 +564,15 @@ def launch_installer(bundle: DownloadBundle) -> None:
         cleanup_paths = [str(cache_dir.relative_to(updates_root))]
     except ValueError as exc:
         raise UpdateError("更新缓存目录不在允许的清理范围内") from exc
+    try:
+        from data import history
+
+        backup_path = history.backup_usage_database(bundle.release.version)
+    except Exception as exc:
+        config_manager.logger().exception("Pre-update usage database backup failed")
+        raise UpdateError("更新前备份本地 usage.db 失败，已取消更新") from exc
+    if backup_path is not None:
+        config_manager.logger().info("Pre-update usage database backup: %s", backup_path)
     config_manager.save_pending_update_cleanup(
         {
             "version": MANIFEST_VERSION,

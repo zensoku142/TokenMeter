@@ -19,6 +19,7 @@ from api.providers.base import (
     QuotaWindow,
 )
 from data.store import (
+    PerProviderData,
     TokenData,
     cost_breakdown_for_day,
     months_for_activity,
@@ -100,6 +101,22 @@ class StoreTests(unittest.TestCase):
         months = months_for_activity(date(2026, 7, 4))
         self.assertEqual(months[0], (7, 2026))
         self.assertEqual(months[-1], (7, 2025))
+
+    def test_cached_provider_snapshot_is_an_isolated_copy(self):
+        original = TokenData(
+            per_provider=[PerProviderData("deepseek", "DeepSeek")],
+            today_tokens=7,
+            status="ok",
+        )
+        TokenData._provider_snapshots["deepseek"] = original
+
+        cached = TokenData.cached_snapshot("deepseek")
+
+        self.assertIsNotNone(cached)
+        self.assertIsNot(cached, original)
+        cached.today_tokens = 8
+        self.assertEqual(original.today_tokens, 7)
+        self.assertIsNone(TokenData.cached_snapshot("mimo"))
 
     def test_connection_uses_snapshot_without_touching_refresh_cache_or_history(self):
         provider = FakeProvider(payloads=[payload("2026-07-03", 7, ".2")])
@@ -214,6 +231,93 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.daily_usage[0]["tokens"], 1234)
         self.assertEqual(data.account_label, "a@example.com")
         self.assertEqual(data.account_plan, "pro")
+
+    def test_codex_network_failure_keeps_cached_quota_and_remote_success_time(self):
+        class QuotaProvider(FakeProvider):
+            id = "codex"
+            name = "Codex"
+            supports_daily_usage = False
+            supports_cost = False
+            supports_subscription_quota = True
+
+            def fetch_balance(self):
+                return None, None
+
+            def fetch_summary(self):
+                return None, None
+
+        class SuccessfulQuotaProvider(QuotaProvider):
+            def fetch_quota(self):
+                return ProviderQuota(
+                    windows=(
+                        QuotaWindow(
+                            "codex-weekly", "每周额度", 25, window_minutes=10_080
+                        ),
+                    ),
+                    metrics=(QuotaMetric("Credits", "12"),),
+                    activity=(("2026-07-03", 1234),),
+                    statistics=(QuotaMetric("累计 Token 数", "0.12万"),),
+                    account_label="a@example.com",
+                    plan="pro",
+                ), None
+
+        class FailedQuotaProvider(QuotaProvider):
+            def fetch_quota(self):
+                return ProviderQuota(
+                    activity=(("2026-07-03", 2345),),
+                    statistics=(QuotaMetric("累计 Token 数", "0.23万"),),
+                ), FetchError(
+                    "NETWORK_ERROR", "Codex 订阅额度", "无法连接 Codex 额度服务"
+                )
+
+        self.fetch_with(SuccessfulQuotaProvider())
+        remote_success_at = datetime(2026, 7, 3, 10, 30)
+        cached = TokenData._provider_snapshots["codex"]
+        cached.last_success_at = remote_success_at
+        cached.last_updated = "10:30:00"
+
+        data = self.fetch_with(FailedQuotaProvider())
+
+        self.assertEqual(data.status, "ok")
+        self.assertEqual(data.errors, [])
+        self.assertFalse(data.is_stale)
+        self.assertEqual(data.quota_windows[0].used_percent, 25)
+        self.assertEqual(data.quota_metrics[0].value, "12")
+        self.assertEqual(data.account_label, "a@example.com")
+        self.assertEqual(data.account_plan, "pro")
+        self.assertEqual(data.quota_statistics[0].value, "0.23万")
+        self.assertEqual(data.daily_usage[0]["tokens"], 2345)
+        self.assertEqual(data.last_success_at, remote_success_at)
+        self.assertEqual(data.last_updated, "10:30:00")
+
+    def test_codex_network_failure_without_cached_quota_keeps_error_visible(self):
+        class FailedQuotaProvider(FakeProvider):
+            id = "codex"
+            name = "Codex"
+            supports_daily_usage = False
+            supports_cost = False
+            supports_subscription_quota = True
+
+            def fetch_balance(self):
+                return None, None
+
+            def fetch_summary(self):
+                return None, None
+
+            def fetch_quota(self):
+                return ProviderQuota(
+                    activity=(("2026-07-03", 2345),),
+                    statistics=(QuotaMetric("累计 Token 数", "0.23万"),),
+                ), FetchError(
+                    "NETWORK_ERROR", "Codex 订阅额度", "无法连接 Codex 额度服务"
+                )
+
+        data = self.fetch_with(FailedQuotaProvider())
+
+        self.assertEqual(data.status, "partial")
+        self.assertEqual([error.code for error in data.errors], ["NETWORK_ERROR"])
+        self.assertEqual(data.quota_windows, [])
+        self.assertIsNone(data.last_success_at)
 
     def test_lightweight_mimo_fetch_only_requests_current_month(self):
         provider = FakeProvider(payloads=[payload("2026-07-03", 30, ".23")])

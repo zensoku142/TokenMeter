@@ -37,7 +37,8 @@ TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它以类�
 - Codex 按接口返回的窗口时长展示当前周额度与重置时间，右侧显示近 7 天 Token 使用量；同时保留年度活动、累计/峰值 Token、按单个任务计算的最长聊天和连续使用天数。
 - Codex 默认读取本机 CLI 目录；非默认位置通过只读目录选择器设置，并兼容旧版已保存的 `auth.json` 文件路径。
 - DeepSeek 支持峰谷计价提示；MiMo Cookie 可通过专用 Chrome 会话获取和续期。
-- 网络异常时保留最近成功数据；历史数据缓存在本地 SQLite。
+- 网络异常时保留最近一次成功额度，并继续更新本地 Token 活动；本地统计不会覆盖远程额度更新时间。
+- 历史数据缓存在本地 SQLite；自动更新前备份 `usage.db`，分时数据按设置天数的 2 倍保护期清理并记录清理明细。
 - API Key、Bearer Token 和 Cookie 保存到 Windows 凭据管理器。
 - 支持迁移应用数据目录、自动更新及单实例运行。
 
@@ -45,7 +46,7 @@ TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它以类�
 
 | 浅色主题 | 深色主题 |
 | --- | --- |
-| ![TokenMeter 浅色主题](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter 深色主题](docs/images/token-spider-ui-v3-dark.png) |
+| ![TokenMeter 浅色主题](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter 深色主题](docs/images/tokenmeter-v1.11.2-dark.png) |
 
 ## 系统要求
 
@@ -151,7 +152,7 @@ TokenMeter/
 
 ## 版本与 Release
 
-当前版本：`1.11.1`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+当前版本：`1.11.2`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 2.0 的 Provider 能力边界、分批计划和已执行基础见 [TokenMeter 2.0 路线图](docs/V2_ROADMAP.md)。
 

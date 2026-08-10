@@ -270,7 +270,9 @@ class SettingsWindow(QDialog):
         self.minute_usage_retention_days = QSpinBox()
         self.minute_usage_retention_days.setRange(1, 365)
         self.minute_usage_retention_days.setSuffix(" 天")
-        self.minute_usage_retention_days.setToolTip("保留最近 N 天分时估算数据，包含当天；程序启动后自动清理更早数据")
+        self.minute_usage_retention_days.setToolTip(
+            "界面展示最近 N 天分时估算数据；本地数据保留双倍宽限期，超过 2N 天后才自动清理"
+        )
         runtime_form.addRow("分时数据保存天数", self.minute_usage_retention_days)
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("跟随系统", "system")

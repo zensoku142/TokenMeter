@@ -418,8 +418,27 @@ class TokenData:
             return copy.deepcopy(snapshot) if snapshot else cls()
 
     @classmethod
-    def fetch(cls, today: date | None = None, lightweight: bool = False) -> "TokenData":
-        providers = list(active_providers())
+    def cached_snapshot(cls, provider_id: str) -> "TokenData | None":
+        """Return an isolated successful snapshot for one provider, if available."""
+        with cls._cache_lock:
+            snapshot = cls._provider_snapshots.get(provider_id)
+            return copy.deepcopy(snapshot) if snapshot else None
+
+    @classmethod
+    def fetch(
+        cls,
+        today: date | None = None,
+        lightweight: bool = False,
+        config: Mapping[str, Any] | None = None,
+    ) -> "TokenData":
+        # Background workers must use the configuration captured when they were
+        # created. Otherwise a queued task can silently switch providers before
+        # it starts running.
+        providers = (
+            list(active_providers(config))
+            if config is not None
+            else list(active_providers())
+        )
         if not providers:
             return cls(
                 status="error",
@@ -466,6 +485,8 @@ class TokenData:
         per.status = "loading"
         per.is_stale = False
         successes = 0
+        kept_cached_quota = False
+        quota_refresh_failed = False
         minute_rows: list[dict[str, Any]] = []
         minute_cost_rows: list[dict[str, Any]] = []
         minute_status = "unavailable"
@@ -520,19 +541,53 @@ class TokenData:
                 quota, quota_error = None, FetchError(
                     "UNKNOWN_ERROR", "订阅额度", str(exc)
                 )
+            quota_refresh_failed = bool(
+                quota_error
+                and getattr(provider, "supports_subscription_quota", False)
+            )
+            kept_cached_quota = bool(
+                quota_error
+                and quota_error.code in {"NETWORK_ERROR", "NETWORK_TIMEOUT"}
+                and previous_per
+                and (
+                    previous_per.quota_windows
+                    or previous_per.quota_metrics
+                    or previous_per.account_plan
+                )
+            )
+            if kept_cached_quota and previous_per is not None:
+                # Codex 的远程额度失败时仍会返回最新本地活动。保留上次成功
+                # 的远程额度，避免瞬时网络波动把卡片清空。
+                per.quota_windows = copy.deepcopy(previous_per.quota_windows)
+                per.quota_metrics = copy.deepcopy(previous_per.quota_metrics)
+                per.account_label = previous_per.account_label
+                per.account_plan = previous_per.account_plan
             if quota is not None:
-                per.quota_windows = list(quota.windows)
-                per.quota_metrics = list(quota.metrics)
+                if not kept_cached_quota:
+                    per.quota_windows = list(quota.windows)
+                    per.quota_metrics = list(quota.metrics)
+                    per.account_label = quota.account_label
+                    per.account_plan = quota.plan
                 per.quota_statistics = list(quota.statistics)
-                per.account_label = quota.account_label
-                per.account_plan = quota.plan
                 data.daily_usage = [
                     {"date": usage_day, "tokens": tokens, "cost_cny": 0}
                     for usage_day, tokens in quota.activity
                 ]
                 successes += 1
+            elif kept_cached_quota:
+                # 没有本地活动时也继续展示上一份完整额度。
+                successes += 1
             if quota_error:
-                per.errors.append(quota_error)
+                if kept_cached_quota:
+                    # 静默降级只影响界面；日志仍保留失败证据用于诊断。
+                    config_manager.logger().warning(
+                        "Fetch failed: provider=%s source=%s code=%s; retained cached quota",
+                        provider.id,
+                        quota_error.source,
+                        quota_error.code,
+                    )
+                else:
+                    per.errors.append(quota_error)
 
             try:
                 balance, balance_error = provider.fetch_balance()
@@ -741,8 +796,9 @@ class TokenData:
         data.minute_cost_usage_history = minute_cost_history
 
         if successes:
-            data.last_success_at = datetime.now()
-            data.last_updated = data.last_success_at.strftime("%H:%M:%S")
+            if not quota_refresh_failed:
+                data.last_success_at = datetime.now()
+                data.last_updated = data.last_success_at.strftime("%H:%M:%S")
             data.status = "partial" if per.errors else "ok"
             data.is_stale = bool(per.errors)
             with cls._cache_lock:

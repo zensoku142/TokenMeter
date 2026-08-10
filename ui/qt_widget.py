@@ -54,15 +54,21 @@ class FetchSignals(QObject):
 
 
 class FetchTask(QRunnable):
-    def __init__(self, request_id: int, lightweight: bool = False):
+    def __init__(
+        self,
+        request_id: int,
+        config: dict[str, object],
+        lightweight: bool = False,
+    ):
         super().__init__()
         self.request_id = request_id
+        self._config = dict(config)
         self._lightweight = lightweight
         self.signals = FetchSignals()
 
     @Slot()
     def run(self) -> None:
-        result = _fetch_tokens_safely(self._lightweight)
+        result = _fetch_tokens_safely(self._config, self._lightweight)
         self.signals.finished.emit(self.request_id, result)
 
 
@@ -121,15 +127,33 @@ class MiMoRenewalTask(QRunnable):
         )
 
 
-def _fetch_tokens_safely(lightweight: bool = False) -> TokenData:
-    """Fetch token data from the active provider and keep the worker thread
+def _fetch_tokens_safely(
+    config: dict[str, object], lightweight: bool = False
+) -> TokenData:
+    """Fetch token data from a captured provider and keep the worker thread
     from dying if a provider or config error is raised."""
 
     try:
-        return TokenData.fetch(lightweight=lightweight)
+        return TokenData.fetch(lightweight=lightweight, config=config)
     except Exception:
         config_manager.logger().exception("Background refresh failed")
-        data = TokenData(status="error")
+        provider_id = str(config.get("ACTIVE_PROVIDER", "")).strip().lower()
+        provider_cls = PROVIDERS.get(provider_id)
+        per_provider = []
+        if provider_cls is not None:
+            per_provider.append(
+                PerProviderData(
+                    provider_id,
+                    provider_cls.name,
+                    currency=provider_cls.default_currency,
+                    status="error",
+                )
+            )
+        data = TokenData(
+            currency=provider_cls.default_currency if provider_cls is not None else "CNY",
+            per_provider=per_provider,
+            status="error",
+        )
         data.last_attempt_at = __import__("datetime").datetime.now()
         data.errors.append(
             FetchError("UNKNOWN_ERROR", "后台刷新", "刷新数据时发生未知错误")
@@ -379,7 +403,8 @@ class FloatingWidget(QWidget):
             self.raise_()
             self.activateWindow()
             self.panel.setFocus(Qt.FocusReason.OtherFocusReason)
-            self.panel.update_data(self._data, self._refreshing)
+            loading = self._refreshing and self._data.last_success_at is None
+            self.panel.update_data(self._data, loading, self._refreshing)
             self.refresh()
         finally:
             self._transitioning = False
@@ -760,15 +785,18 @@ class FloatingWidget(QWidget):
         if not provider_id or provider_id == config_manager.get("ACTIVE_PROVIDER", ""):
             return
         try:
-            config_manager.save_config({"ACTIVE_PROVIDER": provider_id})
+            config_snapshot = config_manager.save_config({"ACTIVE_PROVIDER": provider_id})
         except Exception:
             config_manager.logger().exception("Quick provider switch failed")
-            self.panel.update_data(self._data, self._refreshing)
+            loading = self._refreshing and self._data.last_success_at is None
+            self.panel.update_data(self._data, loading, self._refreshing)
             return
         self._sync_pricing_state(notify_transition=False)
         provider_cls = PROVIDERS[provider_id]
+        cached = TokenData.cached_snapshot(provider_id)
         self._prepare_scope_switch(
-            TokenData(
+            cached
+            or TokenData(
                 currency=provider_cls.default_currency,
                 per_provider=[
                     PerProviderData(
@@ -779,31 +807,49 @@ class FloatingWidget(QWidget):
                     )
                 ],
                 status="loading",
-            )
+            ),
+            config_snapshot,
         )
 
-    def _prepare_scope_switch(self, data: TokenData) -> None:
-        with self._refresh_lock:
-            if self._refreshing:
-                # The in-flight result belongs to the previous provider.
-                # Invalidate its request id so it cannot briefly relabel stale data.
-                self._request_id += 1
+    def _prepare_scope_switch(
+        self, data: TokenData, config_snapshot: dict[str, object]
+    ) -> None:
         self._data = data
-        self._apply_update()
-        self.refresh()
+        # A provider switch is allowed to supersede an in-flight refresh. The
+        # older worker can finish in the background, but its request id prevents
+        # it from changing either the data or the new loading state.
+        self.refresh(force=True, config_snapshot=config_snapshot)
 
-    def refresh(self) -> None:
+    def refresh(
+        self,
+        *,
+        force: bool = False,
+        config_snapshot: dict[str, object] | None = None,
+    ) -> None:
+        captured_config = dict(
+            config_snapshot
+            if config_snapshot is not None
+            else config_manager.all_config()
+        )
+        provider_id = str(captured_config.get("ACTIVE_PROVIDER", "")).strip().lower()
         with self._refresh_lock:
             if self._closed:
                 return
-            if self._refreshing:
+            if self._refreshing and not force:
                 self._pending_refresh = True
                 return
+            if force:
+                # Pending work belongs to the provider scope being replaced.
+                self._pending_refresh = False
             self._refreshing = True
             self._request_id += 1
             request_id = self._request_id
         self._apply_update()
-        task = FetchTask(request_id, lightweight=self._uses_lightweight_mimo_refresh())
+        task = FetchTask(
+            request_id,
+            captured_config,
+            lightweight=self._uses_lightweight_mimo_refresh(provider_id),
+        )
         task.signals.finished.connect(self._finish_refresh)
         self._thread_pool.start(task)
 
@@ -813,9 +859,10 @@ class FloatingWidget(QWidget):
         with self._refresh_lock:
             if self._closed:
                 return
-            if request_id == self._request_id:
-                self._data = result
-                has_current_result = True
+            if request_id != self._request_id:
+                return
+            self._data = result
+            has_current_result = True
             self._refreshing = False
             pending = self._pending_refresh
             self._pending_refresh = False
@@ -969,7 +1016,7 @@ class FloatingWidget(QWidget):
             )
         self.panel.set_refreshing(self._refreshing)
         if self._expanded:
-            self.panel.update_data(self._data, loading)
+            self.panel.update_data(self._data, loading, self._refreshing)
 
     def _periodic_refresh(self) -> None:
         self.refresh()
@@ -1019,11 +1066,11 @@ class FloatingWidget(QWidget):
         )
         self._pricing_timer.start(delay_ms)
 
-    def _uses_lightweight_mimo_refresh(self) -> bool:
-        return (
-            not self._expanded
-            and str(config_manager.get("ACTIVE_PROVIDER", "")).strip().lower() == "mimo"
-        )
+    def _uses_lightweight_mimo_refresh(self, provider_id: str | None = None) -> bool:
+        selected = provider_id or str(
+            config_manager.get("ACTIVE_PROVIDER", "")
+        ).strip().lower()
+        return not self._expanded and selected == "mimo"
 
     def _reschedule_refresh(self) -> None:
         configured = int(config_manager.get("REFRESH_INTERVAL", 60_000))

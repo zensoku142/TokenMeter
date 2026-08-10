@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any, Iterator
 
 import config_manager
 
 DB_PATH = config_manager.CONFIG_DIR / "usage.db"
+MINUTE_USAGE_CLEANUP_GRACE_MULTIPLIER = 2
 
 MINUTE_TOKEN_TYPES = (
     "PROMPT_CACHE_HIT_TOKEN",
@@ -127,6 +129,40 @@ def _connect() -> Iterator[sqlite3.Connection]:
     finally:
         # sqlite Connection 的上下文只处理事务，文件句柄仍需显式关闭。
         connection.close()
+
+
+def backup_usage_database(
+    release_version: str, observed_at: datetime | None = None
+) -> Path | None:
+    """Create a consistent pre-update SQLite snapshot outside the update cache."""
+
+    source_path = DB_PATH.resolve(strict=False)
+    if not source_path.is_file():
+        return None
+    safe_version = "".join(
+        character if character.isalnum() or character in {".", "-", "_"} else "_"
+        for character in str(release_version).strip()
+    ) or "unknown"
+    timestamp = (observed_at or datetime.now()).strftime("%Y%m%d%H%M%S%f")
+    backup_dir = source_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"usage-before-update-v{safe_version}-{timestamp}.db"
+    temporary_path = backup_path.with_suffix(backup_path.suffix + ".tmp")
+    source_uri = source_path.as_uri() + "?mode=ro"
+    try:
+        with (
+            closing(sqlite3.connect(source_uri, uri=True, timeout=5)) as source,
+            closing(sqlite3.connect(temporary_path, timeout=5)) as target,
+        ):
+            source.backup(target)
+            result = target.execute("PRAGMA quick_check").fetchone()
+            if not result or result[0] != "ok":
+                raise sqlite3.DatabaseError("usage.db backup integrity check failed")
+        temporary_path.replace(backup_path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return backup_path
 
 
 def needs_initial_sync(provider: str = "deepseek") -> bool:
@@ -422,28 +458,63 @@ def _minute_usage_retention_threshold(current_day: date, retention_days: int) ->
     return (current_day - timedelta(days=retention_days - 1)).isoformat()
 
 
+def _delete_expired_minute_usage(
+    connection: sqlite3.Connection,
+    provider: str,
+    current_day: date,
+    retention_days: int,
+) -> tuple[str, dict[str, int]]:
+    effective_days = retention_days * MINUTE_USAGE_CLEANUP_GRACE_MULTIPLIER
+    threshold = _minute_usage_retention_threshold(current_day, effective_days)
+    deleted_rows: dict[str, int] = {}
+    for table in (
+        "minute_usage",
+        "minute_usage_snapshot",
+        "minute_cost_usage",
+        "minute_cost_snapshot",
+    ):
+        cursor = connection.execute(
+            f"DELETE FROM {table} WHERE provider = ? AND usage_date < ?",
+            (provider, threshold),
+        )
+        deleted_rows[table] = max(0, int(cursor.rowcount))
+    return threshold, deleted_rows
+
+
+def _log_minute_usage_cleanup(
+    provider: str,
+    retention_days: int,
+    threshold: str,
+    deleted_rows: dict[str, int],
+) -> None:
+    total_deleted = sum(deleted_rows.values())
+    if not total_deleted:
+        return
+    details = ", ".join(
+        f"{table}={count}" for table, count in deleted_rows.items()
+    )
+    config_manager.logger().info(
+        "Minute usage cleanup: provider=%s cutoff=%s configured_days=%s "
+        "effective_days=%s deleted_rows=%s (%s)",
+        provider,
+        threshold,
+        retention_days,
+        retention_days * MINUTE_USAGE_CLEANUP_GRACE_MULTIPLIER,
+        total_deleted,
+        details,
+    )
+
+
 def clear_expired_minute_usage(
     provider: str, current_day: date, retention_days: int = 3
-) -> None:
-    """删除指定提供商超过保留天数的临时分时缓存。"""
-    threshold = _minute_usage_retention_threshold(current_day, retention_days)
+) -> int:
+    """超过配置天数的双倍宽限期后，删除指定提供商的分时缓存。"""
     with _connect() as connection:
-        connection.execute(
-            "DELETE FROM minute_usage WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
+        threshold, deleted_rows = _delete_expired_minute_usage(
+            connection, provider, current_day, retention_days
         )
-        connection.execute(
-            "DELETE FROM minute_usage_snapshot WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
-        )
-        connection.execute(
-            "DELETE FROM minute_cost_usage WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
-        )
-        connection.execute(
-            "DELETE FROM minute_cost_snapshot WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
-        )
+    _log_minute_usage_cleanup(provider, retention_days, threshold, deleted_rows)
+    return sum(deleted_rows.values())
 
 
 def save_estimated_minute_usage(
@@ -474,22 +545,8 @@ def save_estimated_minute_usage(
             if not cost_cny.is_finite():
                 cost_cny = None
     with _connect() as connection:
-        threshold = _minute_usage_retention_threshold(usage_day, retention_days)
-        connection.execute(
-            "DELETE FROM minute_usage WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
-        )
-        connection.execute(
-            "DELETE FROM minute_usage_snapshot WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
-        )
-        connection.execute(
-            "DELETE FROM minute_cost_usage WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
-        )
-        connection.execute(
-            "DELETE FROM minute_cost_snapshot WHERE provider = ? AND usage_date < ?",
-            (provider, threshold),
+        cleanup_threshold, deleted_rows = _delete_expired_minute_usage(
+            connection, provider, usage_day, retention_days
         )
         previous, previous_at = _snapshot_rows(connection, provider, usage_date)
         if previous_at is None:
@@ -535,6 +592,9 @@ def save_estimated_minute_usage(
         _save_estimated_minute_cost_usage(
             connection, provider, usage_date, cost_cny, observed_at
         )
+    _log_minute_usage_cleanup(
+        provider, retention_days, cleanup_threshold, deleted_rows
+    )
     return status
 
 

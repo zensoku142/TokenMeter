@@ -29,8 +29,10 @@ def widget_stub():
     widget._apply_update = Mock()
     widget._thread_pool = Mock()
     widget._refresh_timer = Mock()
+    widget.panel = Mock()
     widget.tray = Mock()
     widget.open_settings = Mock()
+    widget._sync_pricing_state = Mock()
     widget._auth_expired_notified = False
     widget._auth_expired_provider_id = None
     widget._mimo_renewal_task = None
@@ -128,14 +130,15 @@ class RefreshTests(unittest.TestCase):
     def test_compact_mimo_uses_lightweight_refresh(self):
         widget = widget_stub()
 
-        with patch("ui.qt_widget.config_manager.get") as get_config:
-            get_config.side_effect = lambda key, default=None: {
-                "ACTIVE_PROVIDER": "mimo",
-            }.get(key, default)
+        with patch(
+            "ui.qt_widget.config_manager.all_config",
+            return_value={"ACTIVE_PROVIDER": "mimo"},
+        ):
             widget.refresh()
 
         task = widget._thread_pool.start.call_args.args[0]
         self.assertTrue(task._lightweight)
+        self.assertEqual(task._config["ACTIVE_PROVIDER"], "mimo")
 
     def test_repeated_refresh_runs_once_then_one_pending(self):
         widget = widget_stub()
@@ -145,6 +148,62 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(widget._thread_pool.start.call_count, 1)
         self.assertTrue(widget._pending_refresh)
 
+    def test_provider_switch_starts_without_waiting_for_previous_refresh(self):
+        widget = widget_stub()
+        widget._refreshing = True
+        widget._pending_refresh = True
+        widget._request_id = 4
+        loading = TokenData(
+            per_provider=[PerProviderData("codex", "Codex")],
+            status="loading",
+        )
+        snapshot = {"ACTIVE_PROVIDER": "codex", "CODEX_HOME": ""}
+
+        widget._prepare_scope_switch(loading, snapshot)
+
+        self.assertEqual(widget._thread_pool.start.call_count, 1)
+        task = widget._thread_pool.start.call_args.args[0]
+        self.assertEqual(task.request_id, 5)
+        self.assertEqual(task._config, snapshot)
+        self.assertIs(widget._data, loading)
+        self.assertTrue(widget._refreshing)
+        self.assertFalse(widget._pending_refresh)
+
+        widget._finish_refresh(4, TokenData(today_tokens=1))
+        self.assertIs(widget._data, loading)
+        self.assertTrue(widget._refreshing)
+
+        current = TokenData(
+            per_provider=[PerProviderData("codex", "Codex")],
+            today_tokens=2,
+            status="ok",
+        )
+        widget._finish_refresh(5, current)
+        self.assertIs(widget._data, current)
+        self.assertFalse(widget._refreshing)
+
+    def test_provider_switch_displays_cached_snapshot_during_refresh(self):
+        widget = widget_stub()
+        cached = TokenData(
+            per_provider=[PerProviderData("codex", "Codex")],
+            today_tokens=9,
+            status="ok",
+            last_success_at=datetime.now(),
+        )
+        snapshot = {"ACTIVE_PROVIDER": "codex", "CODEX_HOME": ""}
+
+        with (
+            patch("ui.qt_widget.config_manager.get", return_value="deepseek"),
+            patch("ui.qt_widget.config_manager.save_config", return_value=snapshot),
+            patch.object(TokenData, "cached_snapshot", return_value=cached),
+        ):
+            widget._switch_provider("codex")
+
+        self.assertIs(widget._data, cached)
+        self.assertEqual(widget._data.today_tokens, 9)
+        self.assertTrue(widget._refreshing)
+        self.assertEqual(widget._thread_pool.start.call_count, 1)
+
     def test_older_request_does_not_replace_newer_data(self):
         widget = widget_stub()
         current = TokenData(balance_cny=2)
@@ -153,6 +212,7 @@ class RefreshTests(unittest.TestCase):
         widget._request_id = 2
         widget._finish_refresh(1, TokenData(balance_cny=1))
         self.assertIs(widget._data, current)
+        self.assertTrue(widget._refreshing)
 
     def test_auth_expired_shows_one_tray_notification_until_recovery(self):
         widget = widget_stub()

@@ -43,7 +43,7 @@ TokenMeter は、DeepSeek と Xiaomi MiMo の Token 消費量、API コスト、
 
 | ライトテーマ | ダークテーマ |
 | --- | --- |
-| ![TokenMeter ライトテーマ](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter ダークテーマ](docs/images/token-spider-ui-v3-dark.png) |
+| ![TokenMeter ライトテーマ](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter ダークテーマ](docs/images/tokenmeter-v1.11.2-dark.png) |
 
 ## 動作要件
 
@@ -129,7 +129,7 @@ TokenMeter/
 
 ## バージョンと Release
 
-現在のバージョン：`1.11.1`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) を参照してください。
+現在のバージョン：`1.11.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) を参照してください。
 
 ## License
 

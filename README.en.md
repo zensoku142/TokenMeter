@@ -43,7 +43,7 @@ TokenMeter is a lightweight Windows desktop monitor for token usage, API costs, 
 
 | Light theme | Dark theme |
 | --- | --- |
-| ![TokenMeter light theme](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter dark theme](docs/images/token-spider-ui-v3-dark.png) |
+| ![TokenMeter light theme](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter dark theme](docs/images/tokenmeter-v1.11.2-dark.png) |
 
 ## Requirements
 
@@ -137,7 +137,7 @@ TokenMeter/
 
 ## Version and releases
 
-Current version: `1.11.1`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
+Current version: `1.11.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
 
 ## License
 

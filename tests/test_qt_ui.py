@@ -124,6 +124,18 @@ def test_panel_token_values_use_readable_units():
     panel.close()
 
 
+def test_panel_keeps_cached_values_visible_while_refreshing():
+    data = sample_data()
+    data.today_cost_cny = 1.25
+    panel = MainPanel()
+
+    panel.update_data(data, loading=False, refreshing=True)
+
+    assert panel.today_card.value.text() == "¥1.25"
+    assert panel.status_text.text() == "正在更新"
+    panel.close()
+
+
 def test_trend_uses_exactly_seven_cost_bars_with_hover_tooltip():
     trend = TrendCard()
     trend.set_rows(sample_data().daily_usage, date.today())
@@ -1772,6 +1784,7 @@ def test_settings_exposes_minute_usage_retention_days():
     )
     assert window._values()["MINUTE_USAGE_CHART_TYPE"] == "bar"
     assert window.minute_usage_retention_days.value() == 7
+    assert "2N 天" in window.minute_usage_retention_days.toolTip()
     window.minute_usage_retention_days.setValue(14)
     assert window._values()["MINUTE_USAGE_RETENTION_DAYS"] == 14
     window.close()

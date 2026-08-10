@@ -140,6 +140,10 @@ def test_launch_installer_uses_silent_update_parameters_and_original_install_dir
     with (
         patch("app_update.sys.executable", str(current_exe)),
         patch("app_update.config_manager.updates_dir", return_value=tmp_path / "data" / "updates"),
+        patch(
+            "data.history.backup_usage_database",
+            return_value=tmp_path / "data" / "backups" / "usage.db",
+        ) as backup_usage,
         patch("app_update.config_manager.save_pending_update_cleanup") as save_cleanup,
         patch("app_update.subprocess.Popen") as popen,
     ):
@@ -155,6 +159,7 @@ def test_launch_installer_uses_silent_update_parameters_and_original_install_dir
         f"/DIR={current_exe.parent}",
         "/TOKENMETERUPDATE",
     ]
+    backup_usage.assert_called_once_with("1.3.0")
     save_cleanup.assert_called_once()
 
 
@@ -176,6 +181,7 @@ def test_installer_launch_failure_keeps_current_program_and_clears_cleanup_state
     with (
         patch("app_update.sys.executable", str(current_exe)),
         patch("app_update.config_manager.updates_dir", return_value=tmp_path / "data" / "updates"),
+        patch("data.history.backup_usage_database", return_value=None),
         patch("app_update.config_manager.save_pending_update_cleanup"),
         patch("app_update.config_manager.clear_pending_update_cleanup", clear),
         patch("app_update.subprocess.Popen", side_effect=OSError("blocked")),
@@ -185,6 +191,32 @@ def test_installer_launch_failure_keeps_current_program_and_clears_cleanup_state
 
     assert current_exe.read_bytes() == b"current-version"
     clear.assert_called_once()
+
+
+def test_pre_update_backup_failure_blocks_installer_launch(tmp_path):
+    release = _setup_release()
+    setup_path = tmp_path / "data" / "updates" / "v1.3.0" / release.setup_asset.name
+    setup_path.parent.mkdir(parents=True)
+    setup_path.write_bytes(b"setup")
+    current_exe = tmp_path / "TokenMeter" / "TokenMeter.exe"
+    bundle = DownloadBundle(
+        release=release,
+        setup_asset=DownloadedAsset(release.setup_asset, setup_path, "a" * 64),
+        cache_dir=setup_path.parent,
+    )
+
+    with (
+        patch("app_update.sys.executable", str(current_exe)),
+        patch("app_update.config_manager.updates_dir", return_value=tmp_path / "data" / "updates"),
+        patch("data.history.backup_usage_database", side_effect=OSError("disk full")),
+        patch("app_update.config_manager.save_pending_update_cleanup") as save_cleanup,
+        patch("app_update.subprocess.Popen") as popen,
+    ):
+        with pytest.raises(UpdateError, match="usage.db"):
+            launch_installer(bundle)
+
+    save_cleanup.assert_not_called()
+    popen.assert_not_called()
 
 
 def test_release_asset_selection_prefers_tokenmeter_and_requires_updater_removed():

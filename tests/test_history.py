@@ -2,10 +2,11 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
@@ -112,6 +113,45 @@ class HistoryTests(unittest.TestCase):
                 self.assertIn("minute_usage", tables)
                 self.assertIn("minute_usage_snapshot", tables)
 
+    def test_backup_usage_database_creates_verified_pre_update_snapshot(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            db_path = Path(directory) / "usage.db"
+            with patch.object(history, "DB_PATH", db_path):
+                history.save_usage(
+                    [payload("2026-08-10", 12)],
+                    [payload("2026-08-10", ".125")],
+                    provider="deepseek",
+                )
+                backup_path = history.backup_usage_database(
+                    "1.12.0", datetime(2026, 8, 10, 18, 30)
+                )
+
+            self.assertIsNotNone(backup_path)
+            assert backup_path is not None
+            self.assertEqual(backup_path.parent, db_path.parent / "backups")
+            self.assertEqual(
+                backup_path.name,
+                "usage-before-update-v1.12.0-20260810183000000000.db",
+            )
+            with closing(sqlite3.connect(backup_path)) as connection:
+                self.assertEqual(connection.execute("PRAGMA quick_check").fetchone()[0], "ok")
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT SUM(token_amount) FROM daily_usage WHERE provider = 'deepseek'"
+                    ).fetchone()[0],
+                    12,
+                )
+            self.assertFalse(
+                backup_path.with_suffix(backup_path.suffix + ".tmp").exists()
+            )
+
+    def test_backup_usage_database_skips_missing_database(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            db_path = Path(directory) / "usage.db"
+            with patch.object(history, "DB_PATH", db_path):
+                self.assertIsNone(history.backup_usage_database("1.12.0"))
+            self.assertFalse((db_path.parent / "backups").exists())
+
     def test_estimated_minute_usage_distributes_delta_and_is_idempotent(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
             with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
@@ -149,7 +189,7 @@ class HistoryTests(unittest.TestCase):
     def test_minute_cleanup_keeps_daily_history_and_rolls_back_on_failure(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
             with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
-                old_day = date(2026, 7, 12)
+                old_day = date(2026, 7, 11)
                 current_day = date(2026, 7, 13)
                 totals = {token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES}
                 history.save_estimated_minute_usage(
@@ -196,34 +236,58 @@ class HistoryTests(unittest.TestCase):
                     history.clear_expired_minute_usage("deepseek", current_day, 1)
                 self.assertTrue(history.minute_usage_for_day("deepseek", old_day))
 
-    def test_minute_cleanup_keeps_configured_retention_days(self):
-        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
-            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
-                current_day = date(2026, 7, 13)
-                expired_day = current_day - timedelta(days=3)
-                retained_day = current_day - timedelta(days=2)
-                totals = {token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES}
-                for usage_day in (expired_day, retained_day):
-                    history.save_estimated_minute_usage(
-                        "deepseek",
-                        usage_day,
-                        totals,
-                        datetime.combine(usage_day, datetime.min.time()),
-                        retention_days=365,
-                    )
-                    totals["RESPONSE_TOKEN"] += 1
-                    history.save_estimated_minute_usage(
-                        "deepseek",
-                        usage_day,
-                        totals,
-                        datetime.combine(usage_day, datetime.min.time()) + timedelta(minutes=1),
-                        retention_days=365,
-                    )
+    def test_minute_cleanup_uses_double_retention_grace_and_logs_deleted_rows(self):
+        for retention_days in (15, 30):
+            with self.subTest(retention_days=retention_days):
+                with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+                    with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                        current_day = date(2026, 8, 10)
+                        effective_days = retention_days * 2
+                        expired_day = current_day - timedelta(days=effective_days)
+                        retained_day = current_day - timedelta(days=effective_days - 1)
+                        totals = {
+                            token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES
+                        }
+                        for usage_day in (expired_day, retained_day):
+                            history.save_estimated_minute_usage(
+                                "deepseek",
+                                usage_day,
+                                totals,
+                                datetime.combine(usage_day, datetime.min.time()),
+                                retention_days=365,
+                            )
+                            totals["RESPONSE_TOKEN"] += 1
+                            history.save_estimated_minute_usage(
+                                "deepseek",
+                                usage_day,
+                                totals,
+                                datetime.combine(usage_day, datetime.min.time())
+                                + timedelta(minutes=1),
+                                retention_days=365,
+                            )
 
-                history.clear_expired_minute_usage("deepseek", current_day, 3)
+                        logger = Mock()
+                        with patch.object(
+                            history.config_manager, "logger", return_value=logger
+                        ):
+                            deleted_rows = history.clear_expired_minute_usage(
+                                "deepseek", current_day, retention_days
+                            )
 
-                self.assertEqual(history.minute_usage_for_day("deepseek", expired_day), [])
-                self.assertTrue(history.minute_usage_for_day("deepseek", retained_day))
+                        self.assertGreater(deleted_rows, 0)
+                        self.assertEqual(
+                            history.minute_usage_for_day("deepseek", expired_day), []
+                        )
+                        self.assertTrue(
+                            history.minute_usage_for_day("deepseek", retained_day)
+                        )
+                        logger.info.assert_called_once()
+                        log_args = logger.info.call_args.args
+                        self.assertEqual(log_args[1], "deepseek")
+                        self.assertEqual(log_args[2], retained_day.isoformat())
+                        self.assertEqual(log_args[3], retention_days)
+                        self.assertEqual(log_args[4], effective_days)
+                        self.assertEqual(log_args[5], deleted_rows)
 
     def test_minute_usage_dates_include_snapshot_only_days_and_are_provider_scoped(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
@@ -325,7 +389,7 @@ class HistoryTests(unittest.TestCase):
     def test_minute_cost_cleanup_and_transaction_are_provider_scoped(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
             with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
-                old_day = date(2026, 7, 12)
+                old_day = date(2026, 7, 11)
                 current_day = date(2026, 7, 13)
                 totals = {token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES}
                 for provider, usage_day in (("mimo", old_day), ("deepseek", old_day)):

@@ -2597,7 +2597,12 @@ class MainPanel(QFrame):
         self._annual_activity_summary = summary
         self.activity_summary.setText(summary)
 
-    def update_data(self, data: TokenData, loading: bool = False) -> None:
+    def update_data(
+        self,
+        data: TokenData,
+        loading: bool = False,
+        refreshing: bool = False,
+    ) -> None:
         self._currency = str(data.currency or "CNY").upper()
         money = lambda value: "--" if loading else format_money(value, self._currency)
         tokens = lambda value: "--" if loading or value is None else compact_tokens(int(value))
@@ -2666,9 +2671,9 @@ class MainPanel(QFrame):
             self.statistics.set_quota_data(data)
             self.setFixedHeight(ANNUAL_PANEL_HEIGHT)
             self.activity_height_changed.emit(ANNUAL_PANEL_HEIGHT)
-            status, _color = self.status_summary(data, loading)
+            status, _color = self.status_summary(data, loading or refreshing)
             self.status_text.setText(status)
-            self.status_dot.set_role(self.status_role(data, loading))
+            self.status_dot.set_role(self.status_role(data, loading or refreshing))
             self.updated_text.setText(self.relative_update_time(data))
             return
 
@@ -2706,9 +2711,9 @@ class MainPanel(QFrame):
 
         self.trend.set_rows(data.daily_usage, currency=self._currency)
         self.statistics.set_data(data)
-        status, _color = self.status_summary(data, loading)
+        status, _color = self.status_summary(data, loading or refreshing)
         self.status_text.setText(status)
-        self.status_dot.set_role(self.status_role(data, loading))
+        self.status_dot.set_role(self.status_role(data, loading or refreshing))
         self.updated_text.setText(self.relative_update_time(data))
 
     @staticmethod

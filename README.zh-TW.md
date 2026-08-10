@@ -43,7 +43,7 @@ TokenMeter 是輕量級 Windows 桌面 AI Token 用量監控工具，用於查�
 
 | 淺色主題 | 深色主題 |
 | --- | --- |
-| ![TokenMeter 淺色主題](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter 深色主題](docs/images/token-spider-ui-v3-dark.png) |
+| ![TokenMeter 淺色主題](docs/images/token-spider-ui-v3-light.png) | ![TokenMeter 深色主題](docs/images/tokenmeter-v1.11.2-dark.png) |
 
 ## 系統需求
 
@@ -129,7 +129,7 @@ TokenMeter/
 
 ## 版本與 Release
 
-目前版本：`1.11.1`。更新說明與校驗檔請見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+目前版本：`1.11.2`。更新說明與校驗檔請見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## License
 
