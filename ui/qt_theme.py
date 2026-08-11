@@ -218,12 +218,16 @@ QComboBox#headerProviderCombo {{
     padding: 0;
     font-size: 12px;
 }}
+QFrame#headerProviderPopup {{
+    background: transparent;
+    border: 0;
+}}
 QAbstractItemView#headerProviderView {{
     color: {tokens.text};
     background: {tokens.elevated};
-    border: 1px solid {tokens.border};
-    border-radius: 8px;
-    padding: 4px;
+    border: 0;
+    border-radius: 10px;
+    padding: 5px;
     outline: 0;
     selection-background-color: transparent;
     selection-color: {tokens.text};

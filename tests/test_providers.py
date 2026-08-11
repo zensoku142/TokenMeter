@@ -177,7 +177,7 @@ class MultiProviderTests(unittest.TestCase):
         self.assertEqual([item.title for item in statistics], [
             "累计 Token 数",
             "峰值 Token 数",
-            "最长聊天时长",
+            "最长任务时长",
             "当前连续天数",
             "最长连续天数",
         ])

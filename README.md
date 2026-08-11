@@ -152,7 +152,7 @@ TokenMeter/
 
 ## 版本与 Release
 
-当前版本：`1.11.3`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+当前版本：`1.11.4`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 2.0 的 Provider 能力边界、分批计划和已执行基础见 [TokenMeter 2.0 路线图](docs/V2_ROADMAP.md)。
 

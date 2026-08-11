@@ -314,7 +314,7 @@ class CodexProvider(Provider):
         statistics = (
             QuotaMetric("累计 Token 数", self._compact_tokens(total_tokens)),
             QuotaMetric("峰值 Token 数", self._compact_tokens(peak_tokens)),
-            QuotaMetric("最长聊天时长", self._duration_text(longest_seconds)),
+            QuotaMetric("最长任务时长", self._duration_text(longest_seconds)),
             QuotaMetric("当前连续天数", f"{current_streak} 天"),
             QuotaMetric("最长连续天数", f"{longest_streak} 天"),
         )

@@ -2,7 +2,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
@@ -15,6 +15,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFrame,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -198,7 +199,7 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     data.quota_statistics = [
         QuotaMetric("累计 Token 数", "21.7亿"),
         QuotaMetric("峰值 Token 数", "1.1亿"),
-        QuotaMetric("最长聊天时长", "52分 35秒"),
+        QuotaMetric("最长任务时长", "52分 35秒"),
         QuotaMetric("当前连续天数", "0 天"),
         QuotaMetric("最长连续天数", "27 天"),
     ]
@@ -225,9 +226,21 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     assert panel.provider_quick_combo.view().objectName() == "headerProviderView"
     assert panel.provider_quick_combo.view().minimumWidth() == 132
     panel.show()
+    combo_animation_enabled = APP.isEffectEnabled(Qt.UIEffect.UI_AnimateCombo)
     panel.provider_quick_combo.showPopup()
     APP.processEvents()
-    assert panel.provider_quick_combo.view().window().size() == QSize(132, 134)
+    popup = panel.provider_quick_combo.view().window()
+    assert popup.size() == QSize(132, 140)
+    assert popup.minimumSize() == QSize(132, 140)
+    assert popup.maximumSize() == QSize(132, 140)
+    assert popup.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert popup.windowFlags() & Qt.WindowType.NoDropShadowWindowHint
+    assert popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert popup.frameShape() == QFrame.Shape.NoFrame
+    assert panel.provider_quick_combo.view().frameShape() == QFrame.Shape.NoFrame
+    assert not popup.mask().contains(QPoint(0, 0))
+    assert popup.mask().contains(popup.rect().center())
+    assert APP.isEffectEnabled(Qt.UIEffect.UI_AnimateCombo) == combo_animation_enabled
     panel.provider_quick_combo.hidePopup()
     assert panel.today_card.title_label.text() == "每周额度"
     assert panel.today_card.value.text() == "已用 25%"
@@ -288,9 +301,93 @@ def test_subscription_expiry_replaces_codex_placeholder_without_email():
     assert panel.balance_card.detail.isHidden()
     assert panel.month_card.title_label.text() == "套餐到期"
     assert panel.month_card.value.text() == local_until.strftime("%m-%d")
-    assert panel.month_card.detail.text() == local_until.strftime("%Y")
+    assert panel.month_card.detail.isHidden()
     assert "a@example.com" not in panel.balance_card.value.toolTip()
     assert "a@example.com" not in panel.month_card.value.toolTip()
+    panel.close()
+
+
+def test_header_does_not_start_drag_from_provider_selector_events():
+    panel = MainPanel()
+    panel.show()
+    APP.processEvents()
+    pressed: list[QPoint] = []
+    dragged: list[QPoint] = []
+    released: list[QPoint] = []
+    panel.header.pressed.connect(pressed.append)
+    panel.header.dragged.connect(dragged.append)
+    panel.header.released.connect(released.append)
+
+    combo_point = panel.provider_quick_combo.mapTo(
+        panel.header, panel.provider_quick_combo.rect().center()
+    )
+
+    def mouse_event(event_point: QPoint, *, pressed_button: bool) -> Mock:
+        event = Mock()
+        event.button.return_value = (
+            Qt.MouseButton.LeftButton if pressed_button else Qt.MouseButton.NoButton
+        )
+        event.buttons.return_value = (
+            Qt.MouseButton.LeftButton if pressed_button else Qt.MouseButton.NoButton
+        )
+        event.position.return_value = QPointF(event_point)
+        event.globalPosition.return_value = QPointF(panel.header.mapToGlobal(event_point))
+        return event
+
+    panel.header.mousePressEvent(mouse_event(combo_point, pressed_button=True))
+    panel.header.mouseMoveEvent(
+        mouse_event(combo_point + QPoint(12, 0), pressed_button=True)
+    )
+    panel.header.mouseReleaseEvent(mouse_event(combo_point, pressed_button=True))
+
+    assert pressed == []
+    assert dragged == []
+    assert released == []
+
+    free_point = QPoint(430, panel.header.height() // 2)
+    panel.header.mousePressEvent(mouse_event(free_point, pressed_button=True))
+    panel.header.mouseMoveEvent(
+        mouse_event(free_point + QPoint(12, 0), pressed_button=True)
+    )
+    panel.header.mouseReleaseEvent(mouse_event(free_point, pressed_button=True))
+
+    assert len(pressed) == 1
+    assert len(dragged) == 1
+    assert len(released) == 1
+    panel.close()
+
+
+def test_codex_spark_quota_is_hidden_without_hiding_other_subscription_details():
+    panel = MainPanel()
+    data = sample_data()
+    active_until = datetime(2026, 8, 11, 6, 17, tzinfo=timezone.utc)
+    data.quota_windows = [
+        QuotaWindow("codex-primary", "每周额度", 7),
+        QuotaWindow("codex-extra-0-primary", "GPT-5.3-Codex-Spark", 0),
+    ]
+    data.account_plan = "prolite"
+    data.account_plan_active_until = active_until
+    data.per_provider = [
+        PerProviderData(
+            "codex",
+            "Codex",
+            quota_windows=list(data.quota_windows),
+            account_plan="prolite",
+            account_plan_active_until=active_until,
+        )
+    ]
+
+    panel.update_data(data)
+
+    assert panel.today_card.title_label.text() == "每周额度"
+    assert panel.balance_card.title_label.text() == "订阅套餐"
+    assert panel.balance_card.value.text() == "prolite"
+    assert panel.month_card.title_label.text() == "套餐到期"
+    assert panel.month_card.value.text() == active_until.astimezone().strftime("%m-%d")
+    assert all(
+        "Spark" not in card.title_label.text()
+        for card in (panel.today_card, panel.balance_card, panel.month_card)
+    )
     panel.close()
 
 
