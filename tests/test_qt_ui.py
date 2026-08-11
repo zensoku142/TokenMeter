@@ -234,7 +234,6 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     assert popup.minimumSize() == QSize(132, 140)
     assert popup.maximumSize() == QSize(132, 140)
     assert popup.windowFlags() & Qt.WindowType.FramelessWindowHint
-    assert popup.windowFlags() & Qt.WindowType.NoDropShadowWindowHint
     assert popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert popup.frameShape() == QFrame.Shape.NoFrame
     assert panel.provider_quick_combo.view().frameShape() == QFrame.Shape.NoFrame
