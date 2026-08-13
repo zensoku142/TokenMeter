@@ -2581,7 +2581,7 @@ class MainPanel(QFrame):
     def _update_activity_header_visibility(self) -> None:
         minute_view = self._activity_view == "minute"
         self.activity_summary.setVisible(not minute_view or self.width() >= 775)
-        self.minute_estimate_label.setVisible(minute_view and self.width() < 775)
+        self.minute_estimate_label.setVisible(minute_view)
 
     def _refresh_minute_control_colors(self) -> None:
         if not hasattr(self, "minute_chart"):

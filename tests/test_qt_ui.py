@@ -922,6 +922,14 @@ def test_minute_chart_handles_zero_cache_denominator_and_panel_defaults_to_annua
     assert panel.minute_estimate_label.text() == "估算"
     assert "按刷新间隔均摊" in panel.minute_estimate_label.toolTip()
     assert not panel.activity_summary.text().startswith("估算")
+    panel.resize(820, panel.height())
+    APP.processEvents()
+    assert not panel.minute_estimate_label.isHidden()
+    assert [
+        panel.minute_legend_buttons[token_type].text()
+        for token_type, _label in MinuteUsageChart.SERIES
+    ] == ["命中缓存", "未命中", "输出"]
+    assert "峰值" in panel.minute_chart.summary_text()
     assert not panel.minute_previous_button.isEnabled()
     assert not panel.minute_next_button.isEnabled()
     panel.close()

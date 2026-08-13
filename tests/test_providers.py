@@ -14,6 +14,7 @@ os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
 import config_manager
 from api.deepseek import APIError
+from api.providers import configured_provider_ids
 from api.providers.base import build_session
 from api.providers.codex import CodexProvider
 from api.providers.deepseek import DeepSeekProvider
@@ -29,6 +30,47 @@ def response(payload, status=200):
 
 
 class MultiProviderTests(unittest.TestCase):
+    def test_configured_provider_ids_includes_all_configured_and_closes_probes(self):
+        instances = []
+
+        class ProbeProvider:
+            def __init__(self, config):
+                self._config = config
+                self.closed = False
+                instances.append(self)
+
+            def is_configured(self):
+                return bool(self._config.get(self.id))
+
+            def close(self):
+                self.closed = True
+
+        classes = {}
+        for provider_id in ("deepseek", "mimo", "codex"):
+            classes[provider_id] = type(provider_id, (ProbeProvider,), {"id": provider_id})
+
+        config = {"deepseek": True, "mimo": False, "codex": True}
+        with patch("api.providers.PROVIDERS", classes):
+            self.assertEqual(configured_provider_ids(config), ["deepseek", "codex"])
+
+        self.assertTrue(all(instance.closed for instance in instances))
+
+    def test_configured_provider_ids_isolates_probe_failure(self):
+        good = Mock()
+        good.is_configured.return_value = True
+        failed = Mock()
+        failed.is_configured.side_effect = RuntimeError("bad config")
+        registry = {
+            "failed": Mock(return_value=failed),
+            "good": Mock(return_value=good),
+        }
+
+        with patch("api.providers.PROVIDERS", registry):
+            self.assertEqual(configured_provider_ids({}), ["good"])
+
+        failed.close.assert_called_once()
+        good.close.assert_called_once()
+
     def test_codex_home_accepts_legacy_auth_file_path(self):
         home = Path("C:/Users/example/.codex")
         provider = CodexProvider({"CODEX_HOME": str(home / "auth.json")})

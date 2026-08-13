@@ -499,7 +499,7 @@ class TokenData:
         if getattr(provider, "supports_estimated_minute_usage", False):
             try:
                 # 每次启动/刷新均按设置的保留天数清理；失败不能影响原有账单刷新。
-                retention_days = int(config_manager.get("MINUTE_USAGE_RETENTION_DAYS", 3))
+                retention_days = int(provider.config_get("MINUTE_USAGE_RETENTION_DAYS", 3))
                 history.clear_expired_minute_usage(
                     provider.id, current_day, retention_days
                 )
@@ -624,8 +624,9 @@ class TokenData:
             if summary_error:
                 per.errors.append(summary_error)
 
-            if lightweight and provider.id == "mimo":
-                # 收起状态的 MiMo 悬浮球只需当前日金额；跳过历史补同步，避免它阻塞可见数值更新。
+            if lightweight:
+                # 轻量采集只请求当前月；非当前 Provider 的分钟采样不能每分钟
+                # 重复历史补同步，收起状态的 MiMo 继续复用同一路径。
                 request_months = [(current_day.month, current_day.year)]
             else:
                 current_month = (current_day.month, current_day.year)
@@ -810,7 +811,6 @@ class TokenData:
             data.is_stale = bool(per.errors)
             with cls._cache_lock:
                 cls._provider_snapshots[provider.id] = copy.deepcopy(data)
-                cls._last_snapshot = copy.deepcopy(data)
         else:
             data.status = "error" if per.status != "not_configured" else "not_configured"
             data.is_stale = per.is_stale

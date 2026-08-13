@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from datetime import date, datetime, timedelta
@@ -112,6 +113,19 @@ class HistoryTests(unittest.TestCase):
                     connection.close()
                 self.assertIn("minute_usage", tables)
                 self.assertIn("minute_usage_snapshot", tables)
+                self.assertIn("minute_cost_usage", tables)
+                self.assertIn("minute_cost_snapshot", tables)
+                with closing(sqlite3.connect(db_path)) as schema_connection:
+                    self.assertEqual(
+                        [
+                            row[1]
+                            for row in schema_connection.execute(
+                                "PRAGMA table_info(minute_usage)"
+                            )
+                            if row[5]
+                        ],
+                        ["provider", "usage_date", "minute_index", "token_type"],
+                    )
 
     def test_backup_usage_database_creates_verified_pre_update_snapshot(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
@@ -185,6 +199,147 @@ class HistoryTests(unittest.TestCase):
                     "unchanged",
                 )
                 self.assertEqual(history.minute_usage_for_day("mimo", usage_day), rows)
+
+    def test_long_same_day_gap_distributes_all_token_and_cost_delta(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                usage_day = date(2026, 8, 13)
+                first = datetime(2026, 8, 13, 14, 28)
+                second = datetime(2026, 8, 13, 17, 1)
+                initial = {
+                    "PROMPT_CACHE_HIT_TOKEN": 1_000_000,
+                    "PROMPT_CACHE_MISS_TOKEN": 2_000_000,
+                    "RESPONSE_TOKEN": 3_000_000,
+                }
+                current = {
+                    "PROMPT_CACHE_HIT_TOKEN": 1_400_000,
+                    "PROMPT_CACHE_MISS_TOKEN": 2_300_000,
+                    "RESPONSE_TOKEN": 3_126_700,
+                }
+                history.save_estimated_minute_usage(
+                    "mimo", usage_day, initial, first, cost_cny=Decimal("10")
+                )
+                self.assertEqual(
+                    history.save_estimated_minute_usage(
+                        "mimo", usage_day, current, second, cost_cny=Decimal("12.53")
+                    ),
+                    "recorded",
+                )
+
+                token_rows = history.minute_usage_for_day("mimo", usage_day)
+                self.assertEqual({row["minute"] for row in token_rows}, set(range(869, 1022)))
+                self.assertEqual(sum(row["token_amount"] for row in token_rows), 826_700)
+                cost_rows = history.minute_cost_usage_for_day("mimo", usage_day)
+                self.assertEqual([row["minute"] for row in cost_rows], list(range(869, 1022)))
+                self.assertEqual(sum(row["cost_cny"] for row in cost_rows), Decimal("2.53"))
+
+    def test_same_day_recovery_keeps_persisted_baseline_and_provider_isolation(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            db_path = Path(directory) / "usage.db"
+            usage_day = date(2026, 8, 13)
+            totals = {token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES}
+            with patch.object(history, "DB_PATH", db_path):
+                history.save_estimated_minute_usage(
+                    "mimo", usage_day, totals, datetime(2026, 8, 13, 10, 0)
+                )
+                # A later call uses a fresh SQLite connection, matching restart,
+                # sleep, network recovery and authentication recovery semantics.
+                recovered = dict(totals)
+                recovered["RESPONSE_TOKEN"] = 20
+                self.assertEqual(
+                    history.save_estimated_minute_usage(
+                        "mimo", usage_day, recovered, datetime(2026, 8, 13, 10, 20)
+                    ),
+                    "recorded",
+                )
+                history.save_estimated_minute_usage(
+                    "deepseek", usage_day, totals, datetime(2026, 8, 13, 10, 0)
+                )
+                deepseek = dict(totals)
+                deepseek["RESPONSE_TOKEN"] = 7
+                history.save_estimated_minute_usage(
+                    "deepseek", usage_day, deepseek, datetime(2026, 8, 13, 10, 1)
+                )
+
+                self.assertEqual(
+                    sum(
+                        row["token_amount"]
+                        for row in history.minute_usage_for_day("mimo", usage_day)
+                    ),
+                    20,
+                )
+                self.assertEqual(
+                    sum(
+                        row["token_amount"]
+                        for row in history.minute_usage_for_day("deepseek", usage_day)
+                    ),
+                    7,
+                )
+
+    def test_concurrent_provider_first_access_initializes_shared_database_safely(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                usage_day = date(2026, 8, 13)
+                totals = {token_type: 0 for token_type in history.MINUTE_TOKEN_TYPES}
+                barrier = threading.Barrier(2)
+                errors = []
+
+                def save(provider):
+                    try:
+                        barrier.wait()
+                        history.save_estimated_minute_usage(
+                            provider,
+                            usage_day,
+                            totals,
+                            datetime(2026, 8, 13, 10, 0),
+                        )
+                    except Exception as exc:
+                        errors.append(exc)
+
+                threads = [
+                    threading.Thread(target=save, args=(provider,))
+                    for provider in ("deepseek", "mimo")
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+
+                self.assertEqual(errors, [])
+                self.assertEqual(history.minute_usage_dates("deepseek"), ["2026-08-13"])
+                self.assertEqual(history.minute_usage_dates("mimo"), ["2026-08-13"])
+
+    def test_zero_delta_cross_day_and_adjustment_only_rebuild_baseline(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                usage_day = date(2026, 8, 13)
+                totals = {token_type: 10 for token_type in history.MINUTE_TOKEN_TYPES}
+                first = datetime(2026, 8, 13, 10, 0)
+                self.assertEqual(
+                    history.save_estimated_minute_usage("mimo", usage_day, totals, first),
+                    "baseline",
+                )
+                self.assertEqual(
+                    history.save_estimated_minute_usage(
+                        "mimo", usage_day, totals, first + timedelta(minutes=1)
+                    ),
+                    "unchanged",
+                )
+                adjusted = dict(totals)
+                adjusted["RESPONSE_TOKEN"] = 9
+                self.assertEqual(
+                    history.save_estimated_minute_usage(
+                        "mimo", usage_day, adjusted, first + timedelta(minutes=2)
+                    ),
+                    "adjusted",
+                )
+                self.assertEqual(
+                    history.save_estimated_minute_usage(
+                        "mimo", usage_day, adjusted, first + timedelta(days=1)
+                    ),
+                    "cross_day",
+                )
+                self.assertEqual(history.minute_usage_for_day("mimo", usage_day), [])
 
     def test_minute_cleanup_keeps_daily_history_and_rolls_back_on_failure(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
@@ -341,8 +496,7 @@ class HistoryTests(unittest.TestCase):
                     "deepseek", usage_day, zero_totals, second, cost_cny=Decimal(".50")
                 )
                 self.assertEqual(
-                    [row["cost_cny"] for row in history.minute_cost_usage_for_day("deepseek", usage_day)],
-                    [Decimal("0"), Decimal("0"), Decimal("0")],
+                    history.minute_cost_usage_for_day("deepseek", usage_day), []
                 )
 
                 history.save_estimated_minute_usage(

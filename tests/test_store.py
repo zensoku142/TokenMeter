@@ -54,11 +54,15 @@ class FakeProvider:
     supports_daily_usage = True
     supports_cost = True
 
-    def __init__(self, *, payloads=None, errors=None, configured=True):
+    def __init__(self, *, payloads=None, errors=None, configured=True, config=None):
         self.payloads = payloads or []
         self.errors = errors or []
         self.configured = configured
+        self.config = config or {}
         self.requested_months = []
+
+    def config_get(self, key, default=None):
+        return self.config.get(key, default)
 
     def is_configured(self):
         return self.configured
@@ -341,6 +345,18 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.today_tokens, 30)
         self.assertAlmostEqual(data.today_cost_cny, .23)
 
+    def test_lightweight_background_fetch_skips_history_sync_for_other_provider(self):
+        provider = FakeProvider(payloads=[payload("2026-07-03", 30, ".23")])
+
+        with patch(
+            "data.store.history.unsynced_months", return_value=[(6, 2026)]
+        ) as unsynced_months:
+            data = self.fetch_with(provider, lightweight=True)
+
+        self.assertEqual(provider.requested_months, [[(7, 2026)]])
+        unsynced_months.assert_not_called()
+        self.assertEqual(data.today_tokens, 30)
+
     def test_complete_previous_month_uses_cache_without_refetch(self):
         provider = FakeProvider(payloads=[payload("2026-07-01", 20, ".2")])
         cached = payload("2026-06-30", 10, ".1")
@@ -463,6 +479,23 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.minute_usage_status, "baseline")
         self.assertEqual(data.status, "partial")
         self.assertIn("LOCAL_STORAGE", {error.code for error in data.errors})
+
+    def test_minute_retention_uses_captured_provider_config(self):
+        provider = FakeProvider(
+            payloads=[payload("2026-07-03", 7, ".2")],
+            config={"MINUTE_USAGE_RETENTION_DAYS": 11},
+        )
+        provider.supports_estimated_minute_usage = True
+        with (
+            patch("data.store.history.clear_expired_minute_usage") as clear_expired,
+            patch("data.store.history.minute_usage_for_day", return_value=[]),
+            patch("data.store.history.minute_cost_usage_for_day", return_value=[]),
+            patch("data.store.history.minute_usage_dates", return_value=[]),
+            patch("data.store.history.save_estimated_minute_usage", return_value="baseline"),
+        ):
+            self.fetch_with(provider)
+
+        clear_expired.assert_called_once_with("deepseek", date(2026, 7, 3), 11)
 
     def test_minute_cost_aggregation_failure_keeps_token_sampling(self):
         provider = FakeProvider(payloads=[payload("2026-07-03", 7, ".2")])

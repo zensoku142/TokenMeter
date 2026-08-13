@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import closing, contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -13,6 +14,7 @@ from config import runtime as config_manager
 
 DB_PATH = config_manager.CONFIG_DIR / "usage.db"
 MINUTE_USAGE_CLEANUP_GRACE_MULTIPLIER = 2
+_SCHEMA_LOCK = threading.Lock()
 
 MINUTE_TOKEN_TYPES = (
     "PROMPT_CACHE_HIT_TOKEN",
@@ -66,8 +68,10 @@ def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=5)
     try:
-        connection.execute("PRAGMA journal_mode=WAL")
-        with connection:
+        # 多 Provider 首次并发访问时只串行化建表/旧结构检查；实际读写事务
+        # 仍由各自连接独立执行。
+        with _SCHEMA_LOCK, connection:
+            connection.execute("PRAGMA journal_mode=WAL")
             _ensure_daily_usage_schema(connection)
             connection.executescript(
                 """
@@ -125,6 +129,7 @@ def _connect() -> Iterator[sqlite3.Connection]:
                     ON minute_cost_snapshot(provider, usage_date);
                 """
             )
+        with connection:
             yield connection
     finally:
         # sqlite Connection 的上下文只处理事务，文件句柄仍需显式关闭。
@@ -438,7 +443,7 @@ def _save_estimated_minute_cost_usage(
     ):
         return
     delta = cost_cny - previous
-    if delta < 0:
+    if delta <= 0:
         return
     indexes = _minute_indexes(previous_at, observed_at)
     share = delta / len(indexes)
@@ -588,6 +593,12 @@ def save_estimated_minute_usage(
                                        updated_at = excluded.updated_at""",
                                 (provider, usage_date, minute, token_type, amount, updated_at),
                             )
+                    config_manager.logger().debug(
+                        "Minute delta distributed: provider=%s gap_minutes=%s token_total=%s",
+                        provider,
+                        len(minute_indexes),
+                        sum(deltas.values()),
+                    )
                     status = "recorded"
         _save_estimated_minute_cost_usage(
             connection, provider, usage_date, cost_cny, observed_at

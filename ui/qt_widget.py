@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import ctypes
 import sys
 import threading
+import time
 from ctypes import wintypes
 from datetime import datetime
 
@@ -25,7 +27,7 @@ from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QPalette, Q
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMenu, QSystemTrayIcon, QWidget
 
 from config import runtime as config_manager
-from api.providers import PROVIDERS
+from api.providers import PROVIDERS, configured_provider_ids
 from api.providers.base import FetchError
 from api.providers.mimo import MiMoProvider
 from core.identity import APP_DISPLAY_NAME
@@ -51,10 +53,11 @@ MIN_BALL_SIZE = 72
 MAX_BALL_SIZE = 124
 EDGE_HIDDEN_OPACITY = 0.72
 EDGE_OPACITY_DELAY_MS = 3_000
+BACKGROUND_PROVIDER_INTERVAL_MS = 60_000
 
 
 class FetchSignals(QObject):
-    finished = Signal(int, object)
+    finished = Signal(int, str, object)
 
 
 class FetchTask(QRunnable):
@@ -67,13 +70,14 @@ class FetchTask(QRunnable):
         super().__init__()
         self.request_id = request_id
         self._config = dict(config)
+        self.provider_id = str(self._config.get("ACTIVE_PROVIDER", "")).strip().lower()
         self._lightweight = lightweight
         self.signals = FetchSignals()
 
     @Slot()
     def run(self) -> None:
         result = _fetch_tokens_safely(self._config, self._lightweight)
-        self.signals.finished.emit(self.request_id, result)
+        self.signals.finished.emit(self.request_id, self.provider_id, result)
 
 
 class MiMoRenewalSignals(QObject):
@@ -107,7 +111,14 @@ class MiMoRenewalTask(QRunnable):
             )
         except RuntimeError as exc:
             code = str(exc)
-            if self._stop_event.is_set() or code in self._NO_VISIBLE_RETRY:
+            current_provider = str(
+                config_manager.get("ACTIVE_PROVIDER", "")
+            ).strip().lower()
+            if (
+                self._stop_event.is_set()
+                or code in self._NO_VISIBLE_RETRY
+                or current_provider != "mimo"
+            ):
                 self.signals.finished.emit("", code)
                 return
             try:
@@ -173,10 +184,16 @@ class FloatingWidget(QWidget):
         self._data = TokenData()
         self._refresh_lock = threading.Lock()
         self._refreshing = False
-        self._pending_refresh = False
         self._request_id = 0
+        self._in_flight_requests: dict[str, int] = {}
+        self._pending_refreshes: dict[
+            str, tuple[dict[str, object], bool, str]
+        ] = {}
+        self._provider_results: dict[str, TokenData] = {}
+        self._provider_last_started: dict[str, float] = {}
+        self._provider_task_started: dict[str, float] = {}
         self._closed = False
-        self._auth_expired_notified = False
+        self._auth_error_signatures: dict[str, tuple[str, str, str]] = {}
         self._auth_expired_provider_id: str | None = None
         self._mimo_renewal_task: MiMoRenewalTask | None = None
         self._mimo_renewal_attempted = False
@@ -247,6 +264,9 @@ class FloatingWidget(QWidget):
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._periodic_refresh)
+        self._background_refresh_timer = QTimer(self)
+        self._background_refresh_timer.timeout.connect(self._periodic_background_refresh)
+        self._background_refresh_timer.start(BACKGROUND_PROVIDER_INTERVAL_MS)
         self._pricing_state: PricingState | None = None
         self._pricing_timer = QTimer(self)
         self._pricing_timer.setSingleShot(True)
@@ -256,6 +276,7 @@ class FloatingWidget(QWidget):
         self._sync_pricing_state(notify_transition=False)
         self._show_compact_at_saved_position()
         self._update_controller.schedule_startup_check()
+        self._reschedule_refresh()
         self.refresh()
 
     def _connect_ui(self) -> None:
@@ -864,7 +885,11 @@ class FloatingWidget(QWidget):
             return
         self._sync_pricing_state(notify_transition=False)
         provider_cls = PROVIDERS[provider_id]
-        cached = TokenData.cached_snapshot(provider_id)
+        cached = self._provider_results.get(provider_id)
+        if cached is not None:
+            cached = copy.deepcopy(cached)
+        else:
+            cached = TokenData.cached_snapshot(provider_id)
         self._prepare_scope_switch(
             cached
             or TokenData(
@@ -886,9 +911,7 @@ class FloatingWidget(QWidget):
         self, data: TokenData, config_snapshot: dict[str, object]
     ) -> None:
         self._data = data
-        # A provider switch is allowed to supersede an in-flight refresh. The
-        # older worker can finish in the background, but its request id prevents
-        # it from changing either the data or the new loading state.
+        # 旧 Provider 继续后台完成；回调按最新 ACTIVE_PROVIDER 决定是否更新界面。
         self.refresh(force=True, config_snapshot=config_snapshot)
 
     def refresh(
@@ -896,6 +919,8 @@ class FloatingWidget(QWidget):
         *,
         force: bool = False,
         config_snapshot: dict[str, object] | None = None,
+        queue_if_busy: bool = True,
+        reason: str = "manual",
     ) -> None:
         captured_config = dict(
             config_snapshot
@@ -903,64 +928,162 @@ class FloatingWidget(QWidget):
             else config_manager.all_config()
         )
         provider_id = str(captured_config.get("ACTIVE_PROVIDER", "")).strip().lower()
-        with self._refresh_lock:
-            if self._closed:
-                return
-            if self._refreshing and not force:
-                self._pending_refresh = True
-                return
-            if force:
-                # Pending work belongs to the provider scope being replaced.
-                self._pending_refresh = False
-            self._refreshing = True
-            self._request_id += 1
-            request_id = self._request_id
-        self._apply_update()
-        task = FetchTask(
-            request_id,
+        self._start_provider_refresh(
+            provider_id,
             captured_config,
             lightweight=self._uses_lightweight_mimo_refresh(provider_id),
+            queue_if_busy=queue_if_busy and not force,
+            reason="switch" if force else reason,
         )
+
+    def _start_provider_refresh(
+        self,
+        provider_id: str,
+        config_snapshot: dict[str, object],
+        *,
+        lightweight: bool,
+        queue_if_busy: bool,
+        reason: str,
+    ) -> bool:
+        provider_id = provider_id.strip().lower()
+        if not provider_id:
+            return False
+        captured_config = dict(config_snapshot)
+        captured_config["ACTIVE_PROVIDER"] = provider_id
+        is_current = provider_id == str(
+            config_manager.get("ACTIVE_PROVIDER", "")
+        ).strip().lower()
+        with self._refresh_lock:
+            if self._closed:
+                return False
+            if provider_id in self._in_flight_requests:
+                if queue_if_busy:
+                    # 同一 Provider 只保留一个逻辑待刷新，不重复创建 QRunnable。
+                    self._pending_refreshes[provider_id] = (
+                        captured_config,
+                        lightweight,
+                        reason,
+                    )
+                if is_current:
+                    self._refreshing = True
+                request_id = self._in_flight_requests[provider_id]
+                started = False
+            else:
+                self._request_id += 1
+                request_id = self._request_id
+                self._in_flight_requests[provider_id] = request_id
+                started_at = time.monotonic()
+                self._provider_last_started[provider_id] = started_at
+                self._provider_task_started[provider_id] = started_at
+                if is_current:
+                    self._refreshing = True
+                started = True
+        if is_current:
+            self._apply_update()
+        if not started:
+            config_manager.logger().debug(
+                "Provider collection skipped: provider=%s reason=in_flight request_id=%s",
+                provider_id,
+                request_id,
+            )
+            return False
+        config_manager.logger().debug(
+            "Provider collection started: provider=%s reason=%s",
+            provider_id,
+            reason,
+        )
+        task = FetchTask(request_id, captured_config, lightweight=lightweight)
         task.signals.finished.connect(self._finish_refresh)
         self._thread_pool.start(task)
+        return True
 
-    @Slot(int, object)
-    def _finish_refresh(self, request_id: int, result: TokenData) -> None:
-        has_current_result = False
+    def _schedule_pending_refresh(
+        self,
+        provider_id: str,
+        pending: tuple[dict[str, object], bool, str],
+    ) -> None:
+        captured_config, lightweight, reason = pending
+        self._start_provider_refresh(
+            provider_id,
+            captured_config,
+            lightweight=lightweight,
+            queue_if_busy=False,
+            reason=reason,
+        )
+
+    @Slot(int, str, object)
+    def _finish_refresh(
+        self, request_id: int, provider_id: str, result: TokenData
+    ) -> None:
+        pending: tuple[dict[str, object], bool, str] | None = None
+        started_at: float | None = None
+        is_current = False
+        provider_id = provider_id.strip().lower()
         with self._refresh_lock:
             if self._closed:
                 return
-            if request_id != self._request_id:
+            if self._in_flight_requests.get(provider_id) != request_id:
                 return
-            self._data = result
-            has_current_result = True
-            self._refreshing = False
-            pending = self._pending_refresh
-            self._pending_refresh = False
-        if has_current_result:
-            self._notify_auth_expired(result)
-        self._apply_update()
-        if pending:
-            QTimer.singleShot(0, self.refresh)
+            self._in_flight_requests.pop(provider_id, None)
+            started_at = self._provider_task_started.pop(provider_id, None)
+            pending = self._pending_refreshes.pop(provider_id, None)
+            self._provider_results[provider_id] = copy.deepcopy(result)
+            is_current = provider_id == str(
+                config_manager.get("ACTIVE_PROVIDER", "")
+            ).strip().lower()
+            if is_current:
+                self._data = result
+                self._refreshing = False
+        elapsed_ms = (
+            max(0, int((time.monotonic() - started_at) * 1000))
+            if started_at is not None
+            else 0
+        )
+        config_manager.logger().debug(
+            "Provider collection completed: provider=%s status=%s elapsed_ms=%s",
+            provider_id,
+            result.status,
+            elapsed_ms,
+        )
+        self._notify_auth_expired(result, provider_id, is_current=is_current)
+        if is_current:
+            self._apply_update()
+        if pending is not None:
+            QTimer.singleShot(
+                0,
+                lambda value=pending, current_id=provider_id: self._schedule_pending_refresh(
+                    current_id, value
+                ),
+            )
 
-    def _notify_auth_expired(self, result: TokenData) -> None:
+    def _notify_auth_expired(
+        self, result: TokenData, provider_id: str, *, is_current: bool
+    ) -> None:
         auth_error = next(
             (error for error in result.errors if error.code == "AUTH_EXPIRED"), None
         )
         if auth_error is None:
-            # 只在鉴权错误解除后恢复通知资格，避免定时刷新重复弹窗。
-            self._auth_expired_notified = False
-            self._auth_expired_provider_id = None
-            self._mimo_renewal_attempted = False
+            remote_failures = {
+                "NETWORK_ERROR",
+                "NETWORK_TIMEOUT",
+                "SERVER_ERROR",
+                "RATE_LIMITED",
+                "UNKNOWN_ERROR",
+            }
+            codes = {error.code for error in result.errors}
+            if result.status in {"ok", "partial"} and not codes & remote_failures:
+                # 只有该 Provider 实际恢复成功后才重新开放相同鉴权通知。
+                self._auth_error_signatures.pop(provider_id, None)
+                if self._auth_expired_provider_id == provider_id:
+                    self._auth_expired_provider_id = None
+                if provider_id == "mimo":
+                    self._mimo_renewal_attempted = False
             return
-        provider_id = (
-            result.per_provider[0].provider_id
-            if result.per_provider
-            else str(config_manager.get("ACTIVE_PROVIDER", ""))
-        )
-        if provider_id == "mimo":
-            if getattr(self, "_auth_expired_notified", False):
-                return
+        signature = (auth_error.code, auth_error.source, auth_error.message)
+        if self._auth_error_signatures.get(provider_id) == signature:
+            return
+        self._auth_error_signatures[provider_id] = signature
+        if provider_id == "mimo" and is_current:
             if getattr(self, "_mimo_renewal_task", None) is not None:
                 return
             if getattr(self, "_mimo_renewal_attempted", False):
@@ -968,18 +1091,24 @@ class FloatingWidget(QWidget):
                 return
             self._start_mimo_cookie_renewal()
             return
-        if getattr(self, "_auth_expired_notified", False):
-            return
-        self._auth_expired_notified = True
+
         self._auth_expired_provider_id = provider_id
         tray = getattr(self, "tray", None)
-        if tray is not None:
-            tray.showMessage(
-                f"{APP_DISPLAY_NAME}：登录凭据已失效",
-                f"{auth_error.message}\n点击此通知即可重新获取 Cookie。",
-                QSystemTrayIcon.MessageIcon.Warning,
-                10_000,
+        if tray is None:
+            return
+        if provider_id == "mimo":
+            message = (
+                f"{auth_error.message}\n请切换到小米 MiMo 或打开设置重新登录；"
+                "后台不会自动打开浏览器窗口。"
             )
+        else:
+            message = f"{auth_error.message}\n点击此通知可打开对应平台设置。"
+        tray.showMessage(
+            f"{APP_DISPLAY_NAME}：登录凭据已失效",
+            message,
+            QSystemTrayIcon.MessageIcon.Warning,
+            10_000,
+        )
 
     def _start_mimo_cookie_renewal(self) -> None:
         if self._closed or getattr(self, "_mimo_renewal_task", None) is not None:
@@ -1011,17 +1140,17 @@ class FloatingWidget(QWidget):
                 settings_window = getattr(self, "_settings_window", None)
                 if settings_window is not None:
                     settings_window.sync_persisted_cookie("mimo", cookie_text)
-                self._auth_expired_notified = False
-                self._auth_expired_provider_id = None
-                self.refresh()
+                if self._auth_expired_provider_id == "mimo":
+                    self._auth_expired_provider_id = None
+                self._refresh_mimo_after_renewal()
                 return
 
         if cookie_text and error_code == "BROWSER_CONTEXT_ONLY":
             # The browser session itself was verified, but its authentication
             # cannot be safely replayed by requests. Keep existing stored
             # credentials unchanged; normal refresh will use browser fallback.
-            self._auth_expired_notified = False
-            self._auth_expired_provider_id = None
+            if self._auth_expired_provider_id == "mimo":
+                self._auth_expired_provider_id = None
             tray = getattr(self, "tray", None)
             if tray is not None:
                 tray.showMessage(
@@ -1030,14 +1159,16 @@ class FloatingWidget(QWidget):
                     QSystemTrayIcon.MessageIcon.Information,
                     10_000,
                 )
-            self.refresh()
+            self._refresh_mimo_after_renewal()
             return
 
         self._show_mimo_renewal_failure(error_code)
 
     def _show_mimo_renewal_failure(self, error_code: str) -> None:
-        self._auth_expired_notified = True
         self._auth_expired_provider_id = "mimo"
+        self._auth_error_signatures.setdefault(
+            "mimo", ("AUTH_EXPIRED", "MiMo", "authentication expired")
+        )
         message = MiMoProvider.describe_acquire_error(
             RuntimeError(error_code or "ACQUIRE_UNEXPECTED")
         )
@@ -1049,6 +1180,22 @@ class FloatingWidget(QWidget):
                 QSystemTrayIcon.MessageIcon.Warning,
                 10_000,
             )
+
+    def _refresh_mimo_after_renewal(self) -> None:
+        captured_config = config_manager.all_config()
+        active_provider = str(
+            captured_config.get("ACTIVE_PROVIDER", "")
+        ).strip().lower()
+        self._start_provider_refresh(
+            "mimo",
+            captured_config,
+            lightweight=(
+                active_provider != "mimo"
+                or self._uses_lightweight_mimo_refresh("mimo")
+            ),
+            queue_if_busy=True,
+            reason="auth_recovery",
+        )
 
     def handle_auth_expired_notification_click(self) -> None:
         provider_id = getattr(self, "_auth_expired_provider_id", None)
@@ -1090,8 +1237,33 @@ class FloatingWidget(QWidget):
             self.panel.update_data(self._data, loading, self._refreshing)
 
     def _periodic_refresh(self) -> None:
-        self.refresh()
+        self.refresh(queue_if_busy=False, reason="periodic_current")
         self._reschedule_refresh()
+
+    def _periodic_background_refresh(self) -> None:
+        if self._closed:
+            return
+        captured_config = config_manager.all_config()
+        active_provider = str(
+            captured_config.get("ACTIVE_PROVIDER", "")
+        ).strip().lower()
+        now = time.monotonic()
+        for provider_id in configured_provider_ids(captured_config):
+            if provider_id == active_provider:
+                continue
+            last_started = self._provider_last_started.get(provider_id)
+            if (
+                last_started is not None
+                and (now - last_started) * 1000 < BACKGROUND_PROVIDER_INTERVAL_MS
+            ):
+                continue
+            self._start_provider_refresh(
+                provider_id,
+                captured_config,
+                lightweight=True,
+                queue_if_busy=False,
+                reason="periodic_background",
+            )
 
     def _on_pricing_boundary(self) -> None:
         self._sync_pricing_state(notify_transition=True)
@@ -1186,6 +1358,7 @@ class FloatingWidget(QWidget):
         config_manager.save_widget_position(x, y)
         self._closed = True
         self._refresh_timer.stop()
+        self._background_refresh_timer.stop()
         self._pricing_timer.stop()
         self._edge_animation.stop()
         self._edge_hide_timer.stop()

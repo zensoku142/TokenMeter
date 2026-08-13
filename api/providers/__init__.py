@@ -44,6 +44,35 @@ def list_providers() -> list[tuple[str, str]]:
     return [(provider.id, provider.name) for provider in PROVIDERS.values()]
 
 
+def configured_provider_ids(config: Mapping[str, Any] | None = None) -> list[str]:
+    """Return every configured provider ID for one captured configuration."""
+
+    captured = dict(config) if config is not None else config_manager.all_config()
+    configured: list[str] = []
+    for provider_id, provider_cls in PROVIDERS.items():
+        provider: Provider | None = None
+        try:
+            provider = provider_cls(captured)
+            if provider.is_configured():
+                configured.append(provider_id)
+        except Exception:
+            # Configuration probing must not let one adapter block the remaining
+            # providers, and the log deliberately excludes config values.
+            config_manager.logger().warning(
+                "Provider configuration probe failed: provider=%s", provider_id
+            )
+        finally:
+            if provider is not None:
+                try:
+                    provider.close()
+                except Exception:
+                    config_manager.logger().warning(
+                        "Provider configuration probe cleanup failed: provider=%s",
+                        provider_id,
+                    )
+    return configured
+
+
 def active_providers(config: Mapping[str, Any] | None = None) -> Iterator[Provider]:
     """Iterate providers matching the currently selected ``ACTIVE_PROVIDER``
     configuration key (single-provider mode), or fall back to the first
@@ -85,5 +114,6 @@ __all__ = [
     "PROVIDERS",
     "get_provider",
     "list_providers",
+    "configured_provider_ids",
     "active_providers",
 ]
