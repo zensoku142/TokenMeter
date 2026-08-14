@@ -43,7 +43,8 @@ def widget_stub():
     widget.tray = Mock()
     widget.open_settings = Mock()
     widget._sync_pricing_state = Mock()
-    widget._auth_error_signatures = {}
+    widget._auth_expired_providers = set()
+    widget._auth_notified_providers = set()
     widget._auth_expired_provider_id = None
     widget._mimo_renewal_task = None
     widget._mimo_renewal_attempted = False
@@ -374,12 +375,15 @@ class RefreshTests(unittest.TestCase):
 
     def test_auth_expired_shows_one_tray_notification_until_recovery(self):
         widget = widget_stub()
-        expired = TokenData(
+        balance_expired = TokenData(
             errors=[FetchError("AUTH_EXPIRED", "余额", "Cookie 已失效")]
         )
+        usage_expired = TokenData(
+            errors=[FetchError("AUTH_EXPIRED", "用量明细", "登录状态已失效")]
+        )
 
-        widget._notify_auth_expired(expired, "deepseek", is_current=True)
-        widget._notify_auth_expired(expired, "deepseek", is_current=True)
+        widget._notify_auth_expired(balance_expired, "deepseek", is_current=True)
+        widget._notify_auth_expired(usage_expired, "deepseek", is_current=True)
 
         self.assertEqual(widget.tray.showMessage.call_count, 1)
         title, message, icon, timeout = widget.tray.showMessage.call_args.args
@@ -390,8 +394,67 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(timeout, 10_000)
 
         widget._notify_auth_expired(TokenData(status="ok"), "deepseek", is_current=True)
-        widget._notify_auth_expired(expired, "deepseek", is_current=True)
+        widget._notify_auth_expired(balance_expired, "deepseek", is_current=True)
         self.assertEqual(widget.tray.showMessage.call_count, 2)
+
+    def test_auth_expired_suspends_only_that_provider_periodic_collection(self):
+        widget = widget_stub()
+        widget._auth_expired_providers.add("deepseek")
+
+        with patch("ui.qt_widget.config_manager.get", return_value="codex"):
+            self.assertFalse(
+                widget._start_provider_refresh(
+                    "deepseek",
+                    {"ACTIVE_PROVIDER": "codex"},
+                    lightweight=True,
+                    queue_if_busy=False,
+                    reason="periodic_background",
+                )
+            )
+            self.assertTrue(
+                widget._start_provider_refresh(
+                    "mimo",
+                    {"ACTIVE_PROVIDER": "codex"},
+                    lightweight=True,
+                    queue_if_busy=False,
+                    reason="periodic_background",
+                )
+            )
+
+        self.assertEqual(widget._thread_pool.start.call_count, 1)
+        self.assertEqual(widget._thread_pool.start.call_args.args[0].provider_id, "mimo")
+
+    def test_auth_expired_allows_manual_retry(self):
+        widget = widget_stub()
+        widget._auth_expired_providers.add("deepseek")
+
+        with patch("ui.qt_widget.config_manager.get", return_value="deepseek"):
+            started = widget._start_provider_refresh(
+                "deepseek",
+                {"ACTIVE_PROVIDER": "deepseek"},
+                lightweight=True,
+                queue_if_busy=False,
+                reason="manual",
+            )
+
+        self.assertTrue(started)
+        widget._thread_pool.start.assert_called_once()
+
+    @patch("ui.qt_widget.config_manager.load_config")
+    def test_config_save_reopens_auth_validation_for_all_providers(self, load_config):
+        widget = widget_stub()
+        widget._auth_expired_providers.update({"deepseek", "mimo"})
+        widget._auth_notified_providers.update({"deepseek", "mimo"})
+        widget._update_controller = Mock()
+        widget._reschedule_refresh = Mock()
+        widget.refresh = Mock()
+
+        widget._on_config_saved()
+
+        load_config.assert_called_once_with()
+        self.assertEqual(widget._auth_expired_providers, set())
+        self.assertEqual(widget._auth_notified_providers, set())
+        widget.refresh.assert_called_once_with()
 
     def test_mimo_auth_expired_starts_silent_renewal(self):
         widget = widget_stub()
@@ -419,6 +482,23 @@ class RefreshTests(unittest.TestCase):
         widget.tray.showMessage.assert_called_once()
         self.assertIn("不会自动打开浏览器", widget.tray.showMessage.call_args.args[1])
 
+    def test_background_mimo_auth_expired_still_renews_after_provider_switch(self):
+        widget = widget_stub()
+        balance_expired = TokenData(
+            errors=[FetchError("AUTH_EXPIRED", "MiMo 余额", "Cookie 已失效")]
+        )
+        usage_expired = TokenData(
+            errors=[FetchError("AUTH_EXPIRED", "MiMo 用量", "登录状态已失效")]
+        )
+
+        widget._notify_auth_expired(balance_expired, "mimo", is_current=False)
+        widget._notify_auth_expired(usage_expired, "mimo", is_current=True)
+
+        self.assertEqual(widget.tray.showMessage.call_count, 1)
+        task = widget._thread_pool.start.call_args.args[0]
+        self.assertIsInstance(task, MiMoRenewalTask)
+        self.assertTrue(widget._mimo_renewal_attempted)
+
     @patch("ui.qt_widget.config_manager.save_config")
     def test_successful_mimo_renewal_saves_only_cookie_credentials(self, save_config):
         widget = widget_stub()
@@ -444,7 +524,7 @@ class RefreshTests(unittest.TestCase):
             "api-platform_ph=ph; api-platform_serviceToken=token; api-platform_slh=slh; userId=1",
         )
         widget._refresh_mimo_after_renewal.assert_called_once_with()
-        self.assertNotIn("mimo", widget._auth_error_signatures)
+        self.assertNotIn("mimo", widget._auth_expired_providers)
         self.assertIsNone(widget._mimo_renewal_task)
 
     @patch("ui.qt_widget.config_manager.save_config", side_effect=OSError("failed"))
@@ -459,7 +539,8 @@ class RefreshTests(unittest.TestCase):
             )
 
         self.assertEqual(widget._auth_expired_provider_id, "mimo")
-        self.assertIn("mimo", widget._auth_error_signatures)
+        self.assertIn("mimo", widget._auth_expired_providers)
+        self.assertIn("mimo", widget._auth_notified_providers)
         self.assertEqual(widget.tray.showMessage.call_count, 1)
 
     @patch("ui.qt_widget.MiMoProvider.recover_verified_cookie_via_chrome")
@@ -509,7 +590,7 @@ class RefreshTests(unittest.TestCase):
 
         save_config.assert_not_called()
         widget._refresh_mimo_after_renewal.assert_called_once_with()
-        self.assertNotIn("mimo", widget._auth_error_signatures)
+        self.assertNotIn("mimo", widget._auth_expired_providers)
 
     def test_status_summary_distinguishes_configuration_and_request_errors(self):
         cases = (

@@ -196,7 +196,8 @@ class FloatingWidget(QWidget):
         self._provider_last_started: dict[str, float] = {}
         self._provider_task_started: dict[str, float] = {}
         self._closed = False
-        self._auth_error_signatures: dict[str, tuple[str, str, str]] = {}
+        self._auth_expired_providers: set[str] = set()
+        self._auth_notified_providers: set[str] = set()
         self._auth_expired_provider_id: str | None = None
         self._mimo_renewal_task: MiMoRenewalTask | None = None
         self._mimo_renewal_attempted = False
@@ -950,6 +951,10 @@ class FloatingWidget(QWidget):
 
     def _on_config_saved(self) -> None:
         config_manager.load_config()
+        # 设置保存后允许所有失效 Provider 各验证一次；验证成功后恢复定时采集，
+        # 仍然失效则只重新进入一次通知周期。
+        self._auth_expired_providers.clear()
+        self._auth_notified_providers.clear()
         self._sync_pricing_state(notify_transition=False)
         self._update_controller.reload_cached_release()
         self._update_controller.schedule_startup_check()
@@ -1031,6 +1036,14 @@ class FloatingWidget(QWidget):
     ) -> bool:
         provider_id = provider_id.strip().lower()
         if not provider_id:
+            return False
+        if reason in {"periodic_current", "periodic_background"} and provider_id in (
+            self._auth_expired_providers
+        ):
+            config_manager.logger().debug(
+                "Provider collection skipped: provider=%s reason=auth_expired",
+                provider_id,
+            )
             return False
         captured_config = dict(config_snapshot)
         captured_config["ACTIVE_PROVIDER"] = provider_id
@@ -1159,17 +1172,17 @@ class FloatingWidget(QWidget):
             }
             codes = {error.code for error in result.errors}
             if result.status in {"ok", "partial"} and not codes & remote_failures:
-                # 只有该 Provider 实际恢复成功后才重新开放相同鉴权通知。
-                self._auth_error_signatures.pop(provider_id, None)
+                # 只有该 Provider 实际恢复成功后才解除熔断并重新开放通知。
+                self._auth_expired_providers.discard(provider_id)
+                self._auth_notified_providers.discard(provider_id)
                 if self._auth_expired_provider_id == provider_id:
                     self._auth_expired_provider_id = None
                 if provider_id == "mimo":
                     self._mimo_renewal_attempted = False
             return
-        signature = (auth_error.code, auth_error.source, auth_error.message)
-        if self._auth_error_signatures.get(provider_id) == signature:
-            return
-        self._auth_error_signatures[provider_id] = signature
+        # 同一失效周期以 Provider 为单位，不因余额、用量等错误来源或文案变化
+        # 重复通知；后续新增 Provider 只需沿用 AUTH_EXPIRED 错误码即可复用。
+        self._auth_expired_providers.add(provider_id)
         if provider_id == "mimo" and is_current:
             if getattr(self, "_mimo_renewal_task", None) is not None:
                 return
@@ -1179,10 +1192,13 @@ class FloatingWidget(QWidget):
             self._start_mimo_cookie_renewal()
             return
 
-        self._auth_expired_provider_id = provider_id
+        if provider_id in self._auth_notified_providers:
+            return
         tray = getattr(self, "tray", None)
         if tray is None:
             return
+        self._auth_notified_providers.add(provider_id)
+        self._auth_expired_provider_id = provider_id
         if provider_id == "mimo":
             message = (
                 f"{auth_error.message}\n请切换到小米 MiMo 或打开设置重新登录；"
@@ -1252,15 +1268,16 @@ class FloatingWidget(QWidget):
         self._show_mimo_renewal_failure(error_code)
 
     def _show_mimo_renewal_failure(self, error_code: str) -> None:
+        self._auth_expired_providers.add("mimo")
+        if "mimo" in self._auth_notified_providers:
+            return
         self._auth_expired_provider_id = "mimo"
-        self._auth_error_signatures.setdefault(
-            "mimo", ("AUTH_EXPIRED", "MiMo", "authentication expired")
-        )
         message = MiMoProvider.describe_acquire_error(
             RuntimeError(error_code or "ACQUIRE_UNEXPECTED")
         )
         tray = getattr(self, "tray", None)
         if tray is not None:
+            self._auth_notified_providers.add("mimo")
             tray.showMessage(
                 f"{APP_DISPLAY_NAME}：MiMo 自动续期失败",
                 f"{message}\n点击此通知可手动重新获取 Cookie。",
