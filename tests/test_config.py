@@ -323,6 +323,13 @@ class ConfigTests(unittest.TestCase):
                 config_manager.validate_data_dir_target(nested)
 
     def test_boolean_and_provider_values_are_validated(self):
+        self.assertEqual(config_manager.DEFAULT_CONFIG["CURSOR_GLOBAL_STORAGE"], "")
+        self.assertEqual(
+            config_manager.validate_config({"ACTIVE_PROVIDER": "CURSOR"})[
+                "ACTIVE_PROVIDER"
+            ],
+            "cursor",
+        )
         self.assertEqual(
             config_manager.validate_config({})["MINUTE_USAGE_CHART_TYPE"],
             "bar",

@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from config import runtime as config_manager
 from api.providers.base import (
     FetchError,
     ModelUsage,
@@ -20,14 +19,17 @@ from api.providers.base import (
     QuotaWindow,
 )
 from api.providers.codex import CodexProvider
+from api.providers.cursor import CursorProvider
 from api.providers.deepseek import DeepSeekProvider
 from api.providers.mimo import MiMoProvider
+from config import runtime as config_manager
 
 
 PROVIDERS: dict[str, type[Provider]] = {
     DeepSeekProvider.id: DeepSeekProvider,
     MiMoProvider.id: MiMoProvider,
     CodexProvider.id: CodexProvider,
+    CursorProvider.id: CursorProvider,
 }
 
 

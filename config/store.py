@@ -69,8 +69,8 @@ def validate_config(values: dict[str, Any]) -> dict[str, Any]:
     for key in list(merged):
         merged[key] = validate_value(key, merged[key])
     active_provider = str(merged.get("ACTIVE_PROVIDER", "deepseek")).strip().lower()
-    if active_provider not in {"deepseek", "mimo", "codex"}:
-        raise ValueError("ACTIVE_PROVIDER 必须是 deepseek、mimo 或 codex")
+    if active_provider not in {"deepseek", "mimo", "codex", "cursor"}:
+        raise ValueError("ACTIVE_PROVIDER 必须是 deepseek、mimo、codex 或 cursor")
     merged["ACTIVE_PROVIDER"] = active_provider
     update_channel = str(merged.get("UPDATE_CHANNEL", "stable")).strip().lower()
     if update_channel not in {"stable", "prerelease"}:

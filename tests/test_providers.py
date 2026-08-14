@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -14,9 +15,10 @@ os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
 import config_manager
 from api.deepseek import APIError
-from api.providers import configured_provider_ids
+from api.providers import configured_provider_ids, list_providers
 from api.providers.base import QuotaMetric, build_session
 from api.providers.codex import CodexProvider
+from api.providers.cursor import CursorProvider
 from api.providers.deepseek import DeepSeekProvider
 from api.providers.mimo import MiMoProvider
 
@@ -503,6 +505,372 @@ class MultiProviderTests(unittest.TestCase):
         self.assertEqual(quota.activity_source, "")
         self.assertEqual(quota.statistics_source, "")
         provider._local_activity.assert_called_once_with()
+
+
+class CursorProviderTests(unittest.TestCase):
+    def setUp(self):
+        with CursorProvider._activity_cache_lock:
+            CursorProvider._activity_cache.clear()
+
+    def storage(self, rows: dict[str, str]) -> Path:
+        temp_root = Path.cwd() / ".test-appdata" / "tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=temp_root)
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        with sqlite3.connect(directory / "state.vscdb") as connection:
+            connection.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+            connection.executemany(
+                "INSERT INTO ItemTable(key, value) VALUES (?, ?)", rows.items()
+            )
+        return directory
+
+    @staticmethod
+    def usage_payload(**overrides):
+        payload = {
+            "billingCycleStart": "1785542400000",
+            "billingCycleEnd": "1788220800000",
+            "planUsage": {
+                "includedSpend": 840,
+                "limit": 2000,
+                "bonusSpend": 0,
+                "autoSpend": 620,
+                "apiSpend": 220,
+                "autoPercentUsed": 33.0,
+                "apiPercentUsed": 15.0,
+                "totalPercentUsed": 42.0,
+            },
+            "spendLimitUsage": {
+                "individualUsed": 210,
+                "individualLimit": 5000,
+            },
+        }
+        payload.update(overrides)
+        return payload
+
+    @staticmethod
+    def plan_payload(**overrides):
+        info = {
+            "planName": "Pro",
+            "includedAmountCents": 2000,
+            "billingCycleEnd": "1788220800000",
+        }
+        info.update(overrides)
+        return {"planInfo": info}
+
+    @staticmethod
+    def activity_payload():
+        first = str(int(datetime(2026, 8, 13, 12, tzinfo=timezone.utc).timestamp() * 1000))
+        second = str(int(datetime(2026, 8, 14, 12, tzinfo=timezone.utc).timestamp() * 1000))
+        return {
+            "dailySpend": [
+                {"day": first, "category": "included", "totalTokens": "100"},
+                {"day": first, "category": "on_demand", "totalTokens": "200"},
+                {"day": second, "category": "included", "totalTokens": "75"},
+            ]
+        }
+
+    def test_paths_and_read_only_access_token_query(self):
+        appdata = Path("C:/Users/example/AppData/Roaming")
+        with patch.dict(os.environ, {"APPDATA": str(appdata)}):
+            provider = CursorProvider()
+            try:
+                self.assertEqual(
+                    provider._global_storage_dir(),
+                    appdata / "Cursor" / "User" / "globalStorage",
+                )
+            finally:
+                provider.close()
+
+        storage = self.storage(
+            {
+                "cursorAuth/accessToken": "synthetic-access-value",
+                "cursorAuth/refreshToken": "must-not-be-read",
+            }
+        )
+        traces: list[str] = []
+        real_connect = sqlite3.connect
+
+        def connect_read_only(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            connection.set_trace_callback(traces.append)
+            return connection
+
+        provider = CursorProvider({"CURSOR_GLOBAL_STORAGE": str(storage)})
+        try:
+            with patch("api.providers.cursor.sqlite3.connect", side_effect=connect_read_only) as connect:
+                self.assertEqual(provider._access_token(), "synthetic-access-value")
+            self.assertEqual(provider._state_db_path(), storage / "state.vscdb")
+            self.assertIn("mode=ro", connect.call_args.args[0])
+            self.assertTrue(connect.call_args.kwargs["uri"])
+            self.assertTrue(any("cursorAuth/accessToken" in sql for sql in traces))
+            self.assertTrue(all("refreshToken" not in sql for sql in traces))
+        finally:
+            provider.close()
+
+    def test_missing_database_token_and_unreadable_database_are_not_configured(self):
+        temp_root = Path.cwd() / ".test-appdata" / "tmp"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=temp_root)
+        self.addCleanup(temporary.cleanup)
+        missing = Path(temporary.name)
+        provider = CursorProvider({"CURSOR_GLOBAL_STORAGE": str(missing)})
+        provider._session.post = Mock()
+        try:
+            self.assertFalse(provider.is_configured())
+            quota, error = provider.fetch_quota()
+            self.assertIsNone(quota)
+            self.assertEqual(error.code, "NOT_CONFIGURED")
+            provider._session.post.assert_not_called()
+        finally:
+            provider.close()
+
+        empty = self.storage({})
+        provider = CursorProvider({"CURSOR_GLOBAL_STORAGE": str(empty)})
+        try:
+            self.assertFalse(provider.is_configured())
+            with patch(
+                "api.providers.cursor.sqlite3.connect",
+                side_effect=sqlite3.OperationalError("unreadable"),
+            ):
+                self.assertFalse(provider.is_configured())
+        finally:
+            provider.close()
+
+    def test_configuration_probe_and_snapshot_identity_are_non_secret(self):
+        first = self.storage({"cursorAuth/accessToken": "synthetic-first"})
+        second = self.storage({"cursorAuth/accessToken": "synthetic-second"})
+        provider = CursorProvider({"CURSOR_GLOBAL_STORAGE": str(first)})
+        try:
+            provider._session.post = Mock()
+            self.assertTrue(provider.is_configured())
+            provider._session.post.assert_not_called()
+            identity = provider.snapshot_identity()
+            self.assertEqual(len(identity), 64)
+            self.assertNotIn("synthetic-first", identity)
+            self.assertEqual(identity, provider.snapshot_identity())
+        finally:
+            provider.close()
+
+        other = CursorProvider({"CURSOR_GLOBAL_STORAGE": str(second)})
+        try:
+            self.assertNotEqual(identity, other.snapshot_identity())
+        finally:
+            other.close()
+
+        with (
+            patch.object(DeepSeekProvider, "is_configured", return_value=False),
+            patch.object(MiMoProvider, "is_configured", return_value=False),
+            patch.object(CodexProvider, "is_configured", return_value=False),
+        ):
+            self.assertEqual(
+                configured_provider_ids({"CURSOR_GLOBAL_STORAGE": str(first)}),
+                ["cursor"],
+            )
+        self.assertEqual(
+            list_providers(),
+            [
+                ("deepseek", "DeepSeek"),
+                ("mimo", "小米 MiMo"),
+                ("codex", "Codex"),
+                ("cursor", "Cursor"),
+            ],
+        )
+
+    def test_rpc_contract_amount_mapping_and_timestamp_units(self):
+        provider = CursorProvider()
+        provider._credentials = Mock(return_value="synthetic-access-value")
+        provider._session.post = Mock(
+            side_effect=[response(self.usage_payload()), response(self.plan_payload())]
+        )
+        provider._activity_session.post = Mock(return_value=response(self.activity_payload()))
+        try:
+            quota, error = provider.fetch_quota()
+        finally:
+            provider.close()
+
+        self.assertIsNone(error)
+        self.assertEqual(quota.windows[0].id, "cursor-monthly")
+        self.assertEqual(quota.windows[0].title, "每月额度")
+        self.assertEqual(quota.windows[0].used_percent, 33)
+        self.assertEqual(quota.windows[0].resets_at, datetime(2026, 9, 1, tzinfo=timezone.utc))
+        self.assertEqual(
+            [(item.title, item.value) for item in quota.metrics],
+            [("套餐用量", "$8.40 / $20.00"), ("额外消费", "$2.10 / $50.00")],
+        )
+        self.assertEqual(
+            [(item.title, item.value) for item in quota.statistics[:4]],
+            [("套餐", "Pro"), ("Bonus", "$0.00"), ("Auto", "$6.20"), ("指定模型", "$2.20")],
+        )
+        self.assertEqual(quota.statistics[4].title, "账期")
+        self.assertEqual(quota.plan, "Pro")
+        self.assertEqual(sorted(tokens for _, tokens in quota.activity), [75, 300])
+        self.assertEqual(quota.weekly_activity, quota.activity)
+        self.assertEqual(quota.activity_source, "interface")
+        self.assertEqual(quota.weekly_activity_source, "interface")
+
+        self.assertEqual(provider._timestamp("1788220800"), provider._timestamp("1788220800000"))
+        self.assertEqual(provider._usage_percent({"includedSpend": 2500, "limit": 2000}), 100)
+        self.assertEqual(provider._usage_percent({"totalPercentUsed": 37.5}), 37.5)
+        self.assertEqual(
+            provider._usage_percent(
+                {"autoPercentUsed": 33, "totalPercentUsed": 42, "limit": 2000}
+            ),
+            33,
+        )
+
+        calls = provider._session.post.call_args_list
+        self.assertTrue(calls[0].args[0].endswith("/GetCurrentPeriodUsage"))
+        self.assertTrue(calls[1].args[0].endswith("/GetPlanInfo"))
+        for call in calls:
+            self.assertEqual(call.kwargs["json"], {})
+            self.assertEqual(call.kwargs["timeout"], (3, 10))
+            self.assertEqual(call.kwargs["headers"]["Connect-Protocol-Version"], "1")
+            self.assertEqual(call.kwargs["headers"]["Content-Type"], "application/json")
+            self.assertEqual(
+                call.kwargs["headers"]["Authorization"], "Bearer synthetic-access-value"
+            )
+        activity_call = provider._activity_session.post.call_args
+        self.assertTrue(activity_call.args[0].endswith("/GetDailySpendByCategory"))
+        self.assertEqual(
+            activity_call.kwargs["json"]["groupBy"],
+            "SPEND_GROUP_BY_CATEGORY_USAGE_TYPE",
+        )
+        self.assertEqual(activity_call.kwargs["json"]["spendType"], "SPEND_TYPE_ALL")
+        self.assertEqual(len(activity_call.kwargs["json"]["periodStartMs"]), 13)
+        self.assertEqual(len(activity_call.kwargs["json"]["periodEndMs"]), 13)
+
+    def test_optional_fields_display_placeholders(self):
+        provider = CursorProvider()
+        provider._credentials = Mock(return_value="synthetic-access-value")
+        usage = self.usage_payload(
+            planUsage={"limit": 0, "totalPercentUsed": 37.5},
+            spendLimitUsage={"limitType": "none"},
+        )
+        provider._session.post = Mock(
+            side_effect=[response(usage), response(self.plan_payload(planName=""))]
+        )
+        provider._activity_session.post = Mock(return_value=response({"dailySpend": []}))
+        try:
+            quota, error = provider.fetch_quota()
+        finally:
+            provider.close()
+
+        self.assertIsNone(error)
+        self.assertEqual(quota.windows[0].used_percent, 37.5)
+        self.assertEqual([metric.value for metric in quota.metrics], ["--", "--"])
+        self.assertEqual(
+            [metric.value for metric in quota.statistics[:4]], ["--", "--", "--", "--"]
+        )
+
+    def test_live_shape_uses_separate_usage_percentages_when_spend_fields_are_absent(self):
+        provider = CursorProvider()
+        provider._credentials = Mock(return_value="synthetic-live-shape")
+        usage = self.usage_payload(
+            planUsage={
+                "includedSpend": 2000,
+                "limit": 2000,
+                "bonusSpend": 8570,
+                "autoPercentUsed": 32.913333333333334,
+                "apiPercentUsed": 15.466666666666667,
+                "totalPercentUsed": 30.63768115942029,
+            },
+            spendLimitUsage={"limitType": "user"},
+        )
+        provider._session.post = Mock(
+            side_effect=[response(usage), response(self.plan_payload())]
+        )
+        provider._activity_session.post = Mock(return_value=response({"dailySpend": []}))
+        try:
+            quota, error = provider.fetch_quota()
+        finally:
+            provider.close()
+
+        self.assertIsNone(error)
+        self.assertAlmostEqual(quota.windows[0].used_percent, 32.913333333333334)
+        self.assertEqual([metric.value for metric in quota.metrics], ["$20.00 / $20.00", "--"])
+        self.assertEqual(
+            [metric.value for metric in quota.statistics[:4]],
+            ["Pro", "$85.70", "33%", "15%"],
+        )
+
+    def test_activity_failure_keeps_last_successful_non_secret_cache(self):
+        token = "synthetic-activity-cache"
+        provider = CursorProvider()
+        provider._credentials = Mock(return_value=token)
+        provider._session.post = Mock(
+            side_effect=[response(self.usage_payload()), response(self.plan_payload())]
+        )
+        provider._activity_session.post = Mock(return_value=response(self.activity_payload()))
+        try:
+            first, first_error = provider.fetch_quota()
+        finally:
+            provider.close()
+        self.assertIsNone(first_error)
+        self.assertEqual(first.activity_source, "interface")
+
+        cache_key = CursorProvider._activity_cache_key(token)
+        with CursorProvider._activity_cache_lock:
+            _, rows = CursorProvider._activity_cache[cache_key]
+            CursorProvider._activity_cache[cache_key] = (0, rows)
+        provider = CursorProvider()
+        provider._credentials = Mock(return_value=token)
+        provider._session.post = Mock(
+            side_effect=[response(self.usage_payload()), response(self.plan_payload())]
+        )
+        provider._activity_session.post = Mock(return_value=response({}, 503))
+        try:
+            cached, cached_error = provider.fetch_quota()
+        finally:
+            provider.close()
+
+        self.assertIsNone(cached_error)
+        self.assertEqual(cached.activity, first.activity)
+        self.assertEqual(cached.activity_source, "cache")
+
+    def test_error_mapping_and_messages_exclude_access_token(self):
+        cases = ((401, "AUTH_EXPIRED"), (403, "AUTH_EXPIRED"), (429, "RATE_LIMITED"), (503, "SERVER_ERROR"), (400, "UNKNOWN_ERROR"))
+        for status, expected in cases:
+            with self.subTest(status=status):
+                provider = CursorProvider()
+                provider._credentials = Mock(return_value="synthetic-access-value")
+                provider._session.post = Mock(return_value=response({}, status))
+                try:
+                    quota, error = provider.fetch_quota()
+                finally:
+                    provider.close()
+                self.assertIsNone(quota)
+                self.assertEqual(error.code, expected)
+                self.assertNotIn("synthetic-access-value", error.message)
+
+        exceptions = (
+            (requests.Timeout(), "NETWORK_TIMEOUT"),
+            (requests.ConnectionError(), "NETWORK_ERROR"),
+        )
+        for exception, expected in exceptions:
+            with self.subTest(exception=expected):
+                provider = CursorProvider()
+                provider._credentials = Mock(return_value="synthetic-access-value")
+                provider._session.post = Mock(side_effect=exception)
+                try:
+                    quota, error = provider.fetch_quota()
+                finally:
+                    provider.close()
+                self.assertIsNone(quota)
+                self.assertEqual(error.code, expected)
+
+        invalid = response({})
+        invalid.json.side_effect = ValueError("not json")
+        provider = CursorProvider()
+        provider._credentials = Mock(return_value="synthetic-access-value")
+        provider._session.post = Mock(return_value=invalid)
+        try:
+            quota, error = provider.fetch_quota()
+        finally:
+            provider.close()
+        self.assertIsNone(quota)
+        self.assertEqual(error.code, "INVALID_RESPONSE")
+        self.assertNotIn("synthetic-access-value", error.message)
 
 
 class MiMoProviderTests(unittest.TestCase):

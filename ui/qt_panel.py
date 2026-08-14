@@ -1953,11 +1953,12 @@ class StatisticsCard(QFrame):
             label.setToolTip("")
 
     def set_quota_data(self, data: TokenData) -> None:
-        self.title.setText("Codex 使用统计")
+        provider_name = data.per_provider[0].provider_name if data.per_provider else "Codex"
+        self.title.setText(f"{provider_name} 使用统计")
         items = [(metric.title, metric.value, metric.detail) for metric in data.quota_statistics]
         source_tooltip = {
-            "interface": "来自 Codex 账号统计",
-            "cache": "当前显示最近一次缓存的 Codex 账号统计",
+            "interface": f"来自 {provider_name} 账号统计",
+            "cache": f"当前显示最近一次缓存的 {provider_name} 账号统计",
         }.get(data.statistics_source, "")
         for index, (name, value) in enumerate(zip(self._names, self._values)):
             if index < len(items):
@@ -2759,6 +2760,7 @@ class MainPanel(QFrame):
 
         if quota_mode:
             cards = (self.today_card, self.balance_card, self.month_card)
+            provider_name = data.per_provider[0].provider_name if data.per_provider else "Codex"
             summaries: list[tuple[str, str, str]] = []
             visible_windows = [
                 window
@@ -2797,7 +2799,7 @@ class MainPanel(QFrame):
                     )
                 )
             while len(summaries) < len(cards):
-                summaries.append(("Codex", "--", "正在读取额度" if loading else ""))
+                summaries.append((provider_name, "--", "正在读取额度" if loading else ""))
             for card, (title, value, detail) in zip(cards, summaries):
                 card.set_title(title)
                 card.set_values(value, detail, "")
@@ -2810,7 +2812,7 @@ class MainPanel(QFrame):
                 token_mode=True,
             )
             weekly_tooltip = {
-                "interface": "来自 Codex 账号统计",
+                "interface": f"来自 {provider_name} 账号统计",
                 "mixed": "历史数据来自 Codex 账号统计；当天 Token 为本机会话日志估算",
                 "cache": "当前显示最近一次缓存的近 7 天数据",
                 "cache_mixed": "历史数据来自缓存；当天 Token 为本机会话日志估算",
@@ -2827,7 +2829,7 @@ class MainPanel(QFrame):
                 button.hide()
             self.minute_estimate_label.hide()
             activity_tooltip = {
-                "interface": "来自 Codex 账号统计，不含本机估算",
+                "interface": f"来自 {provider_name} 账号统计，不含本机估算",
                 "cache": "当前显示最近一次缓存的官方 Token 活动",
             }.get(data.activity_source, "暂无可用的官方 Token 活动")
             self.activity_summary.setToolTip(activity_tooltip)

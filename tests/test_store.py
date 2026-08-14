@@ -309,6 +309,65 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.last_success_at, remote_success_at)
         self.assertEqual(data.last_updated, "10:30:00")
 
+    def test_cursor_transient_failure_keeps_quota_but_auth_failure_does_not(self):
+        class CursorQuotaProvider(FakeProvider):
+            id = "cursor"
+            name = "Cursor"
+            supports_daily_usage = False
+            supports_cost = False
+            supports_subscription_quota = True
+
+            def fetch_balance(self):
+                return None, None
+
+            def fetch_summary(self):
+                return None, None
+
+        class SuccessfulCursorProvider(CursorQuotaProvider):
+            def fetch_quota(self):
+                return ProviderQuota(
+                    windows=(QuotaWindow("cursor-monthly", "每月额度", 42),),
+                    metrics=(
+                        QuotaMetric("套餐用量", "$8.40 / $20.00"),
+                        QuotaMetric("额外消费", "--"),
+                    ),
+                    activity=(("2026-08-14", 95_363),),
+                    weekly_activity=(("2026-08-14", 95_363),),
+                    statistics=(QuotaMetric("套餐", "Pro"),),
+                    plan="Pro",
+                    activity_source="interface",
+                    weekly_activity_source="interface",
+                    statistics_source="interface",
+                ), None
+
+        class FailedCursorProvider(CursorQuotaProvider):
+            error_code = "NETWORK_ERROR"
+
+            def fetch_quota(self):
+                return None, FetchError(
+                    self.error_code, "Cursor 订阅额度", "Cursor 用量暂不可用"
+                )
+
+        self.fetch_with(SuccessfulCursorProvider())
+        cached = self.fetch_with(FailedCursorProvider())
+
+        self.assertEqual(cached.status, "ok")
+        self.assertTrue(cached.is_stale)
+        self.assertEqual(cached.errors, [])
+        self.assertEqual(cached.quota_windows[0].used_percent, 42)
+        self.assertEqual(cached.quota_metrics[0].value, "$8.40 / $20.00")
+        self.assertEqual(cached.daily_usage[0]["tokens"], 95_363)
+        self.assertEqual(cached.weekly_usage[0]["tokens"], 95_363)
+        self.assertEqual(cached.activity_source, "cache")
+        self.assertEqual(cached.weekly_activity_source, "cache")
+        self.assertEqual(cached.quota_source, "cache")
+
+        FailedCursorProvider.error_code = "AUTH_EXPIRED"
+        expired = self.fetch_with(FailedCursorProvider())
+        self.assertEqual(expired.status, "error")
+        self.assertEqual(expired.quota_windows, [])
+        self.assertEqual(expired.errors[0].code, "AUTH_EXPIRED")
+
     def test_codex_transient_remote_errors_keep_the_complete_cached_snapshot(self):
         class QuotaProvider(FakeProvider):
             id = "codex"

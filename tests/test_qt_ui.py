@@ -289,9 +289,9 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.provider_quick_combo.showPopup()
     APP.processEvents()
     popup = panel.provider_quick_combo.view().window()
-    assert popup.size() == QSize(132, 140)
-    assert popup.minimumSize() == QSize(132, 140)
-    assert popup.maximumSize() == QSize(132, 140)
+    assert popup.size() == QSize(132, 174)
+    assert popup.minimumSize() == QSize(132, 174)
+    assert popup.maximumSize() == QSize(132, 174)
     assert popup.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert popup.frameShape() == QFrame.Shape.NoFrame
@@ -337,6 +337,113 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.provider_quick_combo.activated.emit(mimo_index)
 
     assert selected_providers == ["mimo"]
+    panel.close()
+
+
+def test_cursor_uses_existing_quota_panel_positions_and_empty_activity_states():
+    reset = datetime.now(timezone.utc) + timedelta(days=12)
+    window = QuotaWindow("cursor-monthly", "每月额度", 42, resets_at=reset)
+    metrics = [
+        QuotaMetric("套餐用量", "$8.40 / $20.00"),
+        QuotaMetric("额外消费", "$2.10 / $50.00"),
+    ]
+    statistics = [
+        QuotaMetric("套餐", "Pro"),
+        QuotaMetric("Bonus", "$0.00"),
+        QuotaMetric("Auto", "$6.20"),
+        QuotaMetric("指定模型", "$2.20"),
+        QuotaMetric("账期", "08-01 — 09-01"),
+    ]
+    data = TokenData(
+        currency="USD",
+        status="ok",
+        last_success_at=datetime.now(),
+        quota_windows=[window],
+        quota_metrics=metrics,
+        quota_statistics=statistics,
+        quota_source="interface",
+        statistics_source="interface",
+        per_provider=[
+            PerProviderData(
+                "cursor",
+                "Cursor",
+                currency="USD",
+                quota_windows=[window],
+                quota_metrics=metrics,
+                quota_statistics=statistics,
+                status="ok",
+            )
+        ],
+    )
+    panel = MainPanel()
+    panel.update_data(data)
+
+    assert panel.provider_quick_combo.count() == 4
+    assert panel.provider_quick_combo.currentData() == "cursor"
+    assert panel.provider_quick_combo.size() == QSize(132, 28)
+    assert panel.today_card.title_label.text() == "每月额度"
+    assert panel.today_card.value.text() == "已用 42%"
+    assert "剩余 58%" in panel.today_card.detail.text()
+    assert panel.balance_card.title_label.text() == "套餐用量"
+    assert panel.balance_card.value.text() == "$8.40 / $20.00"
+    assert panel.month_card.title_label.text() == "额外消费"
+    assert panel.month_card.value.text() == "$2.10 / $50.00"
+    assert panel.statistics.title.text() == "Cursor 使用统计"
+    assert [label.text() for label in panel.statistics._names] == [
+        "套餐",
+        "Bonus",
+        "Auto",
+        "指定模型",
+        "账期",
+    ]
+    assert panel.statistics._values[0].toolTip() == "来自 Cursor 账号统计"
+    assert panel.trend._values == [0.0] * 7
+    assert panel.activity_summary.text() == "暂无 Token 活动"
+    assert all(day.token_count == 0 for day in panel.activity.days)
+    assert not panel.trend.isHidden()
+    assert not panel.activity_card.isHidden()
+    assert panel.activity_mode_segment.isHidden()
+    panel.close()
+
+
+def test_cursor_real_daily_tokens_fill_existing_trend_and_activity_regions():
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    window = QuotaWindow("cursor-monthly", "每月额度", 33)
+    rows = [
+        {"date": yesterday.isoformat(), "tokens": 12_000, "cost_cny": 0},
+        {"date": today.isoformat(), "tokens": 34_000, "cost_cny": 0},
+    ]
+    data = TokenData(
+        status="ok",
+        quota_windows=[window],
+        daily_usage=rows,
+        weekly_usage=list(rows),
+        quota_source="interface",
+        activity_source="interface",
+        weekly_activity_source="interface",
+        statistics_source="interface",
+        per_provider=[
+            PerProviderData(
+                "cursor",
+                "Cursor",
+                quota_windows=[window],
+                status="ok",
+            )
+        ],
+    )
+    panel = MainPanel()
+    panel.update_data(data)
+
+    assert panel.trend._values[-2:] == [12_000, 34_000]
+    today_activity = next(day for day in panel.activity.days if day.date == today)
+    assert today_activity.token_count == 34_000
+    assert panel.activity_summary.text().endswith("4.6万")
+    assert panel.trend.title.toolTip() == "来自 Cursor 账号统计"
+    assert panel.activity_summary.toolTip() == "来自 Cursor 账号统计，不含本机估算"
+    assert not panel.trend.isHidden()
+    assert not panel.activity_card.isHidden()
+    assert panel.activity_mode_segment.isHidden()
     panel.close()
 
 
@@ -557,6 +664,40 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     widget._apply_update()
     assert not widget.ball._quota_mode
     assert widget.ball.toolTip() == ""
+    widget._closed = True
+    widget.hide()
+
+
+def test_cursor_ball_reuses_quota_mode_for_success_and_unavailable_states():
+    reset = datetime.now(timezone.utc) + timedelta(days=12)
+    window = QuotaWindow("cursor-monthly", "每月额度", 42, resets_at=reset)
+    data = TokenData(
+        status="ok",
+        quota_windows=[window],
+        per_provider=[
+            PerProviderData("cursor", "Cursor", quota_windows=[window], status="ok")
+        ],
+    )
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+        widget._data = data
+        widget._refreshing = False
+        widget._apply_update()
+
+    assert widget.ball._quota_mode
+    assert widget.ball._quota_remaining == 58
+    assert widget.ball._quota_title == "每月额度"
+
+    widget._data = TokenData(
+        status="partial",
+        per_provider=[PerProviderData("cursor", "Cursor", status="partial")],
+    )
+    widget._apply_update()
+    assert widget.ball._quota_mode
+    assert widget.ball._quota_remaining is None
+    assert widget.ball._quota_title == "每月额度"
+    assert widget.ball._quota_reset_text == "额度暂不可用"
+    assert "$" not in widget.ball.toolTip()
     widget._closed = True
     widget.hide()
 
@@ -1998,6 +2139,30 @@ def test_settings_codex_home_uses_read_only_directory_picker():
 
         default_button.click()
         assert editor.text() == ""
+        window.close()
+
+
+def test_settings_cursor_global_storage_uses_existing_directory_field():
+    configured = r"C:\Users\example\AppData\Roaming\Cursor\User\globalStorage"
+    values = {
+        **config_manager.all_config(),
+        "ACTIVE_PROVIDER": "cursor",
+        "CURSOR_GLOBAL_STORAGE": configured,
+    }
+    with (
+        patch("ui.qt_settings.config_manager.load_config", return_value=values),
+        patch("ui.qt_settings.config_manager.all_config", return_value=values),
+    ):
+        window = SettingsWindow()
+        editor = window._provider_widgets["GLOBAL_STORAGE"]
+
+        assert window.provider_combo.currentData() == "cursor"
+        assert isinstance(editor, QLineEdit)
+        assert editor.isReadOnly()
+        assert editor.text() == configured
+        assert window._values()["CURSOR_GLOBAL_STORAGE"] == configured
+        assert window.findChild(QPushButton, "credentialDirectoryBrowseButton") is not None
+        assert window.findChild(QPushButton, "credentialDirectoryDefaultButton") is not None
         window.close()
 
 

@@ -1327,8 +1327,9 @@ class FloatingWidget(QWidget):
                 primary.title,
             )
         elif quota_mode:
-            # Codex 网络额度暂不可用时也不能回退成金额视图，否则会显示虚假的 ¥0。
-            self.ball.set_quota_state(None, "额度暂不可用", "周额度")
+            # 订阅额度暂不可用时也不能回退成金额视图，否则会显示虚假的金额。
+            unavailable_title = "每月额度" if provider_id == "cursor" else "周额度"
+            self.ball.set_quota_state(None, "额度暂不可用", unavailable_title)
         else:
             self.ball.clear_quota_state()
             self.ball.set_labels("今日使用", "余额")
