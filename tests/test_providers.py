@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -518,11 +519,12 @@ class CursorProviderTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=temp_root)
         self.addCleanup(temporary.cleanup)
         directory = Path(temporary.name)
-        with sqlite3.connect(directory / "state.vscdb") as connection:
+        with closing(sqlite3.connect(directory / "state.vscdb")) as connection:
             connection.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
             connection.executemany(
                 "INSERT INTO ItemTable(key, value) VALUES (?, ?)", rows.items()
             )
+            connection.commit()
         return directory
 
     @staticmethod
