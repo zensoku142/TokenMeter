@@ -51,8 +51,8 @@ DEF_PANEL_H = 550
 DEF_BALL_SIZE = 88
 MIN_BALL_SIZE = 72
 MAX_BALL_SIZE = 124
-EDGE_HIDDEN_OPACITY = 0.72
-EDGE_OPACITY_DELAY_MS = 3_000
+BALL_SIZE_STEP = 4
+BALL_SIZE_SAVE_DELAY_MS = 300
 BACKGROUND_PROVIDER_INTERVAL_MS = 60_000
 
 
@@ -207,9 +207,6 @@ class FloatingWidget(QWidget):
         self._window_origin = QPoint()
         self._drag_started = False
         self._drag_source = ""
-        self._resize_origin = QPoint()
-        self._resize_window_origin = QPoint()
-        self._resize_start_size = DEF_BALL_SIZE
         self._settings_window: SettingsWindow | None = None
         self._update_controller = AppUpdateController(self)
         self._thread_pool = QThreadPool.globalInstance()
@@ -219,9 +216,6 @@ class FloatingWidget(QWidget):
         self._edge_hide_timer = QTimer(self)
         self._edge_hide_timer.setSingleShot(True)
         self._edge_hide_timer.timeout.connect(self._do_edge_hide)
-        self._edge_opacity_timer = QTimer(self)
-        self._edge_opacity_timer.setSingleShot(True)
-        self._edge_opacity_timer.timeout.connect(self._apply_edge_hidden_opacity)
         self._edge_leave_timer = QTimer(self)
         self._edge_leave_timer.setSingleShot(True)
         self._edge_leave_timer.timeout.connect(self._do_edge_leave)
@@ -229,6 +223,11 @@ class FloatingWidget(QWidget):
         self._edge_hidden = False
         self._edge_hover_check = QTimer(self)
         self._edge_hover_check.timeout.connect(self._check_edge_hover)
+        self._ball_size_save_timer = QTimer(self)
+        self._ball_size_save_timer.setSingleShot(True)
+        self._ball_size_save_timer.setInterval(BALL_SIZE_SAVE_DELAY_MS)
+        self._ball_size_save_timer.timeout.connect(self._save_ball_size)
+        self._pending_ball_position: QPoint | None = None
         # 吸附、隐藏和唤出共用一个位置动画，避免多个动画同时争抢窗口坐标。
         self._edge_animation = QPropertyAnimation(self, b"pos", self)
         self._edge_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -286,9 +285,7 @@ class FloatingWidget(QWidget):
         self.ball.pressed.connect(lambda point: self._start_drag(point, "ball"))
         self.ball.dragged.connect(self._move_drag)
         self.ball.released.connect(self._end_drag)
-        self.ball.resize_started.connect(self._start_resize)
-        self.ball.resize_dragged.connect(self._resize_ball)
-        self.ball.resize_released.connect(self._end_resize)
+        self.ball.resize_requested.connect(self._resize_ball_by_wheel)
 
     def _ensure_panel(self) -> MainPanel:
         if self.panel is not None:
@@ -668,43 +665,41 @@ class FloatingWidget(QWidget):
         self._drag_started = False
         self._drag_source = ""
 
-    def _start_resize(self, point: QPoint) -> None:
+    def _resize_ball_by_wheel(self, steps: int) -> None:
+        size = max(
+            MIN_BALL_SIZE,
+            min(MAX_BALL_SIZE, self._compact_size() + steps * BALL_SIZE_STEP),
+        )
+        if size == self._compact_size():
+            return
         self._edge_animation.stop()
         self._edge_hide_timer.stop()
         self._edge_leave_timer.stop()
         self._edge_unsnap()
-        self._resize_origin = point
-        self._resize_window_origin = self.pos()
-        self._resize_start_size = self._compact_size()
-
-    def _resize_ball(self, point: QPoint) -> None:
-        delta = point - self._resize_origin
-        dominant_delta = (
-            delta.x() if abs(delta.x()) >= abs(delta.y()) else delta.y()
-        )
-        size = max(
-            MIN_BALL_SIZE,
-            min(MAX_BALL_SIZE, self._resize_start_size + dominant_delta),
-        )
-        if size == self._compact_size():
-            return
+        center_x = self.x() + self.width() // 2
+        center_y = self.y() + self.height() // 2
         self._ball_size = size
         self.ball.setFixedSize(size, size)
         self.setFixedSize(size, size)
         work = self._work_area()
-        # 靠近屏幕右侧或底部放大时允许窗口向内让位，避免圆球越出可用区。
         x, y = clamp_window(
-            self._resize_window_origin.x(),
-            self._resize_window_origin.y(),
+            center_x - size // 2,
+            center_y - size // 2,
             size,
             size,
             work,
         )
         self.move(x, y)
         self._apply_native_window_shape(compact=True)
+        self._pending_ball_position = QPoint(x, y)
+        self._ball_size_save_timer.start()
 
-    def _end_resize(self, _point: QPoint) -> None:
-        self._clamp_to_work_area()
+    def _save_ball_size(self) -> None:
+        if self._pending_ball_position is not None:
+            config_manager.save_widget_position(
+                self._pending_ball_position.x(), self._pending_ball_position.y()
+            )
+            self._pending_ball_position = None
         config_manager.save_widget_size(self._compact_size())
 
     def _work_area(self):
@@ -827,8 +822,6 @@ class FloatingWidget(QWidget):
         self._edge_hidden = True
         self.setWindowOpacity(1.0)
         self._animate_edge_to(QPoint(x, y), 240)
-        # 先让用户看清球体滑入边缘，稳定片刻后再淡化，避免视觉突变。
-        self._edge_opacity_timer.start(EDGE_OPACITY_DELAY_MS)
         # Start polling the global mouse position — enterEvent/leaveEvent
         # are unreliable on frameless layered windows under Windows.
         # 200ms / 5 Hz is plenty fast enough for a hover reveal, and cuts
@@ -836,11 +829,10 @@ class FloatingWidget(QWidget):
         self._edge_hover_check.start(100)
 
     def _edge_visible_extent(self) -> int:
-        return max(20, min(34, int(self._compact_size() * 0.28)))
+        return max(12, min(16, round(self._compact_size() * 0.16)))
 
-    def _apply_edge_hidden_opacity(self) -> None:
-        if self._edge_snapped and self._edge_hidden and not self._edge_hovering:
-            self.setWindowOpacity(EDGE_HIDDEN_OPACITY)
+    def _edge_reveal_extent(self) -> int:
+        return max(40, self._edge_visible_extent() + 16)
 
     def _check_edge_hover(self) -> None:
         """Poll global mouse position and decide whether to show or hide.
@@ -852,7 +844,7 @@ class FloatingWidget(QWidget):
             return
         cursor = QCursor.pos()
         work = self._work_area()
-        reveal_zone = self._edge_visible_extent() + 12
+        reveal_zone = self._edge_reveal_extent()
         vertical_hit = self.y() - 24 <= cursor.y() <= self.y() + self._compact_size() + 24
         hit = False
         if self._edge_direction == "left":
@@ -880,7 +872,6 @@ class FloatingWidget(QWidget):
             self._edge_animation.stop()
             self.move(self._edge_visible_position())
         self._edge_hide_timer.stop()
-        self._edge_opacity_timer.stop()
         self._edge_leave_timer.stop()
         self._edge_hover_check.stop()
         # 取消贴边时必须清掉悬停唤出状态；否则下次重新贴边会被误判为仍在悬停，
@@ -904,7 +895,6 @@ class FloatingWidget(QWidget):
         """Bring the window fully back on-screen after hovering the strip."""
         if not self._edge_snapped:
             return
-        self._edge_opacity_timer.stop()
         self._edge_hidden = False
         self.setWindowOpacity(1.0)
         self._animate_edge_to(self._edge_visible_position(), 220)
@@ -1432,6 +1422,9 @@ class FloatingWidget(QWidget):
                 self.activateWindow()
 
     def closeEvent(self, event) -> None:
+        if self._ball_size_save_timer.isActive():
+            self._ball_size_save_timer.stop()
+            self._save_ball_size()
         size = self._compact_size()
         if self._expanded:
             x, y = compact_geometry(
@@ -1462,9 +1455,9 @@ class FloatingWidget(QWidget):
         self._pricing_timer.stop()
         self._edge_animation.stop()
         self._edge_hide_timer.stop()
-        self._edge_opacity_timer.stop()
         self._edge_leave_timer.stop()
         self._edge_hover_check.stop()
+        self._ball_size_save_timer.stop()
         if self._mimo_renewal_task is not None:
             self._mimo_renewal_task.cancel()
         self._thread_pool.clear()

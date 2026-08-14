@@ -306,6 +306,14 @@ class SettingsWindow(QDialog):
         opacity_layout.addWidget(self.panel_opacity_label)
         appearance_form.addRow("面板透明度", opacity_row)
 
+        self.ball_size_hint = QLabel(
+            "悬停在悬浮球上时，滚动鼠标滚轮即可调整大小。"
+        )
+        self.ball_size_hint.setWordWrap(True)
+        self.ball_size_hint.setProperty("tone", "muted")
+        self.ball_size_hint.setStyleSheet("font-size: 12px;")
+        appearance_form.addRow("悬浮球大小", self.ball_size_hint)
+
         self.reset_appearance_button = QPushButton("恢复当前主题默认配置")
         self.reset_appearance_button.setToolTip("只重置当前解析出的浅色或深色主题")
         appearance_form.addRow("", self.reset_appearance_button)
