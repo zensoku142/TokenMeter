@@ -105,6 +105,7 @@ class NayutoProvider(Provider):
     supports_daily_usage = True
     supports_cost = True
     supports_exact_minute_usage = True
+    supports_model_usage = True
     supports_browser_credential_acquisition = True
     credential_acquisition_label = "Bearer"
     credential_acquisition_automatic = False
@@ -345,6 +346,7 @@ class NayutoProvider(Provider):
         ] = {}
         minute_tokens: dict[tuple[date, int, str], int] = {}
         minute_costs: dict[tuple[date, int], Decimal] = {}
+        minute_models: dict[tuple[date, int, str], dict[str, Any]] = {}
         usage_dates: set[date] = set()
         dirty_rows = 0
 
@@ -400,6 +402,19 @@ class NayutoProvider(Provider):
                 minute_tokens[row_key] = minute_tokens.get(row_key, 0) + amount
             cost_key = (usage_date, minute)
             minute_costs[cost_key] = minute_costs.get(cost_key, Decimal("0")) + actual_cost
+            minute_model = minute_models.setdefault(
+                (usage_date, minute, model),
+                {
+                    "cache_hit_tokens": 0,
+                    "cache_miss_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_cny": Decimal("0"),
+                },
+            )
+            minute_model["cache_hit_tokens"] += input_hit
+            minute_model["cache_miss_tokens"] += input_miss
+            minute_model["output_tokens"] += output
+            minute_model["cost_cny"] += actual_cost
             usage_dates.add(usage_date)
 
         payloads: list[dict[str, Any]] = []
@@ -441,13 +456,26 @@ class NayutoProvider(Provider):
             }
             for (usage_date, minute), amount in sorted(minute_costs.items())
         )
+        model_rows = tuple(
+            {
+                "usage_date": usage_date,
+                "minute": minute,
+                "model": model,
+                "cache_hit_tokens": values["cache_hit_tokens"],
+                "cache_miss_tokens": values["cache_miss_tokens"],
+                "output_tokens": values["output_tokens"],
+                "cost_cny": values["cost_cny"],
+            }
+            for (usage_date, minute, model), values in sorted(minute_models.items())
+        )
         return (
             payloads,
             ExactMinuteUsage(
-                tuple(sorted(usage_dates)),
-                token_rows,
-                cost_rows,
-                tuple(sorted(requested_months)),
+                usage_dates=tuple(sorted(usage_dates)),
+                token_rows=token_rows,
+                cost_rows=cost_rows,
+                complete_months=tuple(sorted(requested_months)),
+                model_rows=model_rows,
             ),
             dirty_rows,
         )

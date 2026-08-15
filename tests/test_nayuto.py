@@ -13,7 +13,7 @@ import pytest
 import requests
 
 from api import browser_cookie
-from api.providers.base import FetchError, ProviderBalance, ProviderSummary
+from api.providers.base import ExactMinuteUsage, FetchError, ProviderBalance, ProviderSummary
 from api.providers.nayuto import NayutoProvider
 from config.defaults import SECRET_KEYS
 from config.store import public_values
@@ -94,6 +94,26 @@ def test_real_shape_maps_tokens_actual_cost_and_utc_to_shanghai():
         for row in exact.cost_rows
         if row["usage_date"] == date(2026, 8, 15) and row["minute"] == 0
     ) == Decimal("0.0303")
+    assert exact.model_rows == (
+        {
+            "usage_date": date(2026, 8, 15),
+            "minute": 0,
+            "model": "gpt-fixture",
+            "cache_hit_tokens": 14,
+            "cache_miss_tokens": 9,
+            "output_tokens": 18,
+            "cost_cny": Decimal("0.0303"),
+        },
+        {
+            "usage_date": date(2026, 8, 16),
+            "minute": 0,
+            "model": "gpt-fixture",
+            "cache_hit_tokens": 23,
+            "cache_miss_tokens": 17,
+            "output_tokens": 19,
+            "cost_cny": Decimal("0.0303"),
+        },
+    )
     # The fixture's failed row is included because billing semantics are not proven.
     assert first_minute_tokens["PROMPT_CACHE_MISS_TOKEN"] == 2 + 7
 
@@ -146,6 +166,41 @@ def test_request_id_then_real_id_then_stable_fallback_deduplicate():
     totals = usage_totals(payloads, "2026-08-15")
     assert totals["PROMPT_CACHE_MISS_TOKEN"] == 9
     assert len(exact.cost_rows) == 2
+
+
+def test_minute_models_aggregate_same_model_and_keep_multiple_models_and_unknown():
+    source = usage_fixture()["items"][0]
+    first = copy.deepcopy(source)
+    first["request_id"] = "model-a-1"
+    first["model"] = "model-a"
+    second = copy.deepcopy(source)
+    second["request_id"] = "model-a-2"
+    second["model"] = "model-a"
+    third = copy.deepcopy(source)
+    third["request_id"] = "model-b"
+    third["model"] = "model-b"
+    unknown = copy.deepcopy(source)
+    unknown["request_id"] = "model-missing"
+    unknown.pop("model")
+
+    _payloads, exact, dirty = NayutoProvider._normalize_records(
+        [first, second, third, unknown], {(8, 2026)}
+    )
+
+    assert dirty == 0
+    rows = {row["model"]: row for row in exact.model_rows}
+    assert list(rows) == ["model-a", "model-b", "unknown"]
+    assert rows["model-a"]["cache_hit_tokens"] == 6
+    assert rows["model-a"]["cache_miss_tokens"] == 4
+    assert rows["model-a"]["output_tokens"] == 10
+    assert rows["model-a"]["cost_cny"] == Decimal("0.0202")
+    assert rows["model-b"]["cost_cny"] == Decimal("0.0101")
+    assert rows["unknown"]["output_tokens"] == 5
+
+
+def test_exact_minute_usage_positional_fields_remain_compatible():
+    exact = ExactMinuteUsage((date(2026, 8, 15),), (), (), ((8, 2026),))
+    assert exact.model_rows == ()
 
 
 def test_dirty_core_fields_are_skipped_without_losing_valid_rows():
@@ -353,9 +408,35 @@ def test_exact_minute_replace_is_decimal_and_idempotent():
             {"usage_date": usage_day, "minute": 601, "cost_cny": Decimal("0.1")},
             {"usage_date": usage_day, "minute": 601, "cost_cny": Decimal("0.2")},
         ]
+        model_rows = [
+            {
+                "usage_date": usage_day,
+                "minute": 601,
+                "model": "model-a",
+                "cache_hit_tokens": 3,
+                "cache_miss_tokens": 0,
+                "output_tokens": 0,
+                "cost_cny": Decimal("0.1"),
+            },
+            {
+                "usage_date": usage_day,
+                "minute": 601,
+                "model": "model-b",
+                "cache_hit_tokens": 4,
+                "cache_miss_tokens": 0,
+                "output_tokens": 0,
+                "cost_cny": Decimal("0.2"),
+            },
+        ]
         for _ in range(2):
             assert history.replace_exact_minute_usage(
-                "nayuto", {usage_day}, token_rows, cost_rows, usage_day, 3
+                "nayuto",
+                {usage_day},
+                token_rows,
+                cost_rows,
+                usage_day,
+                3,
+                model_rows=model_rows,
             ) == "recorded"
         assert history.minute_usage_for_day("nayuto", usage_day) == [
             {
@@ -367,10 +448,161 @@ def test_exact_minute_replace_is_decimal_and_idempotent():
         assert history.minute_cost_usage_for_day("nayuto", usage_day) == [
             {"minute": 601, "cost_cny": Decimal("0.3")}
         ]
+        assert history.minute_model_usage_for_day("nayuto", usage_day) == [
+            {
+                "minute": 601,
+                "model": "model-a",
+                "cache_hit_tokens": 3,
+                "cache_miss_tokens": 0,
+                "output_tokens": 0,
+                "cost_cny": Decimal("0.1"),
+            },
+            {
+                "minute": 601,
+                "model": "model-b",
+                "cache_hit_tokens": 4,
+                "cache_miss_tokens": 0,
+                "output_tokens": 0,
+                "cost_cny": Decimal("0.2"),
+            },
+        ]
 
-        history.replace_exact_minute_usage("nayuto", {usage_day}, [], [], usage_day, 3)
+        history.replace_exact_minute_usage(
+            "nayuto", {usage_day}, [], [], usage_day, 3, model_rows=[]
+        )
         assert history.minute_usage_for_day("nayuto", usage_day) == []
         assert history.minute_cost_usage_for_day("nayuto", usage_day) == []
+        assert history.minute_model_usage_for_day("nayuto", usage_day) == []
+
+
+def test_daily_model_usage_is_seven_days_cross_month_and_keeps_decimal_cost():
+    payload = {
+        "days": [
+            {
+                "date": "2026-07-31",
+                "data": [
+                    {
+                        "model": "model-b",
+                        "usage": [
+                            {"type": "PROMPT_CACHE_HIT_TOKEN", "amount": 4},
+                            {"type": "PROMPT_CACHE_MISS_TOKEN", "amount": 3},
+                            {"type": "RESPONSE_TOKEN", "amount": 2},
+                            {"type": "cost_cny", "amount": "0.1001"},
+                        ],
+                    },
+                    {
+                        "model": "model-a",
+                        "usage": [
+                            {"type": "PROMPT_CACHE_HIT_TOKEN", "amount": 1},
+                            {"type": "PROMPT_CACHE_MISS_TOKEN", "amount": 2},
+                            {"type": "RESPONSE_TOKEN", "amount": 3},
+                            {"type": "cost_cny", "amount": "0.2002"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "date": "2026-08-01",
+                "data": [
+                    {
+                        "model": "model-a",
+                        "usage": [
+                            {"type": "RESPONSE_TOKEN", "amount": 5},
+                            {"type": "cost_cny", "amount": "0.3003"},
+                        ],
+                    }
+                ],
+            },
+        ]
+    }
+    with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+        history, "DB_PATH", Path(temp_dir) / "usage.db"
+    ):
+        history.save_usage([payload], [payload], provider="nayuto")
+        rows = history.recent_daily_model_usage("nayuto", date(2026, 8, 2), 7)
+
+    assert len(rows) == 7
+    assert rows[0]["date"] == "2026-07-27"
+    assert rows[-1]["date"] == "2026-08-02"
+    july = next(row for row in rows if row["date"] == "2026-07-31")
+    assert [item["model"] for item in july["models"]] == ["model-a", "model-b"]
+    assert july["models"][0] == {
+        "date": "2026-07-31",
+        "model": "model-a",
+        "cache_hit_tokens": 1,
+        "cache_miss_tokens": 2,
+        "output_tokens": 3,
+        "total_tokens": 6,
+        "cost_cny": Decimal("0.2002"),
+    }
+    august = next(row for row in rows if row["date"] == "2026-08-01")
+    assert august["models"][0]["cost_cny"] == Decimal("0.3003")
+
+
+def test_minute_models_are_atomic_provider_isolated_and_cleaned_with_retention():
+    usage_day = date(2026, 8, 15)
+    old_day = date(2026, 8, 12)
+    token_rows = [
+        {
+            "usage_date": usage_day,
+            "minute": 10,
+            "token_type": "RESPONSE_TOKEN",
+            "token_amount": 5,
+        }
+    ]
+    cost_rows = [{"usage_date": usage_day, "minute": 10, "cost_cny": "0.5"}]
+    model_rows = [
+        {
+            "usage_date": usage_day,
+            "minute": 10,
+            "model": "model-a",
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 5,
+            "cost_cny": "0.5",
+        }
+    ]
+    with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+        history, "DB_PATH", Path(temp_dir) / "usage.db"
+    ):
+        for provider in ("nayuto", "other"):
+            history.replace_exact_minute_usage(
+                provider,
+                {usage_day},
+                token_rows,
+                cost_rows,
+                usage_day,
+                model_rows=model_rows,
+            )
+        with pytest.raises(ValueError, match="do not match"):
+            history.replace_exact_minute_usage(
+                "nayuto",
+                {usage_day},
+                token_rows,
+                cost_rows,
+                usage_day,
+                model_rows=[{**model_rows[0], "output_tokens": 4}],
+            )
+        assert history.minute_model_usage_for_day("nayuto", usage_day)[0][
+            "output_tokens"
+        ] == 5
+
+        history.replace_exact_minute_usage(
+            "nayuto",
+            {old_day},
+            [{**token_rows[0], "usage_date": old_day}],
+            [{**cost_rows[0], "usage_date": old_day}],
+            usage_day,
+            model_rows=[{**model_rows[0], "usage_date": old_day}],
+        )
+        history.clear_expired_minute_usage("nayuto", usage_day, retention_days=1)
+        assert history.minute_model_usage_for_day("nayuto", old_day) == []
+        assert history.minute_model_usage_for_day("other", usage_day)
+        history.replace_exact_minute_usage(
+            "nayuto", {usage_day}, [], [], usage_day, model_rows=[]
+        )
+        assert history.minute_model_usage_for_day("nayuto", usage_day) == []
+        assert history.minute_model_usage_for_day("other", usage_day)
 
 
 def test_store_uses_exact_minutes_and_preserves_them_on_fetch_failures():
@@ -422,6 +654,18 @@ def test_store_uses_exact_minutes_and_preserves_them_on_fetch_failures():
             assert first.minute_cost_usage == [
                 {"minute": 0, "cost_cny": Decimal("0.0303")}
             ]
+            assert first.minute_model_usage == [
+                {
+                    "minute": 0,
+                    "model": "gpt-fixture",
+                    "cache_hit_tokens": 14,
+                    "cache_miss_tokens": 9,
+                    "output_tokens": 18,
+                    "cost_cny": Decimal("0.0303"),
+                }
+            ]
+            assert len(first.daily_model_usage) == 7
+            assert first.daily_model_usage[-1]["models"][0]["model"] == "gpt-fixture"
             assert history.minute_usage_for_day("nayuto", stale_day) == []
 
             second = TokenData._fetch_with_provider(provider, date(2026, 8, 15))
@@ -448,6 +692,8 @@ def test_store_uses_exact_minutes_and_preserves_them_on_fetch_failures():
                 assert failed.today_tokens == 41
                 assert failed.minute_usage == first.minute_usage
                 assert failed.minute_cost_usage == first.minute_cost_usage
+                assert failed.minute_model_usage == first.minute_model_usage
+                assert failed.daily_model_usage == first.daily_model_usage
     finally:
         provider.close()
         TokenData._provider_snapshots = previous_snapshots

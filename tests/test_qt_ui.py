@@ -148,6 +148,9 @@ def test_trend_uses_exactly_seven_cost_bars_with_hover_tooltip():
     APP.processEvents()
 
     assert trend.title.text() == "近 7 天使用金额"
+    assert trend.amount_button.text() == "金额趋势"
+    assert trend.model_button.text() == "模型使用"
+    assert trend.amount_button.width() == trend.model_button.width()
     assert trend._values == [0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
     bar_items = [
         item
@@ -165,14 +168,155 @@ def test_trend_uses_exactly_seven_cost_bars_with_hover_tooltip():
     assert "使用金额：¥0.60" in trend.tooltip_text(0)
 
     scene_point = trend.plot.getViewBox().mapViewToScene(QPointF(0, 0.3))
-    with patch("ui.qt_panel.QToolTip.showText") as show_tooltip:
-        trend._on_mouse_moved((scene_point,))
+    trend._on_mouse_moved((scene_point,))
 
     assert trend._hover_index == 0
     assert len(trend._series.opts["brushes"]) == 7
-    assert show_tooltip.call_count == 1
-    assert show_tooltip.call_args.args[1] == trend.tooltip_text(0)
+    assert trend.hover_tooltip.isVisible()
+    assert trend.hover_tooltip.date_label.text() == (date.today() - timedelta(days=6)).isoformat()
+    assert trend.plot.toolTip() == ""
     trend.close()
+
+
+def test_nayuto_trend_groups_all_models_with_stable_order_colors_and_tooltip():
+    current = date(2026, 8, 15)
+    model_rows = [
+        {
+            "date": (current - timedelta(days=offset)).isoformat(),
+            "models": [
+                {
+                    "model": "model-b",
+                    "cache_hit_tokens": 2,
+                    "cache_miss_tokens": 3,
+                    "output_tokens": 5,
+                    "total_tokens": 10,
+                    "cost_cny": Decimal("0.0202"),
+                },
+                {
+                    "model": "model-a",
+                    "cache_hit_tokens": 40 - offset,
+                    "cache_miss_tokens": 20,
+                    "output_tokens": 10,
+                    "total_tokens": 70 - offset,
+                    "cost_cny": Decimal("0.1001"),
+                },
+            ],
+        }
+        for offset in range(6, -1, -1)
+    ]
+    trend = TrendCard()
+    trend.set_rows(
+        [{"date": current.isoformat(), "cost_cny": Decimal("0.1203"), "tokens": 80}],
+        today=current,
+        currency="USD",
+        model_rows=model_rows,
+        model_usage_enabled=True,
+        provider_id="nayuto",
+    )
+    trend.resize(540, TOP_SECTION_HEIGHT)
+    trend.show()
+    trend.model_button.click()
+    APP.processEvents()
+
+    assert trend.title.text() == "近 7 天各模型 Token 使用量"
+    assert trend._model_order == ["model-a", "model-b"]
+    assert len(trend._values) == 14
+    assert len(trend._bar_positions) == 14
+    assert trend._bar_positions[2] - trend._bar_positions[0] == pytest.approx(1.0)
+    assert trend._series.opts["width"] < trend.BAR_WIDTH
+    first_color = trend._series.opts["brushes"][0].color()
+    assert trend._series.opts["brushes"][2].color() == first_color
+
+    tooltip = trend.tooltip_text(0)
+    expected_order = [
+        "08/09　总计",
+        "模型　model-a",
+        "输入（命中缓存）",
+        "输入（未命中缓存）",
+        "输出",
+        "缓存命中率",
+        "当日消耗金额　$0.1001",
+    ]
+    assert all(text in tooltip for text in expected_order)
+    assert [tooltip.index(text) for text in expected_order] == sorted(
+        tooltip.index(text) for text in expected_order
+    )
+    scene_point = trend.plot.getViewBox().mapViewToScene(
+        QPointF(trend._bar_positions[0], trend._values[0] / 2)
+    )
+    trend._on_mouse_moved((scene_point,))
+    assert trend.hover_tooltip.isVisible()
+    assert trend.hover_tooltip.model_label.text() == "model-a"
+    assert trend.hover_tooltip.cost_label.text() == "$0.1001"
+    assert trend.plot.toolTip() == ""
+
+    trend.amount_button.click()
+    assert trend.title.text() == "近 7 天使用金额"
+    trend.model_button.click()
+    assert trend._model_order == ["model-a", "model-b"]
+    trend.close()
+
+
+def test_nayuto_model_trend_keeps_seven_dates_and_uses_own_empty_state():
+    current = date(2026, 8, 15)
+    trend = TrendCard()
+    trend.set_rows(
+        [],
+        today=current,
+        currency="USD",
+        model_rows=[],
+        model_usage_enabled=True,
+        provider_id="nayuto",
+    )
+    trend.model_button.click()
+
+    assert trend._dates == [current - timedelta(days=offset) for offset in range(6, -1, -1)]
+    assert trend._model_order == []
+    assert trend._values == []
+    assert not trend.empty_label.isHidden()
+    assert "暂无模型用量" in trend.empty_label.text()
+    assert trend.plot.toolTip() == ""
+    trend.close()
+
+
+def test_nayuto_single_model_trend_uses_current_theme_accent():
+    controller = configure_theme(APP, "dark")
+    controller.set_appearance("dark", "#D14C2F", 82)
+    current = date(2026, 8, 15)
+    trend = TrendCard()
+    try:
+        trend.set_rows(
+            [],
+            today=current,
+            currency="USD",
+            model_rows=[
+                {
+                    "date": current.isoformat(),
+                    "models": [
+                        {
+                            "model": "gpt-5.6-terra",
+                            "cache_hit_tokens": 10,
+                            "cache_miss_tokens": 20,
+                            "output_tokens": 5,
+                            "total_tokens": 35,
+                            "cost_cny": Decimal("0.2833"),
+                        }
+                    ],
+                }
+            ],
+            model_usage_enabled=True,
+            provider_id="nayuto",
+        )
+        trend.model_button.click()
+
+        assert trend._model_order == ["gpt-5.6-terra"]
+        assert {
+            brush.color().name().upper() for brush in trend._series.opts["brushes"]
+        } == {"#D14C2F"}
+        assert "#d14c2f" in trend._legend_labels["gpt-5.6-terra"].styleSheet().lower()
+    finally:
+        controller.set_appearance("dark", DARK_THEME.accent, 100)
+        trend.close()
 
 
 def test_custom_accent_updates_trend_and_minute_bar_and_line_series():
@@ -319,6 +463,7 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     assert not panel.activity_card.isHidden()
     assert panel.activity_mode_segment.isHidden()
     assert panel.trend.title.toolTip().endswith("当天 Token 为本机会话日志估算")
+    assert panel.trend.plot.toolTip() == ""
     assert panel.activity_summary.toolTip() == "来自 Codex 账号统计，不含本机估算"
     assert panel.status_text.text() == (
         "额度/热力图/底部统计：接口数据 · 近 7 天：接口 + 今日本机估算"
@@ -810,6 +955,66 @@ def test_minute_chart_aggregates_configured_time_buckets_and_costs():
     chart.close()
 
 
+def test_minute_chart_aggregates_all_models_in_one_and_multi_minute_buckets():
+    chart = MinuteUsageChart()
+    rows = [
+        {"minute": 600, "token_type": "RESPONSE_TOKEN", "token_amount": 10},
+        {"minute": 604, "token_type": "RESPONSE_TOKEN", "token_amount": 8},
+        {"minute": 605, "token_type": "RESPONSE_TOKEN", "token_amount": 4},
+    ]
+    model_rows = [
+        {
+            "minute": 600,
+            "model": "model-b",
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 5,
+            "cost_cny": Decimal("0.01"),
+        },
+        {
+            "minute": 600,
+            "model": "model-a",
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 5,
+            "cost_cny": Decimal("0.01"),
+        },
+        {
+            "minute": 604,
+            "model": "model-a",
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 8,
+            "cost_cny": Decimal("0.02"),
+        },
+        {
+            "minute": 605,
+            "model": "model-c",
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 4,
+            "cost_cny": Decimal("0.03"),
+        },
+    ]
+    chart.set_rows(rows, "recorded", interval_minutes=5, model_rows=model_rows)
+
+    assert chart._model_names[chart._bucket_index_for_minute(600)] == [
+        "model-a",
+        "model-b",
+    ]
+    assert "模型　model-a、model-b" in chart.tooltip_text(604)
+    assert "模型　model-c" in chart.tooltip_text(605)
+    chart._show_hover(600, QPoint(120, 50))
+    assert chart.hover_tooltip.model_label.text() == "model-a、model-b"
+    assert not chart.hover_tooltip.model_row.isHidden()
+
+    chart.set_rows(rows, "recorded", interval_minutes=1)
+    assert "模型　" not in chart.tooltip_text(600)
+    chart._show_hover(600, QPoint(120, 50))
+    assert chart.hover_tooltip.model_row.isHidden()
+    chart.close()
+
+
 def test_minute_chart_arbitrary_interval_aligns_to_midnight_and_clips_last_bucket():
     chart = MinuteUsageChart()
     chart.set_rows(
@@ -1225,6 +1430,42 @@ def test_minute_chart_cost_tooltip_handles_missing_zero_and_plot_boundaries():
     chart.close()
 
 
+def test_minute_chart_model_tooltip_stays_single_line_and_keeps_cost_visible():
+    chart = MinuteUsageChart()
+    chart.resize(900, 220)
+    chart.set_rows(
+        [{"minute": 600, "token_type": "RESPONSE_TOKEN", "token_amount": 1}],
+        "recorded",
+        cost_rows=[{"minute": 600, "cost_cny": Decimal("0.2833")}],
+        currency="USD",
+        model_rows=[
+            {
+                "minute": 600,
+                "model": "gpt-5.6-terra",
+                "cache_hit_tokens": 0,
+                "cache_miss_tokens": 0,
+                "output_tokens": 1,
+            }
+        ],
+    )
+    chart.show()
+    APP.processEvents()
+
+    chart._show_hover(600, QPoint(chart.plot.width() - 1, chart.plot.height() - 1))
+    tooltip = chart.hover_tooltip
+    APP.processEvents()
+
+    assert tooltip.model_label.text() == "gpt-5.6-terra"
+    assert not tooltip.model_label.wordWrap()
+    assert tooltip.model_label.height() <= tooltip.model_label.fontMetrics().height() + 2
+    cost_bottom = tooltip.cost_label.mapTo(
+        tooltip, tooltip.cost_label.rect().bottomRight()
+    ).y()
+    assert cost_bottom < tooltip.contentsRect().bottom()
+    assert tooltip.y() + tooltip.height() <= chart.plot.height() - 6
+    chart.close()
+
+
 def test_nayuto_reuses_amount_ball_and_exact_minute_ui_with_usd_precision():
     data = TokenData(
         currency="USD",
@@ -1247,6 +1488,16 @@ def test_nayuto_reuses_amount_ball_and_exact_minute_ui_with_usd_precision():
         ],
         minute_cost_usage=[
             {"minute": 600, "cost_cny": Decimal("0.0861")}
+        ],
+        minute_model_usage=[
+            {
+                "minute": 600,
+                "model": "model-a",
+                "cache_hit_tokens": 3,
+                "cache_miss_tokens": 2,
+                "output_tokens": 5,
+                "cost_cny": Decimal("0.0861"),
+            }
         ],
         minute_usage_status="recorded",
         minute_usage_date="2026-08-15",
@@ -1285,13 +1536,129 @@ def test_nayuto_reuses_amount_ball_and_exact_minute_ui_with_usd_precision():
             1 if key == "MINUTE_USAGE_INTERVAL_MINUTES" else default
         )
         panel._set_activity_view("minute")
+        assert "模型　model-a" in panel.minute_chart.tooltip_text(600)
         assert "本分钟消耗金额　$0.0861" in panel.minute_chart.tooltip_text(600)
         panel.minute_chart._show_hover(600, QPoint(120, 50))
+        assert panel.minute_chart.hover_tooltip.model_label.text() == "model-a"
         assert panel.minute_chart.hover_tooltip.cost_label.text() == "$0.0861"
+        assert panel.trend.plot.toolTip() == ""
 
     panel.close()
     widget._closed = True
     widget.hide()
+
+
+def test_nayuto_model_views_restore_per_provider_and_history_keeps_minute_models():
+    current = date(2026, 8, 15)
+    previous = current - timedelta(days=1)
+    data = TokenData(
+        currency="USD",
+        status="ok",
+        daily_usage=[
+            {"date": previous.isoformat(), "tokens": 6, "cost_cny": Decimal("0.01")},
+            {"date": current.isoformat(), "tokens": 10, "cost_cny": Decimal("0.02")},
+        ],
+        daily_model_usage=[
+            {
+                "date": previous.isoformat(),
+                "models": [
+                    {
+                        "model": "model-history",
+                        "cache_hit_tokens": 1,
+                        "cache_miss_tokens": 2,
+                        "output_tokens": 3,
+                        "total_tokens": 6,
+                        "cost_cny": Decimal("0.01"),
+                    }
+                ],
+            },
+            {
+                "date": current.isoformat(),
+                "models": [
+                    {
+                        "model": "model-current",
+                        "cache_hit_tokens": 3,
+                        "cache_miss_tokens": 2,
+                        "output_tokens": 5,
+                        "total_tokens": 10,
+                        "cost_cny": Decimal("0.02"),
+                    }
+                ],
+            },
+        ],
+        minute_usage=[
+            {"minute": 600, "token_type": "RESPONSE_TOKEN", "token_amount": 10}
+        ],
+        minute_model_usage=[
+            {
+                "minute": 600,
+                "model": "model-current",
+                "cache_hit_tokens": 0,
+                "cache_miss_tokens": 0,
+                "output_tokens": 10,
+                "cost_cny": Decimal("0.02"),
+            }
+        ],
+        minute_usage_history={
+            previous.isoformat(): [
+                {"minute": 600, "token_type": "RESPONSE_TOKEN", "token_amount": 6}
+            ]
+        },
+        minute_model_usage_history={
+            previous.isoformat(): [
+                {
+                    "minute": 600,
+                    "model": "model-history",
+                    "cache_hit_tokens": 0,
+                    "cache_miss_tokens": 0,
+                    "output_tokens": 6,
+                    "cost_cny": Decimal("0.01"),
+                }
+            ]
+        },
+        minute_usage_status="recorded",
+        minute_usage_date=current.isoformat(),
+        minute_usage_days=[previous.isoformat(), current.isoformat()],
+        minute_usage_source="provider",
+        per_provider=[PerProviderData("nayuto", "NayutoAI", currency="USD", status="ok")],
+    )
+    panel = MainPanel()
+    with patch(
+        "ui.qt_panel.config_manager.get",
+        side_effect=lambda key, default=None: (
+            1
+            if key == "MINUTE_USAGE_INTERVAL_MINUTES"
+            else 3
+            if key == "MINUTE_USAGE_RETENTION_DAYS"
+            else default
+        ),
+    ):
+        panel.update_data(data)
+        assert not panel.trend.view_segment.isHidden()
+        panel.trend.model_button.click()
+        assert panel.trend.title.text() == "近 7 天各模型 Token 使用量"
+
+        panel.minute_activity_button.click()
+        panel.minute_previous_button.click()
+        assert "模型　model-history" in panel.minute_chart.tooltip_text(600)
+
+        other = sample_data()
+        other.per_provider = [PerProviderData("deepseek", "DeepSeek", status="ok")]
+        panel.update_data(other)
+        assert panel.trend.view_segment.isHidden()
+        assert panel.trend.title.text() == "近 7 天使用金额"
+        assert "模型　" not in panel.minute_chart.tooltip_text(600)
+
+        panel.update_data(data)
+        assert panel.trend.model_button.isChecked()
+        assert panel.trend.title.text() == "近 7 天各模型 Token 使用量"
+
+    assert panel.activity_stack.count() == 2
+    assert panel.annual_activity_button.text() == "年度活动"
+    assert panel.minute_activity_button.text() == "今日分时"
+    assert len(panel.statistics._values) == 5
+    assert panel.status_text.text()
+    panel.close()
 
 
 def test_nayuto_settings_uses_manual_bearer_capture_and_clean_display_name():

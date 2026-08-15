@@ -352,6 +352,10 @@ class RefreshTests(unittest.TestCase):
         relay = TokenData(
             currency="USD",
             today_cost_cny=1,
+            daily_model_usage=[
+                {"date": "2026-08-15", "models": [{"model": "model-a"}]}
+            ],
+            minute_model_usage=[{"minute": 1, "model": "model-a"}],
             per_provider=[PerProviderData("nayuto", "NayutoAI", currency="USD")],
         )
         widget._data = current
@@ -362,6 +366,12 @@ class RefreshTests(unittest.TestCase):
         self.assertIs(widget._data, current)
         self.assertTrue(widget._refreshing)
         self.assertIs(widget._provider_results["nayuto"], relay)
+        self.assertEqual(
+            widget._provider_results["nayuto"].minute_model_usage[0]["model"],
+            "model-a",
+        )
+        self.assertEqual(widget._data.per_provider[0].provider_id, "deepseek")
+        self.assertEqual(widget._data.daily_model_usage, [])
         widget._apply_update.assert_not_called()
 
     def test_current_provider_result_updates_interface(self):

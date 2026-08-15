@@ -119,6 +119,20 @@ def _connect() -> Iterator[sqlite3.Connection]:
                 );
                 CREATE INDEX IF NOT EXISTS idx_minute_cost_usage_provider_date
                     ON minute_cost_usage(provider, usage_date);
+                CREATE TABLE IF NOT EXISTS minute_model_usage (
+                    provider TEXT NOT NULL,
+                    usage_date TEXT NOT NULL,
+                    minute_index INTEGER NOT NULL,
+                    model TEXT NOT NULL,
+                    cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_cny TEXT NOT NULL DEFAULT '0',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, usage_date, minute_index, model)
+                );
+                CREATE INDEX IF NOT EXISTS idx_minute_model_usage_provider_date
+                    ON minute_model_usage(provider, usage_date);
                 CREATE TABLE IF NOT EXISTS minute_cost_snapshot (
                     provider TEXT NOT NULL,
                     usage_date TEXT NOT NULL,
@@ -536,6 +550,7 @@ def _delete_expired_minute_usage(
         "minute_usage",
         "minute_usage_snapshot",
         "minute_cost_usage",
+        "minute_model_usage",
         "minute_cost_snapshot",
     ):
         cursor = connection.execute(
@@ -676,6 +691,7 @@ def replace_exact_minute_usage(
     cost_rows: list[dict[str, Any]],
     current_day: date,
     retention_days: int = 3,
+    model_rows: list[dict[str, Any]] | None = None,
 ) -> str:
     """Atomically replace provider-authored minute rows for complete dates."""
 
@@ -715,6 +731,68 @@ def replace_exact_minute_usage(
         key = (date_text, minute)
         cost_totals[key] = cost_totals.get(key, Decimal("0")) + amount
 
+    model_totals: dict[tuple[str, int, str], dict[str, Any]] = {}
+    if model_rows is not None:
+        for row in model_rows:
+            raw_date = row.get("usage_date")
+            usage_date = (
+                raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
+            )
+            date_text = usage_date.isoformat()
+            minute = int(row.get("minute"))
+            model = str(row.get("model") or "unknown").strip() or "unknown"
+            hit = int(row.get("cache_hit_tokens", 0) or 0)
+            miss = int(row.get("cache_miss_tokens", 0) or 0)
+            output = int(row.get("output_tokens", 0) or 0)
+            cost = Decimal(str(row.get("cost_cny", "0")))
+            if (
+                date_text not in normalized_dates
+                or not 0 <= minute < 1440
+                or min(hit, miss, output) < 0
+                or not cost.is_finite()
+                or cost < 0
+            ):
+                raise ValueError("invalid exact minute model row")
+            values = model_totals.setdefault(
+                (date_text, minute, model),
+                {
+                    "cache_hit_tokens": 0,
+                    "cache_miss_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_cny": Decimal("0"),
+                },
+            )
+            values["cache_hit_tokens"] += hit
+            values["cache_miss_tokens"] += miss
+            values["output_tokens"] += output
+            values["cost_cny"] += cost
+
+        model_token_totals: dict[tuple[str, int, str], int] = {}
+        model_cost_totals: dict[tuple[str, int], Decimal] = {}
+        for (usage_date, minute, _model), values in model_totals.items():
+            for token_type, field in (
+                ("PROMPT_CACHE_HIT_TOKEN", "cache_hit_tokens"),
+                ("PROMPT_CACHE_MISS_TOKEN", "cache_miss_tokens"),
+                ("RESPONSE_TOKEN", "output_tokens"),
+            ):
+                key = (usage_date, minute, token_type)
+                model_token_totals[key] = model_token_totals.get(key, 0) + int(
+                    values[field]
+                )
+            cost_key = (usage_date, minute)
+            model_cost_totals[cost_key] = model_cost_totals.get(
+                cost_key, Decimal("0")
+            ) + Decimal(values["cost_cny"])
+        if any(
+            token_totals.get(key, 0) != model_token_totals.get(key, 0)
+            for key in set(token_totals) | set(model_token_totals)
+        ) or any(
+            cost_totals.get(key, Decimal("0"))
+            != model_cost_totals.get(key, Decimal("0"))
+            for key in set(cost_totals) | set(model_cost_totals)
+        ):
+            raise ValueError("exact minute model totals do not match minute totals")
+
     updated_at = datetime.now().isoformat(timespec="seconds")
     with _connect() as connection:
         cleanup_threshold, deleted_rows = _delete_expired_minute_usage(
@@ -729,6 +807,11 @@ def replace_exact_minute_usage(
                 "DELETE FROM minute_cost_usage WHERE provider = ? AND usage_date = ?",
                 (provider, usage_date),
             )
+            if model_rows is not None:
+                connection.execute(
+                    "DELETE FROM minute_model_usage WHERE provider = ? AND usage_date = ?",
+                    (provider, usage_date),
+                )
             # Exact providers do not use delta baselines. Removing any old snapshot
             # prevents a future capability change from mixing the two semantics.
             connection.execute(
@@ -754,10 +837,29 @@ def replace_exact_minute_usage(
                      VALUES (?, ?, ?, ?, ?)""",
                 (provider, usage_date, minute, str(amount), updated_at),
             )
+        for (usage_date, minute, model), values in model_totals.items():
+            connection.execute(
+                """INSERT INTO minute_model_usage
+                       (provider, usage_date, minute_index, model,
+                        cache_hit_tokens, cache_miss_tokens, output_tokens,
+                        cost_cny, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    provider,
+                    usage_date,
+                    minute,
+                    model,
+                    values["cache_hit_tokens"],
+                    values["cache_miss_tokens"],
+                    values["output_tokens"],
+                    str(values["cost_cny"]),
+                    updated_at,
+                ),
+            )
     _log_minute_usage_cleanup(
         provider, retention_days, cleanup_threshold, deleted_rows
     )
-    return "recorded" if token_totals or cost_totals else "empty"
+    return "recorded" if token_totals or cost_totals or model_totals else "empty"
 
 
 def minute_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
@@ -805,6 +907,39 @@ def minute_cost_usage_for_day(provider: str, usage_day: date) -> list[dict[str, 
     return result
 
 
+def minute_model_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
+    """读取指定日期按分钟和模型保存的服务商原始明细。"""
+    result: list[dict[str, Any]] = []
+    with _connect() as connection:
+        rows = connection.execute(
+            """SELECT minute_index, model, cache_hit_tokens, cache_miss_tokens,
+                      output_tokens, cost_cny
+                 FROM minute_model_usage
+                WHERE provider = ? AND usage_date = ?
+                ORDER BY minute_index, model""",
+            (provider, usage_day.isoformat()),
+        )
+        for minute, model, hit, miss, output, raw_cost in rows:
+            try:
+                cost = Decimal(str(raw_cost or "0"))
+            except (InvalidOperation, ValueError):
+                config_manager.logger().warning("Skipped malformed cached minute model cost")
+                continue
+            if not cost.is_finite():
+                continue
+            result.append(
+                {
+                    "minute": int(minute),
+                    "model": str(model or "unknown"),
+                    "cache_hit_tokens": int(hit or 0),
+                    "cache_miss_tokens": int(miss or 0),
+                    "output_tokens": int(output or 0),
+                    "cost_cny": cost,
+                }
+            )
+    return result
+
+
 def minute_usage_dates(provider: str) -> list[str]:
     """读取指定提供商仍保留分时缓存的日期，按日期升序返回。"""
     with _connect() as connection:
@@ -817,10 +952,12 @@ def minute_usage_dates(provider: str) -> list[str]:
                      UNION
                      SELECT usage_date FROM minute_cost_usage WHERE provider = ?
                      UNION
+                     SELECT usage_date FROM minute_model_usage WHERE provider = ?
+                     UNION
                      SELECT usage_date FROM minute_cost_snapshot WHERE provider = ?
                  )
                  ORDER BY usage_date""",
-            (provider, provider, provider, provider),
+            (provider, provider, provider, provider, provider),
         ).fetchall()
     return [str(usage_date) for (usage_date,) in rows]
 
@@ -864,6 +1001,66 @@ def recent_daily(days: int = 371, provider: str | None = None) -> list[dict[str,
             except (InvalidOperation, ValueError):
                 config_manager.logger().warning("Skipped malformed cached daily cost")
     return list(daily.values())
+
+
+def recent_daily_model_usage(
+    provider: str, current_day: date, days: int = 7
+) -> list[dict[str, Any]]:
+    """读取连续自然日内的按模型 Token 构成和十进制金额。"""
+    day_count = max(1, int(days))
+    start = current_day - timedelta(days=day_count - 1)
+    ordered_days = [start + timedelta(days=offset) for offset in range(day_count)]
+    by_day: dict[str, dict[str, dict[str, Any]]] = {
+        usage_day.isoformat(): {} for usage_day in ordered_days
+    }
+    with _connect() as connection:
+        rows = connection.execute(
+            """SELECT usage_date, model, token_type, token_amount, cost_cny
+                 FROM daily_usage
+                WHERE provider = ? AND usage_date BETWEEN ? AND ?
+                ORDER BY usage_date, model, token_type""",
+            (provider, start.isoformat(), current_day.isoformat()),
+        )
+        for usage_date, raw_model, token_type, token_amount, raw_cost in rows:
+            model = str(raw_model or "unknown")
+            values = by_day[str(usage_date)].setdefault(
+                model,
+                {
+                    "date": str(usage_date),
+                    "model": model,
+                    "cache_hit_tokens": 0,
+                    "cache_miss_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "cost_cny": Decimal("0"),
+                },
+            )
+            field = {
+                "PROMPT_CACHE_HIT_TOKEN": "cache_hit_tokens",
+                "PROMPT_CACHE_MISS_TOKEN": "cache_miss_tokens",
+                "RESPONSE_TOKEN": "output_tokens",
+            }.get(str(token_type))
+            if field:
+                amount = int(token_amount or 0)
+                values[field] += amount
+                values["total_tokens"] += amount
+            if str(token_type) == "cost_cny":
+                try:
+                    values["cost_cny"] += Decimal(str(raw_cost or "0"))
+                except (InvalidOperation, ValueError):
+                    config_manager.logger().warning(
+                        "Skipped malformed cached daily model cost"
+                    )
+    return [
+        {
+            "date": usage_day.isoformat(),
+            "models": [
+                by_day[usage_day.isoformat()][model]
+                for model in sorted(by_day[usage_day.isoformat()])
+            ],
+        }
+        for usage_day in ordered_days
+    ]
 
 
 def provider_daily_payloads(provider: str, start: date, end: date) -> list[dict[str, Any]]:
