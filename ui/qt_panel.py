@@ -62,6 +62,7 @@ from data.store import TokenData
 from ui.activity import compact_tokens
 from ui.formatting import (
     format_codex_tokens,
+    format_minute_money,
     format_money,
     format_money_axis,
     format_plan_active_until,
@@ -1114,7 +1115,7 @@ class MinuteUsageTooltip(QFrame):
         for label, value in zip(self.value_labels, values):
             label.setText(compact_tokens(value))
         self.rate_label.setText(rate)
-        self.cost_label.setText(format_money(cost_cny, currency))
+        self.cost_label.setText(format_minute_money(cost_cny, currency))
 
     def refresh_colors(self, colors: tuple[QColor, QColor, QColor]) -> None:
         for swatch, color in zip(self.swatches, colors):
@@ -1122,7 +1123,7 @@ class MinuteUsageTooltip(QFrame):
 
 
 class MinuteUsageChart(QWidget):
-    """当天 Token 差额的估算分时图；只聚合展示，原始分钟数据保持不变。"""
+    """当天 Token 分时图；只聚合展示，原始分钟数据保持不变。"""
 
     SPARSE_POINT_LIMIT = 24
     DEFAULT_VISIBLE_BUCKETS = 24
@@ -1295,7 +1296,7 @@ class MinuteUsageChart(QWidget):
         self._values = values
         self._cost_values = cost_values
         if loading and not rows:
-            self._show_state("正在刷新分时估算数据…")
+            self._show_state("正在刷新分时数据…")
             return
         if status == "baseline":
             self._show_state("已建立估算基线，下一次刷新后显示分时数据")
@@ -1304,7 +1305,7 @@ class MinuteUsageChart(QWidget):
             self._show_state("已跨日重建估算基线，下一次刷新后显示分时数据")
             return
         if status == "unavailable":
-            self._show_state("当前平台未启用估算分时数据")
+            self._show_state("当前平台未启用分时数据")
             return
         if status in {"failed", "storage_error"} and not rows:
             self._show_state("分时数据暂不可用，请刷新后重试")
@@ -1838,7 +1839,7 @@ class MinuteUsageChart(QWidget):
             f"■ 输入（未命中缓存）　{miss:,}\n"
             f"■ 输出　{output:,}\n"
             f"缓存命中率　{rate}\n"
-            f"{cost_name}　{format_money(self._cost_values[bucket_index], self._currency)}"
+            f"{cost_name}　{format_minute_money(self._cost_values[bucket_index], self._currency)}"
         )
 
     def summary_text(self) -> str:
@@ -1998,6 +1999,7 @@ class MainPanel(QFrame):
         self._minute_current_rows: list[dict] = []
         self._minute_current_cost_rows: list[dict] = []
         self._minute_current_status = "unavailable"
+        self._minute_usage_source = ""
         self._minute_usage_history: dict[str, list[dict]] = {}
         self._minute_cost_usage_history: dict[str, list[dict]] = {}
         self._minute_usage_days: list[str] = []
@@ -2407,6 +2409,7 @@ class MainPanel(QFrame):
         self._minute_current_rows = data.minute_usage
         self._minute_current_cost_rows = data.minute_cost_usage
         self._minute_current_status = data.minute_usage_status
+        self._minute_usage_source = data.minute_usage_source
         self._minute_usage_history = dict(data.minute_usage_history)
         self._minute_cost_usage_history = dict(data.minute_cost_usage_history)
         self._minute_usage_days = []
@@ -2851,6 +2854,17 @@ class MainPanel(QFrame):
         # API billing providers retain the original amount, trend and Token activity view.
         for card in (self.today_card, self.balance_card, self.month_card):
             card.detail.hide()
+        if data.minute_usage_source == "provider":
+            self.minute_estimate_label.setText("平台明细")
+            self._minute_estimate_tooltip = (
+                "来自服务商请求明细，按请求发生时间聚合 Token 与实际账单金额"
+            )
+        else:
+            self.minute_estimate_label.setText("估算")
+            self._minute_estimate_tooltip = (
+                "按刷新间隔均摊：两次成功刷新之间的累计 Token 差额，非平台原始分钟明细"
+            )
+        self.minute_estimate_label.setToolTip(self._minute_estimate_tooltip)
         self.activity_summary.setToolTip(self._minute_estimate_tooltip)
         self._set_activity_view(self._activity_view)
 

@@ -7,9 +7,10 @@ from unittest.mock import Mock, patch
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+
 from data.store import FetchError, PerProviderData, TokenData
 from deepseek_pricing import BEIJING_TIMEZONE, PricingState
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from ui.qt_panel import MainPanel
 from ui.qt_widget import (
     BACKGROUND_PROVIDER_INTERVAL_MS,
@@ -166,15 +167,17 @@ class RefreshTests(unittest.TestCase):
             patch("ui.qt_widget.config_manager.all_config", return_value=config),
             patch(
                 "ui.qt_widget.configured_provider_ids",
-                return_value=["deepseek", "mimo", "codex"],
+                return_value=["deepseek", "mimo", "codex", "nayuto"],
             ),
             patch("ui.qt_widget.config_manager.get", return_value="codex"),
         ):
             widget._periodic_background_refresh()
 
-        self.assertEqual(widget._thread_pool.start.call_count, 2)
+        self.assertEqual(widget._thread_pool.start.call_count, 3)
         tasks = [call.args[0] for call in widget._thread_pool.start.call_args_list]
-        self.assertEqual([task.provider_id for task in tasks], ["deepseek", "mimo"])
+        self.assertEqual(
+            [task.provider_id for task in tasks], ["deepseek", "mimo", "nayuto"]
+        )
         self.assertTrue(all(task._lightweight for task in tasks))
         self.assertTrue(all(task._config["MARKER"] == "captured" for task in tasks))
 
@@ -338,6 +341,28 @@ class RefreshTests(unittest.TestCase):
         self.assertTrue(widget._refreshing)
         self.assertIs(widget._provider_results["deepseek"], background)
         self.assertEqual(widget._provider_results["deepseek"].balance_cny, 1)
+
+    def test_late_nayuto_result_is_cached_without_replacing_deepseek_view(self):
+        widget = widget_stub()
+        current = TokenData(
+            currency="CNY",
+            today_cost_cny=2,
+            per_provider=[PerProviderData("deepseek", "DeepSeek")],
+        )
+        relay = TokenData(
+            currency="USD",
+            today_cost_cny=1,
+            per_provider=[PerProviderData("nayuto", "NayutoAI", currency="USD")],
+        )
+        widget._data = current
+        widget._refreshing = True
+
+        finish(widget, "nayuto", 1, relay, active_provider="deepseek")
+
+        self.assertIs(widget._data, current)
+        self.assertTrue(widget._refreshing)
+        self.assertIs(widget._provider_results["nayuto"], relay)
+        widget._apply_update.assert_not_called()
 
     def test_current_provider_result_updates_interface(self):
         widget = widget_stub()

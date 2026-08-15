@@ -11,11 +11,13 @@ SECRET_KEYS = (
     "MIMO_COOKIE",
     "MIMO_API_PLATFORM_PH",
     "MIMO_API_KEY",
+    "NAYUTO_AUTH",
 )
 OFFICIAL_HOSTS = {
     "platform.deepseek.com",
     "api.deepseek.com",
     "platform.xiaomimimo.com",
+    "nayutoai.xyz",
 }
 DEFAULT_CONFIG: dict[str, Any] = {
     "DEEPSEEK_API_KEY": "",
@@ -31,6 +33,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "MIMO_API_PLATFORM_PH": "",
     "MIMO_API_KEY": "",
     "MIMO_BASE": "https://platform.xiaomimimo.com",
+    "NAYUTO_AUTH": "",
+    "NAYUTO_BASE": "https://nayutoai.xyz",
     "CODEX_HOME": "",
     "CURSOR_GLOBAL_STORAGE": "",
     "REFRESH_INTERVAL": 60_000,

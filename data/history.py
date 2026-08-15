@@ -669,6 +669,97 @@ def save_estimated_minute_usage(
     return status
 
 
+def replace_exact_minute_usage(
+    provider: str,
+    usage_dates: set[date],
+    token_rows: list[dict[str, Any]],
+    cost_rows: list[dict[str, Any]],
+    current_day: date,
+    retention_days: int = 3,
+) -> str:
+    """Atomically replace provider-authored minute rows for complete dates."""
+
+    normalized_dates = {value.isoformat() for value in usage_dates}
+    token_totals: dict[tuple[str, int, str], int] = {}
+    for row in token_rows:
+        raw_date = row.get("usage_date")
+        usage_date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
+        date_text = usage_date.isoformat()
+        minute = int(row.get("minute"))
+        token_type = str(row.get("token_type") or "")
+        amount = int(row.get("token_amount"))
+        if (
+            date_text not in normalized_dates
+            or not 0 <= minute < 1440
+            or token_type not in MINUTE_TOKEN_TYPES
+            or amount < 0
+        ):
+            raise ValueError("invalid exact minute token row")
+        key = (date_text, minute, token_type)
+        token_totals[key] = token_totals.get(key, 0) + amount
+
+    cost_totals: dict[tuple[str, int], Decimal] = {}
+    for row in cost_rows:
+        raw_date = row.get("usage_date")
+        usage_date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
+        date_text = usage_date.isoformat()
+        minute = int(row.get("minute"))
+        amount = Decimal(str(row.get("cost_cny")))
+        if (
+            date_text not in normalized_dates
+            or not 0 <= minute < 1440
+            or not amount.is_finite()
+            or amount < 0
+        ):
+            raise ValueError("invalid exact minute cost row")
+        key = (date_text, minute)
+        cost_totals[key] = cost_totals.get(key, Decimal("0")) + amount
+
+    updated_at = datetime.now().isoformat(timespec="seconds")
+    with _connect() as connection:
+        cleanup_threshold, deleted_rows = _delete_expired_minute_usage(
+            connection, provider, current_day, retention_days
+        )
+        for usage_date in normalized_dates:
+            connection.execute(
+                "DELETE FROM minute_usage WHERE provider = ? AND usage_date = ?",
+                (provider, usage_date),
+            )
+            connection.execute(
+                "DELETE FROM minute_cost_usage WHERE provider = ? AND usage_date = ?",
+                (provider, usage_date),
+            )
+            # Exact providers do not use delta baselines. Removing any old snapshot
+            # prevents a future capability change from mixing the two semantics.
+            connection.execute(
+                "DELETE FROM minute_usage_snapshot WHERE provider = ? AND usage_date = ?",
+                (provider, usage_date),
+            )
+            connection.execute(
+                "DELETE FROM minute_cost_snapshot WHERE provider = ? AND usage_date = ?",
+                (provider, usage_date),
+            )
+        for (usage_date, minute, token_type), amount in token_totals.items():
+            if amount:
+                connection.execute(
+                    """INSERT INTO minute_usage
+                           (provider, usage_date, minute_index, token_type, token_amount, updated_at)
+                         VALUES (?, ?, ?, ?, ?, ?)""",
+                    (provider, usage_date, minute, token_type, amount, updated_at),
+                )
+        for (usage_date, minute), amount in cost_totals.items():
+            connection.execute(
+                """INSERT INTO minute_cost_usage
+                       (provider, usage_date, minute_index, cost_cny, updated_at)
+                     VALUES (?, ?, ?, ?, ?)""",
+                (provider, usage_date, minute, str(amount), updated_at),
+            )
+    _log_minute_usage_cleanup(
+        provider, retention_days, cleanup_threshold, deleted_rows
+    )
+    return "recorded" if token_totals or cost_totals else "empty"
+
+
 def minute_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
     """读取指定日期的临时估算数据；稀疏行由界面补齐为 1,440 个分钟点。"""
     result: list[dict[str, Any]] = []

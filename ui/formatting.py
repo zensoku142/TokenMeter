@@ -24,6 +24,16 @@ def format_money(value: float | Decimal | None, currency: str = "CNY") -> str:
     return f"{_currency_prefix(currency)}{amount:.{decimals}f}"
 
 
+def format_minute_money(
+    value: float | Decimal | None, currency: str = "CNY"
+) -> str:
+    if value is None:
+        return "--"
+    if str(currency or "").strip().upper() == "USD":
+        return f"${Decimal(str(value)):.4f}"
+    return format_money(value, currency)
+
+
 def format_token_axis(value: float) -> str:
     return compact_tokens(int(round(value)))
 

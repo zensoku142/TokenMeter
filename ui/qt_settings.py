@@ -14,12 +14,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Union
 
-from PySide6.QtCore import QSignalBlocker, QThread, QTime, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, QThread, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QColorDialog,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -39,11 +39,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from api.providers import PROVIDERS, list_providers
+from api.providers.base import FetchError
 from config import runtime as config_manager
 from core.autostart import AutostartError, set_autostart_enabled
 from core.identity import APP_DISPLAY_NAME, GITHUB_REPOSITORY_URL
-from api.providers import PROVIDERS, list_providers
-from api.providers.base import FetchError
 from data.store import TokenData
 from ui.qt_theme import DARK_THEME, LIGHT_THEME, theme_controller
 from ui.qt_update import AppUpdateController
@@ -92,7 +92,12 @@ class _CookieAcquireWorker(QThread):
 
     def run(self) -> None:
         try:
-            cookie = self._provider_cls.acquire_cookie_via_chrome(self._stop_event)
+            acquire = getattr(
+                self._provider_cls, "acquire_credentials_via_chrome", None
+            )
+            if not callable(acquire):
+                acquire = self._provider_cls.acquire_cookie_via_chrome
+            cookie = acquire(self._stop_event)
         except RuntimeError as exc:
             self.error.emit(self._provider_cls.describe_acquire_error(exc))
             return
@@ -137,6 +142,8 @@ class SettingsWindow(QDialog):
         self._worker: ConnectionWorker | None = None
         self._cookie_acquire_worker: "_CookieAcquireWorker | None" = None
         self._cookie_acquire_provider_id = ""
+        self._credential_acquire_label = "Cookie"
+        self._credential_acquire_automatic = False
         self._rendered_provider_id = ""
         self._provider_widgets: dict[str, Union[QLineEdit, QPlainTextEdit]] = {}
         self._provider_drafts: dict[str, dict[str, str]] = {}
@@ -173,7 +180,12 @@ class SettingsWindow(QDialog):
         picker_label.setStyleSheet("font-size: 13px; font-weight: 500;")
         self.provider_combo = QComboBox()
         for provider_id, provider_name in list_providers():
-            self.provider_combo.addItem(f"{provider_name} ({provider_id})", provider_id)
+            display_name = (
+                provider_name
+                if provider_id == "nayuto"
+                else f"{provider_name} ({provider_id})"
+            )
+            self.provider_combo.addItem(display_name, provider_id)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         picker_row.addWidget(picker_label)
         picker_row.addWidget(self.provider_combo, 1)
@@ -670,7 +682,10 @@ class SettingsWindow(QDialog):
 
     def _begin_cookie_acquire(self) -> None:
         provider_cls = PROVIDERS.get(self._rendered_provider_id)
-        if not provider_cls or not getattr(provider_cls, "supports_cookie_acquisition", False):
+        if not provider_cls or not (
+            getattr(provider_cls, "supports_cookie_acquisition", False)
+            or getattr(provider_cls, "supports_browser_credential_acquisition", False)
+        ):
             return
         if self._cookie_acquire_worker is not None:
             return
@@ -691,18 +706,27 @@ class SettingsWindow(QDialog):
 
         def _after_browser_open() -> None:
             if self._cookie_acquire_worker is worker and worker.isRunning():
-                self._cookie_finish_button.setVisible(True)
-                self._cookie_finish_button.setEnabled(True)
-                self._cookie_acquire_status.setText(
-                    "浏览器已打开，请登录后回到本窗口点击“完成采集”。"
+                self._cookie_finish_button.setVisible(
+                    not self._credential_acquire_automatic
                 )
+                if self._credential_acquire_automatic:
+                    self._cookie_acquire_status.setText(
+                        f"浏览器已打开，请登录；程序将自动捕获并验证 {self._credential_acquire_label}。"
+                    )
+                else:
+                    self._cookie_finish_button.setEnabled(True)
+                    self._cookie_acquire_status.setText(
+                        "浏览器已打开，请登录后回到本窗口点击“完成采集”。"
+                    )
 
         QTimer.singleShot(500, _after_browser_open)
 
     def _finish_cookie_acquire(self) -> None:
         if self._cookie_acquire_worker is None:
             return
-        self._cookie_acquire_status.setText("正在读取 Cookie…")
+        self._cookie_acquire_status.setText(
+            f"正在读取 {self._credential_acquire_label}…"
+        )
         self._cookie_acquire_worker.stop_and_collect()
 
     def _apply_acquired_cookie(
@@ -718,7 +742,12 @@ class SettingsWindow(QDialog):
             # tests; worker-originated results carry explicit validation state.
             acquired = _AcquiredCookie(acquired)
         cookie_text = acquired.cookie_text
-        values = provider_cls.acquired_cookie_values(cookie_text)
+        mapper = getattr(provider_cls, "acquired_credential_values", None)
+        values = (
+            mapper(cookie_text)
+            if callable(mapper)
+            else provider_cls.acquired_cookie_values(cookie_text)
+        )
         if not values:
             return
         if not acquired.direct_usable:
@@ -726,7 +755,9 @@ class SettingsWindow(QDialog):
             # Do not replace a usable persisted Cookie with a value that requests
             # cannot replay; the provider will use the retained browser instead.
             self._cookie_acquire_button.setEnabled(True)
-            self._cookie_acquire_button.setText("一键获取 Cookie")
+            self._cookie_acquire_button.setText(
+                f"一键获取 {self._credential_acquire_label}"
+            )
             self._cookie_finish_button.setVisible(False)
             self._cookie_acquire_status.setText(
                 "专用浏览器会话已验证；Cookie 无法由程序直连，当前凭据未覆盖。"
@@ -734,7 +765,29 @@ class SettingsWindow(QDialog):
             return
         # Save the fresh browser session immediately so changing tabs cannot restore stale drafts.
         self._provider_drafts.setdefault(provider_id, {}).update(values)
+        saved_automatically = False
+        if bool(getattr(provider_cls, "credential_acquisition_automatic", False)):
+            secure_values = {
+                f"{provider_id.upper()}_{field.upper()}": value
+                for field, value in values.items()
+            }
+            try:
+                config_manager.save_config(secure_values)
+            except Exception:
+                config_manager.logger().error(
+                    "Browser credential could not be saved: provider=%s",
+                    provider_id,
+                )
+                if self._rendered_provider_id == provider_id:
+                    self._cookie_acquire_button.setEnabled(True)
+                    self._cookie_acquire_status.setText(
+                        f"{self._credential_acquire_label} 已验证，但安全保存失败。"
+                    )
+                return
+            saved_automatically = True
         if self._rendered_provider_id != provider_id:
+            if saved_automatically and self.on_saved:
+                self.on_saved()
             return
         for field, value in values.items():
             widget = self._provider_widgets.get(field)
@@ -743,9 +796,17 @@ class SettingsWindow(QDialog):
             elif isinstance(widget, QLineEdit):
                 widget.setText(value)
         self._cookie_acquire_button.setEnabled(True)
-        self._cookie_acquire_button.setText("一键获取 Cookie")
+        self._cookie_acquire_button.setText(
+            f"一键获取 {self._credential_acquire_label}"
+        )
         self._cookie_finish_button.setVisible(False)
-        self._cookie_acquire_status.setText("Cookie 已自动填入，请保存设置。")
+        self._cookie_acquire_status.setText(
+            f"{self._credential_acquire_label} 已验证并安全保存。"
+            if saved_automatically
+            else f"{self._credential_acquire_label} 已自动填入，请保存设置。"
+        )
+        if saved_automatically and self.on_saved:
+            self.on_saved()
 
     def sync_persisted_cookie(self, provider_id: str, cookie_text: str) -> None:
         """Keep an open settings draft aligned with an externally renewed cookie."""
@@ -771,7 +832,9 @@ class SettingsWindow(QDialog):
     def _cookie_acquire_failed(self, message: str) -> None:
         if self._rendered_provider_id == getattr(self, "_cookie_acquire_provider_id", ""):
             self._cookie_acquire_button.setEnabled(True)
-            self._cookie_acquire_button.setText("重试获取 Cookie")
+            self._cookie_acquire_button.setText(
+                f"重试获取 {self._credential_acquire_label}"
+            )
             self._cookie_finish_button.setVisible(False)
             self._cookie_acquire_status.setText(str(message))
         config_manager.logger().warning("cookie acquire failed: %s", str(message))
@@ -860,8 +923,26 @@ class SettingsWindow(QDialog):
                 edit.setText(initial)
             self._provider_widgets[field] = edit
             self.credentials_layout.addWidget(row_widget)
-            if field == "COOKIE" and getattr(provider_cls, "supports_cookie_acquisition", False):
-                self._add_cookie_acquire_row(provider_instance.name)
+            supports_cookie = (
+                field == "COOKIE"
+                and getattr(provider_cls, "supports_cookie_acquisition", False)
+            )
+            supports_credential = (
+                bool(meta.get("browser_acquisition"))
+                and getattr(
+                    provider_cls, "supports_browser_credential_acquisition", False
+                )
+            )
+            if supports_cookie or supports_credential:
+                self._add_cookie_acquire_row(
+                    provider_instance.name,
+                    str(getattr(provider_cls, "credential_acquisition_label", "Cookie")),
+                    bool(
+                        getattr(
+                            provider_cls, "credential_acquisition_automatic", False
+                        )
+                    ),
+                )
         # 小米 MiMo：若 Cookie 中已含 ``api-platform_ph`` 则自动回填，
         # 避免用户再去 URL 里复制一次；若用户此前已经填写过
         # ``api-platform_ph`` 或 cookie 里没有，则保持原样。
@@ -890,18 +971,26 @@ class SettingsWindow(QDialog):
         self.deepseek_peak_pricing_card.setVisible(provider_id == "deepseek")
         self._sync_window_size()
 
-    def _add_cookie_acquire_row(self, provider_name: str) -> None:
+    def _add_cookie_acquire_row(
+        self, provider_name: str, credential_label: str = "Cookie", automatic: bool = False
+    ) -> None:
+        self._credential_acquire_label = credential_label
+        self._credential_acquire_automatic = automatic
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 2, 0, 2)
         layout.setSpacing(8)
-        self._cookie_acquire_button = QPushButton("一键获取 Cookie")
-        self._cookie_acquire_button.setToolTip(f"打开浏览器登录 {provider_name} 后读取 Cookie")
+        self._cookie_acquire_button = QPushButton(f"一键获取 {credential_label}")
+        self._cookie_acquire_button.setToolTip(
+            f"打开浏览器登录 {provider_name} 后读取 {credential_label}"
+        )
         self._cookie_acquire_button.clicked.connect(self._begin_cookie_acquire)
         self._cookie_finish_button = QPushButton("完成采集")
         self._cookie_finish_button.setVisible(False)
         self._cookie_finish_button.clicked.connect(self._finish_cookie_acquire)
-        self._cookie_acquire_status = QLabel("通过独立浏览器登录后，可将 Cookie 自动填回此处。")
+        self._cookie_acquire_status = QLabel(
+            f"通过独立浏览器登录后，可将 {credential_label} 自动填回此处。"
+        )
         self._cookie_acquire_status.setWordWrap(True)
         self._cookie_acquire_status.setProperty("tone", "muted")
         self._cookie_acquire_status.setStyleSheet("font-size: 12px;")

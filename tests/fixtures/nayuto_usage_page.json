@@ -1,0 +1,59 @@
+{
+  "items": [
+    {
+      "id": 9001,
+      "request_id": "client:fixture-request-001",
+      "api_key_id": 6001,
+      "group_id": 10,
+      "model": "gpt-fixture",
+      "total_cost": 0.0067333333,
+      "actual_cost": 0.0101,
+      "duration_ms": 1200,
+      "input_tokens": 2,
+      "output_tokens": 5,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 3,
+      "total_tokens": 10,
+      "status": "completed",
+      "created_at": "2026-08-14T16:00:30.000Z"
+    },
+    {
+      "id": 9002,
+      "request_id": "",
+      "api_key_id": 6001,
+      "group_id": 10,
+      "model": "gpt-fixture",
+      "total_cost": 0.0134666667,
+      "actual_cost": 0.0202,
+      "duration_ms": 1300,
+      "input_tokens": 7,
+      "output_tokens": 13,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 11,
+      "total_tokens": 31,
+      "status": "failed",
+      "created_at": "2026-08-14T16:00:45.000Z"
+    },
+    {
+      "id": 9003,
+      "request_id": "client:fixture-request-003",
+      "api_key_id": 6001,
+      "group_id": 10,
+      "model": "gpt-fixture",
+      "total_cost": 0.0202,
+      "actual_cost": 0.0303,
+      "duration_ms": 1400,
+      "input_tokens": 17,
+      "output_tokens": 19,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 23,
+      "total_tokens": 59,
+      "status": "completed",
+      "created_at": "2026-08-15T16:00:00.000Z"
+    }
+  ],
+  "total": 3,
+  "filtered_cost": 0.0606,
+  "page": 1,
+  "page_size": 50
+}

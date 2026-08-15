@@ -10,7 +10,7 @@ os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QDate, QEvent, QPoint, QPointF, QRectF, QSize, QTime, Qt
+from PySide6.QtCore import QDate, QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTime
 from PySide6.QtGui import QEnterEvent, QKeyEvent, QPainterPath
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -19,33 +19,33 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QToolButton,
     QWidget,
-    QMessageBox,
 )
 
-from app_update import CheckResult, ReleaseAsset, ReleaseInfo, SemVer
-from api.providers.base import QuotaMetric, QuotaWindow
 import config_manager
+from api.providers.base import QuotaMetric, QuotaWindow
+from app_update import CheckResult, ReleaseAsset, ReleaseInfo, SemVer
 from data.store import PerProviderData, TokenData
 from ui.geometry import WorkArea
 from ui.qt_ball import FloatingUsageBall, LiquidSurfaceState
 from ui.qt_panel import (
+    ACTIVITY_SECTION_HEIGHT,
     ANNUAL_ACTIVITY_SECTION_HEIGHT,
     ANNUAL_PANEL_HEIGHT,
-    ACTIVITY_SECTION_HEIGHT,
     HEADER_HEIGHT,
     PANEL_HEIGHT,
     PANEL_MAX_WIDTH,
     PANEL_MIN_WIDTH,
-    MinuteDateEdit,
     STATISTICS_SECTION_HEIGHT,
     STATUS_SECTION_HEIGHT,
     TOP_SECTION_HEIGHT,
     MainPanel,
+    MinuteDateEdit,
     MinuteUsageChart,
     StatisticsCard,
     TrendCard,
@@ -59,7 +59,6 @@ from ui.qt_settings import SettingsWindow
 from ui.qt_theme import DARK_THEME, LIGHT_THEME, configure_theme, current_theme
 from ui.qt_update import AppUpdateController, UpdatePromptDialog
 from ui.qt_widget import FloatingWidget
-
 
 APP = QApplication.instance() or QApplication([])
 configure_theme(APP, "dark")
@@ -289,9 +288,9 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.provider_quick_combo.showPopup()
     APP.processEvents()
     popup = panel.provider_quick_combo.view().window()
-    assert popup.size() == QSize(132, 174)
-    assert popup.minimumSize() == QSize(132, 174)
-    assert popup.maximumSize() == QSize(132, 174)
+    assert popup.size() == QSize(132, 208)
+    assert popup.minimumSize() == QSize(132, 208)
+    assert popup.maximumSize() == QSize(132, 208)
     assert popup.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert popup.frameShape() == QFrame.Shape.NoFrame
@@ -378,7 +377,7 @@ def test_cursor_uses_existing_quota_panel_positions_and_empty_activity_states():
     panel = MainPanel()
     panel.update_data(data)
 
-    assert panel.provider_quick_combo.count() == 4
+    assert panel.provider_quick_combo.count() == 5
     assert panel.provider_quick_combo.currentData() == "cursor"
     assert panel.provider_quick_combo.size() == QSize(132, 28)
     assert panel.today_card.title_label.text() == "每月额度"
@@ -1224,6 +1223,114 @@ def test_minute_chart_cost_tooltip_handles_missing_zero_and_plot_boundaries():
     assert tooltip.x() + tooltip.width() <= chart.plot.width() - 6
     assert 6 <= tooltip.y() <= chart.plot.height() - tooltip.height() - 6
     chart.close()
+
+
+def test_nayuto_reuses_amount_ball_and_exact_minute_ui_with_usd_precision():
+    data = TokenData(
+        currency="USD",
+        today_cost_cny=0.0861,
+        balance_cny=9.0961378,
+        today_tokens=10,
+        status="ok",
+        minute_usage=[
+            {
+                "minute": 600,
+                "token_type": "PROMPT_CACHE_HIT_TOKEN",
+                "token_amount": 3,
+            },
+            {
+                "minute": 600,
+                "token_type": "PROMPT_CACHE_MISS_TOKEN",
+                "token_amount": 2,
+            },
+            {"minute": 600, "token_type": "RESPONSE_TOKEN", "token_amount": 5},
+        ],
+        minute_cost_usage=[
+            {"minute": 600, "cost_cny": Decimal("0.0861")}
+        ],
+        minute_usage_status="recorded",
+        minute_usage_date="2026-08-15",
+        minute_usage_days=["2026-08-15"],
+        minute_usage_source="provider",
+        per_provider=[
+            PerProviderData(
+                "nayuto",
+                "NayutoAI",
+                currency="USD",
+                today_cost_cny=0.0861,
+                balance_cny=9.0961378,
+                status="ok",
+            )
+        ],
+    )
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+        widget._data = data
+        widget._refreshing = False
+        widget._apply_update()
+
+    assert widget.ball._quota_mode is False
+    assert widget.ball._primary_label == "今日使用"
+    assert widget.ball._secondary_label == "余额"
+    assert widget.ball._today == "$0.09"
+    assert widget.ball._balance == "$9.10"
+
+    panel = MainPanel()
+    panel.update_data(data)
+    assert panel.provider_quick_combo.findText("NayutoAI") >= 0
+    assert panel.minute_estimate_label.text() == "平台明细"
+    assert "服务商请求明细" in panel.minute_estimate_label.toolTip()
+    with patch("ui.qt_panel.config_manager.get") as get_config:
+        get_config.side_effect = lambda key, default=None: (
+            1 if key == "MINUTE_USAGE_INTERVAL_MINUTES" else default
+        )
+        panel._set_activity_view("minute")
+        assert "本分钟消耗金额　$0.0861" in panel.minute_chart.tooltip_text(600)
+        panel.minute_chart._show_hover(600, QPoint(120, 50))
+        assert panel.minute_chart.hover_tooltip.cost_label.text() == "$0.0861"
+
+    panel.close()
+    widget._closed = True
+    widget.hide()
+
+
+def test_nayuto_settings_uses_manual_bearer_capture_and_clean_display_name():
+    values = {
+        **config_manager.all_config(),
+        "ACTIVE_PROVIDER": "nayuto",
+        "NAYUTO_AUTH": "",
+    }
+    saved = Mock()
+    refreshed = Mock()
+    with (
+        patch("ui.qt_settings.config_manager.load_config", return_value=values),
+        patch("ui.qt_settings.config_manager.all_config", return_value=values),
+        patch("ui.qt_settings.config_manager.save_config", saved),
+    ):
+        window = SettingsWindow(on_saved=refreshed)
+        assert window.provider_combo.currentText() == "NayutoAI"
+        assert window._cookie_acquire_button.text() == "一键获取 Bearer"
+        assert window._credential_acquire_automatic is False
+
+        worker = Mock()
+        window._cookie_acquire_worker = worker
+        window._finish_cookie_acquire()
+        assert window._cookie_acquire_status.text() == "正在读取 Bearer…"
+        worker.stop_and_collect.assert_called_once_with()
+        window._cookie_acquire_worker = None
+        window._cookie_acquire_provider_id = "nayuto"
+        window._cookie_acquire_failed("预期的采集失败")
+        assert window._cookie_acquire_button.text() == "重试获取 Bearer"
+
+        window._apply_acquired_cookie("nayuto", "Bearer synthetic-captured")
+    assert window._provider_widgets["AUTH"].text() == "Bearer synthetic-captured"
+    assert window._provider_drafts["nayuto"] == {
+        "AUTH": "Bearer synthetic-captured"
+    }
+    saved.assert_not_called()
+    refreshed.assert_not_called()
+    assert window._cookie_acquire_status.text() == "Bearer 已自动填入，请保存设置。"
+    window.close()
 
 
 def test_minute_date_edit_uses_three_segments_and_only_date_button_opens_popup():
