@@ -60,6 +60,7 @@ from core.identity import APP_DISPLAY_NAME
 from data.store import TokenData
 from ui.activity import compact_tokens
 from ui.formatting import (
+    format_codex_reset_time,
     format_codex_tokens,
     format_minute_money,
     format_money,
@@ -3229,9 +3230,14 @@ class MainPanel(QFrame):
                 if not (provider_id == "codex" and is_codex_spark_quota(window.title))
             ]
             for window in visible_windows[:3]:
+                reset_text = (
+                    format_codex_reset_time(window.resets_at)
+                    if provider_id == "codex"
+                    else format_reset_countdown(window.resets_at)
+                )
                 detail_parts = [
                     f"剩余 {100 - window.used_percent:.0f}%",
-                    format_reset_countdown(window.resets_at),
+                    reset_text,
                 ]
                 if window.detail:
                     detail_parts.append(window.detail)

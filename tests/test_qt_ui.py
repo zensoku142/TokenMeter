@@ -49,6 +49,7 @@ from ui.qt_panel import (
     MinuteUsageChart,
     StatisticsCard,
     TrendCard,
+    format_codex_reset_time,
     format_codex_tokens,
     format_money,
     format_money_axis,
@@ -387,7 +388,7 @@ def test_money_format_uses_provider_native_currency():
 def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel = MainPanel()
     data = sample_data()
-    reset = datetime.now(timezone.utc) + timedelta(hours=2)
+    reset = datetime(2026, 8, 20, 3, 58, tzinfo=timezone.utc)
     data.quota_windows = [
         QuotaWindow("codex-weekly", "每周额度", 25, resets_at=reset),
     ]
@@ -447,7 +448,7 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     assert panel.today_card.value.text() == "已用 25%"
     assert not panel.today_card.detail.isHidden()
     assert "剩余 75%" in panel.today_card.detail.text()
-    assert "后重置" in panel.today_card.detail.text()
+    assert "8月20日 11:58重置" in panel.today_card.detail.text()
     assert panel.balance_card.title_label.text() == "可用 Credits"
     assert panel.balance_card.value.text() == "12.5"
     assert panel.month_card.title_label.text() == "订阅套餐"
@@ -761,6 +762,14 @@ def test_reset_countdown_is_timezone_safe_and_readable():
     assert format_reset_countdown(now + timedelta(minutes=45), now) == "45 分钟后重置"
 
 
+def test_codex_reset_time_uses_shanghai_month_day_hour_and_minute():
+    reset = datetime(2026, 8, 20, 3, 58, tzinfo=timezone.utc)
+
+    assert format_codex_reset_time(reset) == "8月20日 11:58重置"
+    assert format_codex_reset_time(reset, compact=True) == "8月20日11:58"
+    assert format_codex_reset_time(None) == "重置时间未知"
+
+
 def test_codex_ball_never_falls_back_to_currency_when_quota_is_unavailable():
     data = TokenData(
         status="partial",
@@ -782,7 +791,7 @@ def test_codex_ball_never_falls_back_to_currency_when_quota_is_unavailable():
 
 
 def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
-    reset = datetime.now(timezone.utc) + timedelta(days=2, hours=8)
+    reset = datetime(2026, 8, 20, 3, 58, tzinfo=timezone.utc)
     window = QuotaWindow("codex-weekly", "每周额度", 25, resets_at=reset)
     data = TokenData(
         status="ok",
@@ -800,8 +809,7 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     assert widget.ball._quota_mode
     assert widget.ball._quota_remaining == 75
     assert widget.ball._quota_title == "周额度"
-    assert "天" in widget.ball._quota_reset_text
-    assert "小时后重置" in widget.ball._quota_reset_text
+    assert widget.ball._quota_reset_text == "8月20日11:58"
     assert widget.ball.accessibleDescription() == "75%"
 
     widget._data = sample_data()
