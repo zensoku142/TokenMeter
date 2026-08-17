@@ -64,14 +64,14 @@ def validate_value(key: str, value: Any) -> Any:
         if not isinstance(value, (list, tuple)):
             raise ValueError(f"{key} 必须是数据来源列表")
         choices = set(meta["choices"])
-        normalized: list[str] = []
+        normalized_providers: list[str] = []
         for item in value:
             provider_id = str(item).strip().lower()
             if provider_id not in choices:
                 raise ValueError(f"{key} 包含未知数据来源: {provider_id}")
-            if provider_id not in normalized:
-                normalized.append(provider_id)
-        return normalized
+            if provider_id not in normalized_providers:
+                normalized_providers.append(provider_id)
+        return normalized_providers
     if kind == "time":
         return parse_time_text(value).strftime("%H:%M")
     return str(value)
