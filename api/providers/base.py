@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -39,6 +39,20 @@ class ProviderSummary:
     month_cost: Decimal | None = None
     month_tokens: int = 0
     remaining_tokens: int = 0
+    today_cost: Decimal | None = None
+    today_tokens: int | None = None
+    total_cost: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class ExactMinuteUsage:
+    """Provider-normalized request-level usage for exact minute persistence."""
+
+    usage_dates: tuple[date, ...] = ()
+    token_rows: tuple[dict[str, Any], ...] = ()
+    cost_rows: tuple[dict[str, Any], ...] = ()
+    complete_months: tuple[tuple[int, int], ...] = ()
+    model_rows: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -118,7 +132,10 @@ class Provider:
     supports_daily_usage = False
     supports_cost = False
     supports_estimated_minute_usage = False
+    supports_exact_minute_usage = False
+    supports_model_usage = False
     supports_cookie_acquisition = False
+    supports_browser_credential_acquisition = False
     supports_subscription_quota = False
     credential_fields: dict[str, dict[str, Any]] = {}
 
@@ -163,3 +180,8 @@ class Provider:
         self, months: list[tuple[int, int]]
     ) -> tuple[list[dict[str, Any]], list[FetchError]]:
         return [], []
+
+    def exact_minute_usage(self) -> ExactMinuteUsage | None:
+        """Return the exact-minute snapshot produced by the latest payload fetch."""
+
+        return None

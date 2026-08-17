@@ -23,18 +23,18 @@
 
 <p align="center">
   <strong>Windows AI 编程订阅额度、Token 用量与余额监控工具</strong><br>
-  <sub>Codex Subscription Quota, DeepSeek & MiMo Token Usage Monitor.</sub>
+  <sub>Codex & Cursor Subscription Quota, DeepSeek, MiMo & NayutoAI Token Usage Monitor.</sub>
 </p>
 
 <p align="center">
   <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter 产品界面概览" width="960">
 </p>
 
-TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它以类似 [CodexBar](https://github.com/steipete/CodexBar) 的方式显示 Codex 订阅额度、剩余比例、重置倒计时和账号 Token 活动；DeepSeek 与 Xiaomi MiMo 继续展示 Token、费用、余额和历史趋势。
+TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它显示 Codex 与 Cursor 订阅额度、剩余比例和重置倒计时，并为 DeepSeek、Xiaomi MiMo 与 NayutoAI 展示 Token、费用、余额和历史趋势。
 
 ## 功能
 
-- 首期只支持 Codex、DeepSeek 与 Xiaomi MiMo，平台缓存互不混用；其他已配置平台会在后台按分钟刷新，切换 Provider 时优先展示最近缓存。
+- 支持 Codex、Cursor、DeepSeek、Xiaomi MiMo 与 NayutoAI，平台缓存互不混用；默认只刷新当前数据源，可在设置中勾选需要同时后台获取的其他平台。
 - 主面板通过与深浅主题一致的紧凑下拉菜单切换 Provider，当前平台有明确选中标记；订阅平台展示已用/剩余比例和重置倒计时，API 平台动态展示原生币种金额。
 - 悬浮球和系统托盘常驻；Codex 以深浅主题水球显示周额度水位、剩余百分比和重置倒计时，DeepSeek/MiMo 保留金额视图；鼠标悬停在悬浮球上时可通过滚轮调整大小，贴边后仍保留清晰的唤出区域。
 - 提供浅色、深色及跟随 Windows 的主题；浅色和深色主题可分别设置主色与 70%–100% 面板透明度，文字和控件保持清晰。
@@ -50,7 +50,7 @@ TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它以类�
 ## 系统要求
 
 - Windows 10 或 Windows 11；源码运行需要 Python 3.11+。
-- 至少一个受支持平台账户；Codex 复用本机 CLI 登录，DeepSeek/MiMo 使用原有平台凭据。
+- 至少一个受支持平台账户；Codex 与 Cursor 可读取本机登录数据，DeepSeek、MiMo 与 NayutoAI 使用各自平台凭据。
 - DeepSeek API Key 可选，用于官方余额接口。
 
 > [!IMPORTANT]
@@ -87,7 +87,7 @@ python -m pip install -r requirements-build.txt
 ## 首次配置
 
 1. 启动程序并点击悬浮球展开面板。
-2. 打开“设置”，选择 Codex、DeepSeek 或 Xiaomi MiMo。
+2. 打开“设置”，选择 Codex、Cursor、DeepSeek、Xiaomi MiMo 或 NayutoAI。
 3. Codex 默认读取本机 CLI 登录，仅在使用非默认位置时点击“选择…”指定 Codex 目录；DeepSeek 填写 API Key/控制台凭据；MiMo 可点击“一键获取 MiMo Cookie”。
 4. 保存设置并刷新。默认刷新间隔为 60 秒。
 5. 可在“设置 → 运行行为”调整主题主色、面板透明度、贴边隐藏、面板自动收起及开机自启。
@@ -159,7 +159,7 @@ TokenMeter/
 
 ## 版本与 Release
 
-当前版本：`1.12.0`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+当前版本：`1.13.0`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 2.0 的 Provider 能力边界、分批计划和已执行基础见 [TokenMeter 2.0 路线图](docs/V2_ROADMAP.md)。
 

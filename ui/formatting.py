@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from math import ceil
 
 from ui.activity import compact_tokens
+
+_SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def _currency_prefix(currency: str) -> str:
@@ -22,6 +24,16 @@ def format_money(value: float | Decimal | None, currency: str = "CNY") -> str:
     amount = float(value)
     decimals = 4 if 0 < abs(amount) < 0.01 else 2
     return f"{_currency_prefix(currency)}{amount:.{decimals}f}"
+
+
+def format_minute_money(
+    value: float | Decimal | None, currency: str = "CNY"
+) -> str:
+    if value is None:
+        return "--"
+    if str(currency or "").strip().upper() == "USD":
+        return f"${Decimal(str(value)):.4f}"
+    return format_money(value, currency)
 
 
 def format_token_axis(value: float) -> str:
@@ -64,6 +76,17 @@ def format_reset_countdown(value: datetime | None, now: datetime | None = None) 
     if hours:
         return f"{hours} 小时 {minutes} 分钟后重置"
     return f"{minutes} 分钟后重置"
+
+
+def format_codex_reset_time(value: datetime | None, *, compact: bool = False) -> str:
+    if value is None:
+        return "重置时间未知"
+    local_value = (
+        value.astimezone(_SHANGHAI_TIMEZONE) if value.tzinfo is not None else value
+    )
+    if compact:
+        return f"{local_value.month}月{local_value.day}日{local_value:%H:%M}"
+    return f"{local_value.month}月{local_value.day}日 {local_value:%H:%M}重置"
 
 
 def format_plan_active_until(value: datetime | None) -> str:

@@ -23,18 +23,18 @@
 
 <p align="center">
   <strong>Windows AI Token 用量、費用與餘額監控工具</strong><br>
-  <sub>適用於 DeepSeek 與 Xiaomi MiMo 的 AI Token Usage, Cost & Balance Monitor。</sub>
+  <sub>適用於 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI 的用量監控工具。</sub>
 </p>
 
 <p align="center">
   <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter 產品介面概覽" width="960">
 </p>
 
-TokenMeter 是輕量級 Windows 桌面 AI Token 用量監控工具，用於查看 DeepSeek、Xiaomi MiMo 的 Token 消耗、呼叫費用、帳戶餘額與歷史趨勢。程式常駐系統匣，提供浮動小工具與可展開的詳細面板。
+TokenMeter 是輕量級 Windows 桌面 AI 用量監控工具，用於查看 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI 的訂閱額度、Token 消耗、呼叫費用、帳戶餘額與歷史趨勢。程式常駐系統匣，提供浮動小工具與可展開的詳細面板。
 
 ## 功能
 
-- 支援 DeepSeek 與 Xiaomi MiMo，各平台快取互不混用。
+- 支援 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI，各平台快取互不混用；預設只更新目前平台，僅在設定中勾選的平台會於背景同步取得。
 - 浮動小工具與系統匣常駐，支援拖曳、邊緣吸附、位置記憶及失焦收合。
 - 提供淺色、深色及跟隨 Windows 的主題。
 - 顯示餘額、Token 用量、費用趨勢、模型統計、分時圖與年度活躍熱力圖。
@@ -46,7 +46,7 @@ TokenMeter 是輕量級 Windows 桌面 AI Token 用量監控工具，用於查�
 ## 系統需求
 
 - Windows 10 或 Windows 11；從原始碼執行需要 Python 3.11+。
-- DeepSeek 或 Xiaomi MiMo Token Plan 帳戶及對應 Cookie / Token。
+- 至少一個支援的平台帳戶；Codex 與 Cursor 可使用本機登入資料，DeepSeek、MiMo 與 NayutoAI 使用各平台憑據。
 - DeepSeek API Key 為選用，用於官方餘額端點。
 
 > [!IMPORTANT]
@@ -134,7 +134,7 @@ TokenMeter/
 
 ## 版本與 Release
 
-目前版本：`1.12.0`。更新說明與校驗檔請見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+目前版本：`1.13.0`。更新說明與校驗檔請見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## License
 

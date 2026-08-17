@@ -788,6 +788,8 @@ class StoreTests(unittest.TestCase):
         with (
             patch("data.store.history.clear_expired_minute_usage", side_effect=OSError("locked")),
             patch("data.store.history.minute_usage_for_day", return_value=[]),
+            patch("data.store.history.minute_cost_usage_for_day", return_value=[]),
+            patch("data.store.history.minute_usage_dates", return_value=[]),
             patch("data.store.history.save_estimated_minute_usage", return_value="baseline"),
         ):
             data = self.fetch_with(provider)
@@ -849,6 +851,7 @@ class StoreTests(unittest.TestCase):
                 "data.store.history.minute_usage_dates",
                 return_value=["2026-07-02", "2026-07-03"],
             ),
+            patch("data.store.history.minute_cost_usage_for_day", return_value=[]),
             patch("data.store.history.save_estimated_minute_usage", return_value="baseline"),
         ):
             data = self.fetch_with(provider)

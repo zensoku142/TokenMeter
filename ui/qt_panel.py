@@ -50,7 +50,6 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QToolButton,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -61,7 +60,9 @@ from core.identity import APP_DISPLAY_NAME
 from data.store import TokenData
 from ui.activity import compact_tokens
 from ui.formatting import (
+    format_codex_reset_time,
     format_codex_tokens,
+    format_minute_money,
     format_money,
     format_money_axis,
     format_plan_active_until,
@@ -822,10 +823,132 @@ class MetricCard(QFrame):
         self.title_label.setText(title)
 
 
+class TrendUsageTooltip(QFrame):
+    """Top-chart-owned tooltip; never competes with Qt's global QToolTip."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("minuteTooltip")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(9, 7, 9, 7)
+        layout.setSpacing(4)
+
+        header = QHBoxLayout()
+        self.date_label = QLabel()
+        self.date_label.setObjectName("minuteTooltipTitle")
+        self.total_label = QLabel()
+        self.total_label.setObjectName("minuteTooltipValue")
+        header.addWidget(self.date_label)
+        header.addStretch(1)
+        header.addWidget(self.total_label)
+        layout.addLayout(header)
+
+        self.model_row = QWidget()
+        model_layout = QHBoxLayout(self.model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_name = QLabel("模型")
+        model_name.setObjectName("minuteTooltipMuted")
+        self.model_label = QLabel()
+        self.model_label.setObjectName("minuteTooltipValue")
+        self.model_label.setWordWrap(False)
+        self.model_label.setMaximumWidth(240)
+        self.model_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.model_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        model_layout.addWidget(model_name)
+        model_layout.addStretch(1)
+        model_layout.addWidget(self.model_label)
+        layout.addWidget(self.model_row)
+
+        self.token_rows = QWidget()
+        token_layout = QGridLayout(self.token_rows)
+        token_layout.setContentsMargins(0, 0, 0, 0)
+        token_layout.setHorizontalSpacing(7)
+        token_layout.setVerticalSpacing(3)
+        self.swatches: list[QLabel] = []
+        self.value_labels: list[QLabel] = []
+        for row, label in enumerate(("输入（命中缓存）", "输入（未命中缓存）", "输出")):
+            swatch = QLabel()
+            swatch.setFixedSize(8, 8)
+            name = QLabel(label)
+            name.setObjectName("minuteTooltipMuted")
+            value = QLabel("0")
+            value.setObjectName("minuteTooltipValue")
+            value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            token_layout.addWidget(swatch, row, 0)
+            token_layout.addWidget(name, row, 1)
+            token_layout.addWidget(value, row, 2)
+            self.swatches.append(swatch)
+            self.value_labels.append(value)
+        layout.addWidget(self.token_rows)
+
+        self.footer = QWidget()
+        footer_layout = QVBoxLayout(self.footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(4)
+        divider = QFrame()
+        divider.setObjectName("divider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFixedHeight(1)
+        footer_layout.addWidget(divider)
+        rate_row = QHBoxLayout()
+        rate_name = QLabel("缓存命中率")
+        rate_name.setObjectName("minuteTooltipMuted")
+        self.rate_label = QLabel("--")
+        self.rate_label.setObjectName("minuteTooltipValue")
+        rate_row.addWidget(rate_name)
+        rate_row.addStretch(1)
+        rate_row.addWidget(self.rate_label)
+        footer_layout.addLayout(rate_row)
+        cost_row = QHBoxLayout()
+        cost_name = QLabel("当日消耗金额")
+        cost_name.setObjectName("minuteTooltipMuted")
+        self.cost_label = QLabel("--")
+        self.cost_label.setObjectName("minuteTooltipCost")
+        cost_row.addWidget(cost_name)
+        cost_row.addStretch(1)
+        cost_row.addWidget(self.cost_label)
+        footer_layout.addLayout(cost_row)
+        layout.addWidget(self.footer)
+        self.hide()
+
+    def set_simple(self, usage_date: date, value: str) -> None:
+        self.date_label.setText(usage_date.isoformat())
+        self.total_label.setText(value)
+        self.model_row.hide()
+        self.token_rows.hide()
+        self.footer.hide()
+
+    def set_model(self, usage_date: date, row: dict, currency: str) -> None:
+        hit = int(row.get("cache_hit_tokens", 0) or 0)
+        miss = int(row.get("cache_miss_tokens", 0) or 0)
+        output = int(row.get("output_tokens", 0) or 0)
+        total = hit + miss + output
+        self.date_label.setText(usage_date.strftime("%m/%d"))
+        self.total_label.setText(f"总计 {compact_tokens(total)}")
+        self.model_label.setText(str(row.get("model") or "unknown"))
+        for label, value in zip(self.value_labels, (hit, miss, output)):
+            label.setText(compact_tokens(value))
+        self.rate_label.setText(
+            "--" if hit + miss == 0 else f"{hit / (hit + miss) * 100:.1f}%"
+        )
+        self.cost_label.setText(format_minute_money(row.get("cost_cny"), currency))
+        self.model_row.show()
+        self.token_rows.show()
+        self.footer.show()
+
+    def refresh_colors(self, colors: tuple[QColor, QColor, QColor]) -> None:
+        for swatch, color in zip(self.swatches, colors):
+            swatch.setStyleSheet(f"background: {color.name()}; border-radius: 2px;")
+
+
 class TrendCard(QFrame):
-    """Seven-day provider activity rendered as seven flat bars."""
+    """Seven-day amount/token trend with an optional per-model grouped view."""
 
     BAR_WIDTH = 0.36
+    MODEL_GROUP_WIDTH = 0.76
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -834,19 +957,58 @@ class TrendCard(QFrame):
         layout.setContentsMargins(8, 5, 0, 2)
         layout.setSpacing(2)
 
+        heading = QHBoxLayout()
+        heading.setContentsMargins(0, 0, 6, 0)
         self.title = QLabel("近 7 天使用金额")
         self.title.setObjectName("sectionTitle")
-        layout.addWidget(self.title)
+        heading.addWidget(self.title)
+        heading.addStretch(1)
+        self.view_segment = QFrame()
+        self.view_segment.setObjectName("activityModeSegment")
+        self.view_segment.setFixedSize(134, 24)
+        segment_layout = QHBoxLayout(self.view_segment)
+        segment_layout.setContentsMargins(1, 1, 1, 1)
+        segment_layout.setSpacing(0)
+        self._view_group = QButtonGroup(self)
+        self._view_group.setExclusive(True)
+        self.amount_button = self._view_button("金额趋势", 66)
+        self.model_button = self._view_button("模型使用", 66)
+        self._view_group.addButton(self.amount_button)
+        self._view_group.addButton(self.model_button)
+        segment_layout.addWidget(self.amount_button)
+        segment_layout.addWidget(self.model_button)
+        self.amount_button.clicked.connect(lambda: self._set_view("amount"))
+        self.model_button.clicked.connect(lambda: self._set_view("model"))
+        heading.addWidget(self.view_segment)
+        self.view_segment.hide()
+        layout.addLayout(heading)
 
-        self.plot = pg.PlotWidget(
-            axisItems={"left": MoneyAxis(orientation="left")},
-        )
+        self.legend_scroll = QScrollArea()
+        self.legend_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.legend_scroll.setWidgetResizable(False)
+        self.legend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.legend_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.legend_scroll.setFixedHeight(18)
+        self.legend_widget = QWidget()
+        self.legend_layout = QHBoxLayout(self.legend_widget)
+        self.legend_layout.setContentsMargins(0, 0, 0, 0)
+        self.legend_layout.setSpacing(10)
+        self.legend_scroll.setWidget(self.legend_widget)
+        self.legend_scroll.hide()
+        layout.addWidget(self.legend_scroll)
+
+        self.plot = pg.PlotWidget(axisItems={"left": MoneyAxis(orientation="left")})
         self.plot.setStyleSheet("border: 0;")
-        self.plot.setMinimumHeight(100)
+        self.plot.setMinimumHeight(82)
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.hideButtons()
         self.plot.setMenuEnabled(False)
+        self.plot.setToolTip("")
         self.plot.showGrid(x=False, y=True, alpha=0.14)
+        self.empty_label = QLabel("近 7 天暂无模型用量", self.plot)
+        self.empty_label.setObjectName("muted")
+        self.empty_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.empty_label.hide()
 
         axis_font = QFont("Microsoft YaHei UI", 8)
         left_axis = self.plot.getAxis("left")
@@ -862,26 +1024,45 @@ class TrendCard(QFrame):
 
         self._dates: list[date] = []
         self._values: list[float] = []
+        self._standard_rows: list[dict] = []
+        self._daily_model_rows: list[dict] = []
+        self._model_order: list[str] = []
+        self._legend_labels: dict[str, QLabel] = {}
+        self._bar_models: list[str] = []
+        self._bar_positions: list[float] = []
+        self._bar_rows: list[dict] = []
+        self._bar_width = self.BAR_WIDTH
         self._currency = "CNY"
         self._token_mode = False
+        self._provider_id = ""
+        self._view = "amount"
+        self._view_by_provider: dict[str, str] = {}
         self._series: pg.BarGraphItem | None = None
         self._hover_index: int | None = None
+        self.hover_tooltip = TrendUsageTooltip(self)
         self._mouse_proxy = pg.SignalProxy(
-            self.plot.scene().sigMouseMoved,
-            rateLimit=60,
-            slot=self._on_mouse_moved,
+            self.plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse_moved
         )
         layout.addWidget(self.plot, 1)
         self._connect_theme_changes()
         self.set_rows([])
 
+    @staticmethod
+    def _view_button(text: str, width: int) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("activityModeButton")
+        button.setText(text)
+        button.setCheckable(True)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setFixedSize(width, 22)
+        return button
+
     def _connect_theme_changes(self) -> None:
         try:
-            theme_controller().changed.connect(self._on_theme_changed)
+            controller = theme_controller()
         except RuntimeError:
-            # Standalone component tests may construct the chart before an app-level
-            # controller exists; production configures the theme before any window.
-            pass
+            return
+        controller.changed.connect(self._on_theme_changed)
 
     def set_rows(
         self,
@@ -889,60 +1070,184 @@ class TrendCard(QFrame):
         today: date | None = None,
         currency: str = "CNY",
         token_mode: bool = False,
+        *,
+        model_rows: list[dict] | None = None,
+        model_usage_enabled: bool = False,
+        provider_id: str = "",
     ) -> None:
         self._currency = str(currency or "CNY").upper()
         self._token_mode = token_mode
-        self.title.setText("近 7 天 Token 使用量" if token_mode else "近 7 天使用金额")
+        self._provider_id = str(provider_id or "")
+        self._standard_rows = list(rows)
+        self._daily_model_rows = list(model_rows or [])
+        current = today or date.today()
+        self._dates = [current - timedelta(days=offset) for offset in range(6, -1, -1)]
+        self.view_segment.setVisible(model_usage_enabled)
+        self._view = (
+            self._view_by_provider.get(self._provider_id, "amount")
+            if model_usage_enabled
+            else "amount"
+        )
+        amount_blocker = QSignalBlocker(self.amount_button)
+        model_blocker = QSignalBlocker(self.model_button)
+        self.amount_button.setChecked(self._view == "amount")
+        self.model_button.setChecked(self._view == "model")
+        del amount_blocker, model_blocker
+        self._render()
+
+    def _set_view(self, view: str) -> None:
+        if view not in {"amount", "model"}:
+            return
+        self._view = view
+        if self._provider_id:
+            self._view_by_provider[self._provider_id] = view
+        self._render()
+
+    def _render(self) -> None:
+        self._hide_hover()
+        self.plot.clear()
+        self.plot.setToolTip("")
         left_axis = self.plot.getAxis("left")
         left_axis.currency = self._currency
-        left_axis.token_mode = token_mode
-        current = today or date.today()
-        by_date = {str(row.get("date")): row for row in rows}
-        self._dates = [current - timedelta(days=offset) for offset in range(6, -1, -1)]
-        value_key = "tokens" if token_mode else "cost_cny"
-        self._values = [
-            float(by_date.get(day.isoformat(), {}).get(value_key, 0) or 0)
-            for day in self._dates
-        ]
-        self.plot.clear()
-
+        model_mode = self._view == "model" and not self.view_segment.isHidden()
+        left_axis.token_mode = self._token_mode or model_mode
+        if model_mode:
+            self._prepare_model_bars()
+            self.title.setText("近 7 天各模型 Token 使用量")
+            self.legend_scroll.show()
+            self.empty_label.setVisible(not self._model_order)
+        else:
+            by_date = {str(row.get("date")): row for row in self._standard_rows}
+            value_key = "tokens" if self._token_mode else "cost_cny"
+            self._values = [
+                float(by_date.get(day.isoformat(), {}).get(value_key, 0) or 0)
+                for day in self._dates
+            ]
+            self._bar_positions = [float(index) for index in range(7)]
+            self._bar_rows = []
+            self._bar_models = []
+            self._bar_width = self.BAR_WIDTH
+            self.title.setText(
+                "近 7 天 Token 使用量" if self._token_mode else "近 7 天使用金额"
+            )
+            self.legend_scroll.hide()
+            self.empty_label.hide()
         tokens = current_theme()
         self._series = pg.BarGraphItem(
-            x=list(range(7)),
+            x=self._bar_positions,
             height=self._values,
-            width=self.BAR_WIDTH,
+            width=self._bar_width,
             pen=pg.mkPen(tokens.accent),
             brush=pg.mkBrush(tokens.accent),
         )
         self.plot.addItem(self._series)
-
         self.plot.getAxis("bottom").setTicks(
             [[(index, day.strftime("%m/%d")) for index, day in enumerate(self._dates)]]
         )
-        # Preserve half a day at each edge so all seven bars stay fully visible.
         self.plot.setXRange(-0.5, 6.5, padding=0)
         maximum = max(self._values, default=0.0)
-        tick_max = max(1.0 if token_mode else 0.01, maximum)
-        range_max = tick_max * 1.08 if maximum > 0 else tick_max
-        self.plot.setYRange(0, range_max, padding=0)
+        token_axis = self._token_mode or model_mode
+        tick_max = max(1.0 if token_axis else 0.01, maximum)
+        self.plot.setYRange(0, tick_max * 1.08 if maximum > 0 else tick_max, padding=0)
         self.plot.getAxis("left").setTicks(
             [[
                 (
                     tick_max * index / 3,
                     format_token_axis(tick_max * index / 3)
-                    if token_mode
+                    if token_axis
                     else format_money_axis(tick_max * index / 3, self._currency),
                 )
                 for index in range(4)
             ]]
         )
         self._hover_index = None
+        self._position_empty_label()
         self.refresh_theme()
+
+    def _prepare_model_bars(self) -> None:
+        rows_by_date = {
+            str(row.get("date")): row.get("models", [])
+            for row in self._daily_model_rows
+        }
+        totals: dict[str, int] = {}
+        lookup: dict[tuple[str, str], dict] = {}
+        for day in self._dates:
+            for raw in rows_by_date.get(day.isoformat(), []) or []:
+                if not isinstance(raw, dict):
+                    continue
+                model = str(raw.get("model") or "unknown")
+                row = dict(raw)
+                row["model"] = model
+                total = int(row.get("total_tokens", 0) or 0)
+                totals[model] = totals.get(model, 0) + total
+                lookup[(day.isoformat(), model)] = row
+        self._model_order = sorted(totals, key=lambda model: (-totals[model], model))
+        model_count = len(self._model_order)
+        slot_width = self.MODEL_GROUP_WIDTH / max(1, model_count)
+        self._bar_width = slot_width * 0.82 if model_count else self.BAR_WIDTH
+        self._values = []
+        self._bar_positions = []
+        self._bar_models = []
+        self._bar_rows = []
+        for day_index, day in enumerate(self._dates):
+            for model_index, model in enumerate(self._model_order):
+                row = lookup.get(
+                    (day.isoformat(), model),
+                    {
+                        "model": model,
+                        "cache_hit_tokens": 0,
+                        "cache_miss_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "cost_cny": Decimal("0"),
+                    },
+                )
+                offset = (model_index - (model_count - 1) / 2) * slot_width
+                self._bar_positions.append(day_index + offset)
+                self._values.append(float(row.get("total_tokens", 0) or 0))
+                self._bar_models.append(model)
+                self._bar_rows.append(row)
+        self._rebuild_model_legend()
+
+    def _rebuild_model_legend(self) -> None:
+        while self.legend_layout.count():
+            item = self.legend_layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self._legend_labels = {}
+        for model in self._model_order:
+            label = QLabel(f"■ {model}")
+            label.setObjectName("muted")
+            label.setToolTip(model)
+            label.setAccessibleName(model)
+            label.setStyleSheet(f"color: {self._model_color(model).name()};")
+            self._legend_labels[model] = label
+            self.legend_layout.addWidget(label)
+        self.legend_layout.addStretch(1)
+        self.legend_widget.adjustSize()
+
+    def _model_color(self, model: str) -> QColor:
+        tokens = current_theme()
+        if len(self._model_order) == 1:
+            return QColor(tokens.accent)
+        base = QColor(tokens.accent)
+        base_hue = base.hslHue() if base.hslHue() >= 0 else 345
+        stable = sum((index + 1) * ord(char) for index, char in enumerate(model))
+        hue = (base_hue + stable % 281) % 360
+        lightness = 172 if tokens.name == "dark" else 116
+        return QColor.fromHsl(hue, 150, lightness)
+
+    @staticmethod
+    def _token_colors() -> tuple[QColor, QColor, QColor]:
+        tokens = current_theme()
+        return (
+            QColor(tokens.accent).lighter(145),
+            QColor(tokens.accent),
+            QColor(tokens.accent).darker(130),
+        )
 
     def refresh_theme(self) -> None:
         tokens = current_theme()
-        # The selected layout is one continuous surface; the chart must not
-        # introduce a nested rectangular card behind the bars.
         _make_plot_background_transparent(self.plot)
         left_axis = self.plot.getAxis("left")
         bottom_axis = self.plot.getAxis("bottom")
@@ -952,7 +1257,23 @@ class TrendCard(QFrame):
         axis_color.setAlpha(96)
         left_axis.setPen(pg.mkPen(axis_color))
         bottom_axis.setPen(pg.mkPen(axis_color))
-        if self._series is not None:
+        model_mode = self._view == "model" and not self.view_segment.isHidden()
+        if self._series is not None and model_mode:
+            colors = [self._model_color(model) for model in self._bar_models]
+            if self._hover_index is not None:
+                colors[self._hover_index] = (
+                    QColor(tokens.accent_hover)
+                    if len(self._model_order) == 1
+                    else colors[self._hover_index].lighter(125)
+                )
+            if colors:
+                self._series.setOpts(
+                    pens=[pg.mkPen(color) for color in colors],
+                    brushes=[pg.mkBrush(color) for color in colors],
+                )
+            for model, label in self._legend_labels.items():
+                label.setStyleSheet(f"color: {self._model_color(model).name()};")
+        elif self._series is not None:
             if self._hover_index is None:
                 self._series.setOpts(
                     pens=None,
@@ -963,46 +1284,117 @@ class TrendCard(QFrame):
             else:
                 self._series.setOpts(
                     pens=[
-                        pg.mkPen(tokens.accent_hover if index == self._hover_index else tokens.accent)
+                        pg.mkPen(
+                            tokens.accent_hover
+                            if index == self._hover_index
+                            else tokens.accent
+                        )
                         for index in range(len(self._values))
                     ],
                     brushes=[
-                        pg.mkBrush(tokens.accent_hover if index == self._hover_index else tokens.accent)
+                        pg.mkBrush(
+                            tokens.accent_hover
+                            if index == self._hover_index
+                            else tokens.accent
+                        )
                         for index in range(len(self._values))
                     ],
                 )
+        self.hover_tooltip.refresh_colors(self._token_colors())
 
     def _on_theme_changed(self, _mode: str, _resolved: str) -> None:
         self.refresh_theme()
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_empty_label()
+
+    def _position_empty_label(self) -> None:
+        self.empty_label.adjustSize()
+        self.empty_label.move(
+            max(0, (self.plot.width() - self.empty_label.width()) // 2),
+            max(0, (self.plot.height() - self.empty_label.height()) // 2),
+        )
+
     def _on_mouse_moved(self, event) -> None:
         scene_pos = event[0]
-        if not self.plot.sceneBoundingRect().contains(scene_pos):
+        view_box = self.plot.getViewBox()
+        if not view_box.sceneBoundingRect().contains(scene_pos):
             self._hide_hover()
             return
-        point = self.plot.getViewBox().mapSceneToView(scene_pos)
-        index = int(round(point.x()))
-        if not 0 <= index < len(self._values) or abs(point.x() - index) > self.BAR_WIDTH / 2:
+        point = view_box.mapSceneToView(scene_pos)
+        if not self._bar_positions:
             self._hide_hover()
             return
-
+        index = min(
+            range(len(self._bar_positions)),
+            key=lambda candidate: abs(point.x() - self._bar_positions[candidate]),
+        )
+        height = self._values[index]
+        if (
+            abs(point.x() - self._bar_positions[index]) > self._bar_width / 2
+            or height <= 0
+            or not 0 <= point.y() <= height
+        ):
+            self._hide_hover()
+            return
         self._hover_index = index
         self.refresh_theme()
         local = self.plot.mapFromScene(scene_pos)
-        QToolTip.showText(
-            self.plot.mapToGlobal(local),
-            self.tooltip_text(index),
-            self.plot,
-        )
+        self._show_tooltip(index, local)
+
+    def _show_tooltip(self, index: int, local: QPoint) -> None:
+        if self._view == "model" and not self.view_segment.isHidden():
+            day_index = index // max(1, len(self._model_order))
+            self.hover_tooltip.set_model(
+                self._dates[day_index], self._bar_rows[index], self._currency
+            )
+        else:
+            self.hover_tooltip.set_simple(
+                self._dates[index],
+                format_codex_tokens(self._values[index])
+                if self._token_mode
+                else format_money(self._values[index], self._currency),
+            )
+        tooltip_layout = self.hover_tooltip.layout()
+        if tooltip_layout is not None:
+            tooltip_layout.activate()
+        self.hover_tooltip.resize(self.hover_tooltip.sizeHint())
+        anchor = self.plot.mapTo(self, local)
+        x = anchor.x() + 10
+        if x + self.hover_tooltip.width() > self.width() - 6:
+            x = anchor.x() - self.hover_tooltip.width() - 10
+        x = max(6, min(x, max(6, self.width() - self.hover_tooltip.width() - 6)))
+        y = max(6, min(anchor.y() + 8, self.height() - self.hover_tooltip.height() - 6))
+        self.hover_tooltip.move(x, y)
+        self.hover_tooltip.raise_()
+        self.hover_tooltip.show()
 
     def _hide_hover(self) -> None:
         had_hover = self._hover_index is not None
         self._hover_index = None
+        self.hover_tooltip.hide()
         if had_hover:
             self.refresh_theme()
-        QToolTip.hideText()
 
     def tooltip_text(self, index: int) -> str:
+        if self._view == "model" and not self.view_segment.isHidden():
+            day_index = index // max(1, len(self._model_order))
+            row = self._bar_rows[index]
+            hit = int(row.get("cache_hit_tokens", 0) or 0)
+            miss = int(row.get("cache_miss_tokens", 0) or 0)
+            output = int(row.get("output_tokens", 0) or 0)
+            total = hit + miss + output
+            rate = "--" if hit + miss == 0 else f"{hit / (hit + miss) * 100:.1f}%"
+            return (
+                f"{self._dates[day_index].strftime('%m/%d')}　总计 {compact_tokens(total)}\n"
+                f"模型　{row.get('model') or 'unknown'}\n"
+                f"输入（命中缓存）　{compact_tokens(hit)}\n"
+                f"输入（未命中缓存）　{compact_tokens(miss)}\n"
+                f"输出　{compact_tokens(output)}\n"
+                f"缓存命中率　{rate}\n"
+                f"当日消耗金额　{format_minute_money(row.get('cost_cny'), self._currency)}"
+            )
         if self._token_mode:
             return (
                 f"{self._dates[index].isoformat()}\n"
@@ -1023,7 +1415,7 @@ class MinuteUsageTooltip(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(9, 7, 9, 7)
-        layout.setSpacing(5)
+        layout.setSpacing(4)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -1035,6 +1427,28 @@ class MinuteUsageTooltip(QFrame):
         header.addStretch(1)
         header.addWidget(self.total_label)
         layout.addLayout(header)
+
+        self.model_row = QWidget()
+        model_layout = QHBoxLayout(self.model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(7)
+        model_name = QLabel("模型")
+        model_name.setObjectName("minuteTooltipMuted")
+        self.model_label = QLabel()
+        self.model_label.setObjectName("minuteTooltipValue")
+        self.model_label.setWordWrap(False)
+        self.model_label.setMaximumWidth(240)
+        self.model_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.model_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        model_layout.addWidget(model_name)
+        model_layout.addStretch(1)
+        model_layout.addWidget(self.model_label)
+        layout.addWidget(self.model_row)
+        self.model_row.hide()
 
         rows = QGridLayout()
         rows.setContentsMargins(0, 0, 0, 0)
@@ -1098,6 +1512,7 @@ class MinuteUsageTooltip(QFrame):
         values: tuple[int, int, int],
         cost_cny: Decimal | None,
         currency: str = "CNY",
+        models: list[str] | None = None,
     ) -> None:
         hit, miss, output = values
         total = hit + miss + output
@@ -1111,10 +1526,13 @@ class MinuteUsageTooltip(QFrame):
             self.time_label.setText(f"{start_text}–{end_text}")
             self.cost_name.setText("本时段消耗金额")
         self.total_label.setText(f"总计 {compact_tokens(total)}")
+        model_text = "、".join(models or [])
+        self.model_label.setText(model_text)
+        self.model_row.setVisible(bool(model_text))
         for label, value in zip(self.value_labels, values):
             label.setText(compact_tokens(value))
         self.rate_label.setText(rate)
-        self.cost_label.setText(format_money(cost_cny, currency))
+        self.cost_label.setText(format_minute_money(cost_cny, currency))
 
     def refresh_colors(self, colors: tuple[QColor, QColor, QColor]) -> None:
         for swatch, color in zip(self.swatches, colors):
@@ -1122,7 +1540,7 @@ class MinuteUsageTooltip(QFrame):
 
 
 class MinuteUsageChart(QWidget):
-    """当天 Token 差额的估算分时图；只聚合展示，原始分钟数据保持不变。"""
+    """当天 Token 分时图；只聚合展示，原始分钟数据保持不变。"""
 
     SPARSE_POINT_LIMIT = 24
     DEFAULT_VISIBLE_BUCKETS = 24
@@ -1145,6 +1563,7 @@ class MinuteUsageChart(QWidget):
         self._bucket_centers = [float(minute) for minute in range(1440)]
         self._values = {key: [0] * 1440 for key, _label in self.SERIES}
         self._cost_values: list[Decimal | None] = [None] * 1440
+        self._model_names: list[list[str]] = [[] for _minute in range(1440)]
         self._visible = {key: True for key, _label in self.SERIES}
         self._signature: tuple | None = None
         self._updating_region = False
@@ -1244,7 +1663,9 @@ class MinuteUsageChart(QWidget):
         interval_minutes: int = 1,
         chart_type: str = "bar",
         currency: str = "CNY",
+        model_rows: list[dict] | None = None,
     ) -> None:
+        self._hide_hover()
         chart_type = str(chart_type).strip().lower()
         if chart_type not in {"bar", "line"}:
             raise ValueError("分时图表样式必须是 bar 或 line")
@@ -1277,12 +1698,36 @@ class MinuteUsageChart(QWidget):
                 cost_values[bucket_index] = (
                     cost_values[bucket_index] or Decimal(0)
                 ) + cost
+        model_totals: list[dict[str, int]] = [{} for _start in bucket_starts]
+        for row in model_rows or []:
+            try:
+                minute = int(row.get("minute", -1))
+                total = sum(
+                    max(0, int(row.get(field, 0) or 0))
+                    for field in (
+                        "cache_hit_tokens",
+                        "cache_miss_tokens",
+                        "output_tokens",
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= minute < 1440:
+                continue
+            model = str(row.get("model") or "unknown").strip() or "unknown"
+            bucket = model_totals[minute // interval_minutes]
+            bucket[model] = bucket.get(model, 0) + total
+        model_names = [
+            sorted(totals, key=lambda model: (-totals[model], model))
+            for totals in model_totals
+        ]
         signature = (
             status,
             chart_type,
             interval_minutes,
             currency,
             tuple(tuple(values[key]) for key, _label in self.SERIES),
+            tuple(tuple(names) for names in model_names),
         )
         self._chart_type = chart_type
         self._currency = str(currency or "CNY").upper()
@@ -1294,8 +1739,9 @@ class MinuteUsageChart(QWidget):
         ]
         self._values = values
         self._cost_values = cost_values
+        self._model_names = model_names
         if loading and not rows:
-            self._show_state("正在刷新分时估算数据…")
+            self._show_state("正在刷新分时数据…")
             return
         if status == "baseline":
             self._show_state("已建立估算基线，下一次刷新后显示分时数据")
@@ -1304,7 +1750,7 @@ class MinuteUsageChart(QWidget):
             self._show_state("已跨日重建估算基线，下一次刷新后显示分时数据")
             return
         if status == "unavailable":
-            self._show_state("当前平台未启用估算分时数据")
+            self._show_state("当前平台未启用分时数据")
             return
         if status in {"failed", "storage_error"} and not rows:
             self._show_state("分时数据暂不可用，请刷新后重试")
@@ -1800,8 +2246,12 @@ class MinuteUsageChart(QWidget):
             values,
             self._cost_values[bucket_index],
             self._currency,
+            self._model_names[bucket_index],
         )
-        self.hover_tooltip.adjustSize()
+        tooltip_layout = self.hover_tooltip.layout()
+        if tooltip_layout is not None:
+            tooltip_layout.activate()
+        self.hover_tooltip.resize(self.hover_tooltip.sizeHint())
         x = local.x() + 10
         if x + self.hover_tooltip.width() > self.plot.width() - 6:
             x = local.x() - self.hover_tooltip.width() - 10
@@ -1832,13 +2282,16 @@ class MinuteUsageChart(QWidget):
         cost_name = (
             "本分钟消耗金额" if self._interval_minutes == 1 else "本时段消耗金额"
         )
+        models = self._model_names[bucket_index]
+        model_line = f"模型　{'、'.join(models)}\n" if models else ""
         return (
             f"{self._bucket_time_text(bucket_index)}　总计 {total:,}\n"
+            f"{model_line}"
             f"■ 输入（命中缓存）　{hit:,}\n"
             f"■ 输入（未命中缓存）　{miss:,}\n"
             f"■ 输出　{output:,}\n"
             f"缓存命中率　{rate}\n"
-            f"{cost_name}　{format_money(self._cost_values[bucket_index], self._currency)}"
+            f"{cost_name}　{format_minute_money(self._cost_values[bucket_index], self._currency)}"
         )
 
     def summary_text(self) -> str:
@@ -1997,9 +2450,12 @@ class MainPanel(QFrame):
         self._minute_current_date = ""
         self._minute_current_rows: list[dict] = []
         self._minute_current_cost_rows: list[dict] = []
+        self._minute_current_model_rows: list[dict] = []
         self._minute_current_status = "unavailable"
+        self._minute_usage_source = ""
         self._minute_usage_history: dict[str, list[dict]] = {}
         self._minute_cost_usage_history: dict[str, list[dict]] = {}
+        self._minute_model_usage_history: dict[str, list[dict]] = {}
         self._minute_usage_days: list[str] = []
         self._minute_selected_date = ""
         self._minute_follows_latest = True
@@ -2406,9 +2862,12 @@ class MainPanel(QFrame):
         self._minute_current_date = data.minute_usage_date
         self._minute_current_rows = data.minute_usage
         self._minute_current_cost_rows = data.minute_cost_usage
+        self._minute_current_model_rows = data.minute_model_usage
         self._minute_current_status = data.minute_usage_status
+        self._minute_usage_source = data.minute_usage_source
         self._minute_usage_history = dict(data.minute_usage_history)
         self._minute_cost_usage_history = dict(data.minute_cost_usage_history)
+        self._minute_model_usage_history = dict(data.minute_model_usage_history)
         self._minute_usage_days = []
 
         current_date = QDate.fromString(data.minute_usage_date, "yyyy-MM-dd")
@@ -2493,6 +2952,7 @@ class MainPanel(QFrame):
         if selected_date == self._minute_current_date:
             rows = self._minute_current_rows
             cost_rows = self._minute_current_cost_rows
+            model_rows = self._minute_current_model_rows
             status = self._minute_current_status
             status_hint = {
                 "failed": "；刷新失败，当前显示最近结果",
@@ -2503,6 +2963,7 @@ class MainPanel(QFrame):
         else:
             rows = self._minute_usage_history.get(selected_date, [])
             cost_rows = self._minute_cost_usage_history.get(selected_date, [])
+            model_rows = self._minute_model_usage_history.get(selected_date, [])
             status = "recorded" if rows else "empty"
             tooltip = f"选择分时日期；当前查看 {selected_date}"
         try:
@@ -2527,6 +2988,7 @@ class MainPanel(QFrame):
             interval_minutes=interval_minutes,
             chart_type=chart_type,
             currency=self._currency,
+            model_rows=model_rows,
         )
         self.activity_summary.setText(
             self.minute_chart.summary_text()
@@ -2768,9 +3230,14 @@ class MainPanel(QFrame):
                 if not (provider_id == "codex" and is_codex_spark_quota(window.title))
             ]
             for window in visible_windows[:3]:
+                reset_text = (
+                    format_codex_reset_time(window.resets_at)
+                    if provider_id == "codex"
+                    else format_reset_countdown(window.resets_at)
+                )
                 detail_parts = [
                     f"剩余 {100 - window.used_percent:.0f}%",
-                    format_reset_countdown(window.resets_at),
+                    reset_text,
                 ]
                 if window.detail:
                     detail_parts.append(window.detail)
@@ -2810,6 +3277,7 @@ class MainPanel(QFrame):
                 data.weekly_usage or data.daily_usage,
                 currency=self._currency,
                 token_mode=True,
+                provider_id=provider_id,
             )
             weekly_tooltip = {
                 "interface": f"来自 {provider_name} 账号统计",
@@ -2819,7 +3287,8 @@ class MainPanel(QFrame):
                 "local": "接口统计暂不可用；仅当天 Token 来自本机会话日志估算",
             }.get(data.weekly_activity_source, "")
             self.trend.title.setToolTip(weekly_tooltip)
-            self.trend.plot.setToolTip(weekly_tooltip)
+            self.trend.title.setAccessibleDescription(weekly_tooltip)
+            self.trend.plot.setToolTip("")
             self._activity_view = "annual"
             self.activity_stack.setCurrentIndex(0)
             self.annual_activity_button.setChecked(True)
@@ -2851,6 +3320,17 @@ class MainPanel(QFrame):
         # API billing providers retain the original amount, trend and Token activity view.
         for card in (self.today_card, self.balance_card, self.month_card):
             card.detail.hide()
+        if data.minute_usage_source == "provider":
+            self.minute_estimate_label.setText("平台明细")
+            self._minute_estimate_tooltip = (
+                "来自服务商请求明细，按请求发生时间聚合 Token 与实际账单金额"
+            )
+        else:
+            self.minute_estimate_label.setText("估算")
+            self._minute_estimate_tooltip = (
+                "按刷新间隔均摊：两次成功刷新之间的累计 Token 差额，非平台原始分钟明细"
+            )
+        self.minute_estimate_label.setToolTip(self._minute_estimate_tooltip)
         self.activity_summary.setToolTip(self._minute_estimate_tooltip)
         self._set_activity_view(self._activity_view)
 
@@ -2880,7 +3360,33 @@ class MainPanel(QFrame):
             button.setEnabled(data.minute_usage_status != "unavailable")
         self._refresh_minute_control_colors()
 
-        self.trend.set_rows(data.daily_usage, currency=self._currency)
+        trend_today = None
+        if provider_id == "nayuto" and data.minute_usage_date:
+            try:
+                trend_today = date.fromisoformat(data.minute_usage_date)
+            except ValueError:
+                trend_today = None
+        model_usage_enabled = bool(
+            provider_cls and getattr(provider_cls, "supports_model_usage", False)
+        )
+        self.trend.set_rows(
+            data.daily_usage,
+            today=trend_today,
+            currency=self._currency,
+            model_rows=data.daily_model_usage,
+            model_usage_enabled=model_usage_enabled,
+            provider_id=provider_id,
+        )
+        trend_source = (
+            "当前显示最近一次缓存的近 7 天数据"
+            if provider_id == "nayuto" and data.is_stale
+            else "来自 NayutoAI 用量明细"
+            if provider_id == "nayuto"
+            else ""
+        )
+        self.trend.title.setToolTip(trend_source)
+        self.trend.title.setAccessibleDescription(trend_source)
+        self.trend.plot.setToolTip("")
         self.statistics.set_data(data)
         status, _color = self.status_summary(data, loading or refreshing)
         self.status_text.setText(status)

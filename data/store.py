@@ -267,11 +267,11 @@ def cost_breakdown_for_day(
 
 def provider_observed_at(provider_id: str, observed_at: datetime) -> datetime:
     """将刷新时刻转换为提供商估算日界所使用的时区。"""
-    if provider_id == "mimo":
+    if provider_id in {"mimo", "nayuto"}:
         try:
             return observed_at.astimezone(ZoneInfo("Asia/Shanghai"))
         except ZoneInfoNotFoundError:
-            # Windows 打包环境可能没有 IANA 时区数据库；MiMo 的平台日界固定为 UTC+8。
+            # Windows 打包环境可能没有 IANA 时区数据库；这两个平台日界固定为 UTC+8。
             return observed_at.astimezone(timezone(timedelta(hours=8), "Asia/Shanghai"))
     # DeepSeek 未返回账单时区；按已确认的产品约定使用运行设备本地时区。
     return observed_at.astimezone()
@@ -283,11 +283,13 @@ def provider_usage_day(provider_id: str, observed_at: datetime) -> date:
 
 
 def _load_minute_history(
-    provider_id: str, current_day: date
+    provider_id: str, current_day: date, include_models: bool = False
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
+    list[dict[str, Any]],
     list[str],
+    dict[str, list[dict[str, Any]]],
     dict[str, list[dict[str, Any]]],
     dict[str, list[dict[str, Any]]],
 ]:
@@ -295,9 +297,15 @@ def _load_minute_history(
     current_key = current_day.isoformat()
     minute_rows = history.minute_usage_for_day(provider_id, current_day)
     minute_cost_rows = history.minute_cost_usage_for_day(provider_id, current_day)
+    minute_model_rows = (
+        history.minute_model_usage_for_day(provider_id, current_day)
+        if include_models
+        else []
+    )
     minute_days = history.minute_usage_dates(provider_id)
     minute_history: dict[str, list[dict[str, Any]]] = {}
     minute_cost_history: dict[str, list[dict[str, Any]]] = {}
+    minute_model_history: dict[str, list[dict[str, Any]]] = {}
     for usage_date in minute_days:
         usage_day = date.fromisoformat(usage_date)
         # 当前日已单独读取供悬浮面板使用；历史映射复用同一只读列表，
@@ -312,12 +320,23 @@ def _load_minute_history(
             if usage_date == current_key
             else history.minute_cost_usage_for_day(provider_id, usage_day)
         )
+        minute_model_history[usage_date] = (
+            (
+                minute_model_rows
+                if usage_date == current_key
+                else history.minute_model_usage_for_day(provider_id, usage_day)
+            )
+            if include_models
+            else []
+        )
     return (
         minute_rows,
         minute_cost_rows,
+        minute_model_rows,
         minute_days,
         minute_history,
         minute_cost_history,
+        minute_model_history,
     )
 
 
@@ -384,6 +403,7 @@ class TokenData:
     is_stale: bool = False
     last_updated: str = ""
     daily_usage: list[dict[str, Any]] = field(default_factory=list)
+    daily_model_usage: list[dict[str, Any]] = field(default_factory=list)
     weekly_usage: list[dict[str, Any]] = field(default_factory=list)
     minute_usage: list[dict[str, Any]] = field(default_factory=list)
     minute_usage_status: str = "unavailable"
@@ -392,6 +412,9 @@ class TokenData:
     minute_usage_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     minute_cost_usage: list[dict[str, Any]] = field(default_factory=list)
     minute_cost_usage_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    minute_model_usage: list[dict[str, Any]] = field(default_factory=list)
+    minute_model_usage_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    minute_usage_source: str = ""
 
     _last_snapshot: ClassVar["TokenData | None"] = None
     _provider_snapshots: ClassVar[dict[str, "TokenData"]] = {}
@@ -407,6 +430,8 @@ class TokenData:
             id(snapshot.minute_usage_history): {},
             id(snapshot.minute_cost_usage): [],
             id(snapshot.minute_cost_usage_history): {},
+            id(snapshot.minute_model_usage): [],
+            id(snapshot.minute_model_usage_history): {},
         }
         return copy.deepcopy(snapshot, memo)
 
@@ -417,12 +442,15 @@ class TokenData:
         memo = {
             id(data.minute_usage): data.minute_usage,
             id(data.minute_cost_usage): data.minute_cost_usage,
+            id(data.minute_model_usage): data.minute_model_usage,
         }
         # 外层映射仍由 deepcopy 隔离，只有已完成的行列表共享，避免调用方
         # 增删日期时改变缓存，同时把主要内存占用限制为单份。
         for rows in data.minute_usage_history.values():
             memo[id(rows)] = rows
         for rows in data.minute_cost_usage_history.values():
+            memo[id(rows)] = rows
+        for rows in data.minute_model_usage_history.values():
             memo[id(rows)] = rows
         return copy.deepcopy(data, memo)
 
@@ -843,12 +871,22 @@ class TokenData:
         quota_refresh_succeeded = False
         minute_rows: list[dict[str, Any]] = []
         minute_cost_rows: list[dict[str, Any]] = []
+        minute_model_rows: list[dict[str, Any]] = []
         minute_status = "unavailable"
         minute_days: list[str] = []
         minute_history: dict[str, list[dict[str, Any]]] = {}
         minute_cost_history: dict[str, list[dict[str, Any]]] = {}
+        minute_model_history: dict[str, list[dict[str, Any]]] = {}
         retention_days = 3
-        if getattr(provider, "supports_estimated_minute_usage", False):
+        supports_estimated_minutes = bool(
+            getattr(provider, "supports_estimated_minute_usage", False)
+        )
+        supports_exact_minutes = bool(
+            getattr(provider, "supports_exact_minute_usage", False)
+        )
+        supports_model_usage = bool(getattr(provider, "supports_model_usage", False))
+        supports_minute_usage = supports_estimated_minutes or supports_exact_minutes
+        if supports_minute_usage:
             try:
                 # 每次启动/刷新均按设置的保留天数清理；失败不能影响原有账单刷新。
                 retention_days = int(provider.config_get("MINUTE_USAGE_RETENTION_DAYS", 3))
@@ -871,9 +909,12 @@ class TokenData:
             )
             per.errors.append(FetchError("NOT_CONFIGURED", provider.name, f"尚未配置 {provider.name} 凭据"))
             data.daily_usage = []
+            data.daily_model_usage = []
             data.weekly_usage = []
             data.last_success_at = None
             data.last_updated = ""
+            if supports_exact_minutes:
+                minute_status = "unavailable"
         else:
             try:
                 quota, quota_error = provider.fetch_quota()
@@ -1030,6 +1071,12 @@ class TokenData:
                 per.monthly_usage_tokens = int(summary.month_tokens)
                 if summary.remaining_tokens and not per.balance_tokens:
                     per.balance_tokens = int(summary.remaining_tokens)
+                if summary.today_cost is not None:
+                    per.today_cost_cny = float(summary.today_cost)
+                if summary.today_tokens is not None:
+                    per.today_tokens = int(summary.today_tokens)
+                if summary.total_cost is not None:
+                    per.total_cost_cny = float(summary.total_cost)
                 successes += 1
             if summary_error:
                 per.errors.append(summary_error)
@@ -1117,7 +1164,61 @@ class TokenData:
                     config_manager.logger().exception("History save failed for %s", provider.id)
                     per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史保存失败"))
 
-                if getattr(provider, "supports_estimated_minute_usage", False):
+                if supports_exact_minutes:
+                    exact_usage = provider.exact_minute_usage()
+                    if exact_usage is None:
+                        minute_status = "failed"
+                    else:
+                        retained_from = current_day - timedelta(days=max(1, retention_days) - 1)
+                        exact_dates = {
+                            usage_date
+                            for usage_date in exact_usage.usage_dates
+                            if retained_from <= usage_date <= current_day
+                        }
+                        complete_months = set(exact_usage.complete_months)
+                        retained_day = retained_from
+                        while retained_day <= current_day:
+                            if (retained_day.month, retained_day.year) in complete_months:
+                                exact_dates.add(retained_day)
+                            retained_day += timedelta(days=1)
+                        # A successful response is authoritative for today even when
+                        # a provider snapshot predates the complete-month marker.
+                        exact_dates.add(current_day)
+                        try:
+                            minute_status = history.replace_exact_minute_usage(
+                                provider=provider.id,
+                                usage_dates=exact_dates,
+                                token_rows=[
+                                    row
+                                    for row in exact_usage.token_rows
+                                    if row.get("usage_date") in exact_dates
+                                ],
+                                cost_rows=[
+                                    row
+                                    for row in exact_usage.cost_rows
+                                    if row.get("usage_date") in exact_dates
+                                ],
+                                current_day=current_day,
+                                retention_days=retention_days,
+                                model_rows=(
+                                    [
+                                        row
+                                        for row in exact_usage.model_rows
+                                        if row.get("usage_date") in exact_dates
+                                    ]
+                                    if supports_model_usage
+                                    else None
+                                ),
+                            )
+                        except Exception:
+                            config_manager.logger().exception(
+                                "Exact minute usage save failed for %s", provider.id
+                            )
+                            per.errors.append(
+                                FetchError("LOCAL_STORAGE", "分时缓存", "分钟明细保存失败")
+                            )
+                            minute_status = "storage_error"
+                elif supports_estimated_minutes:
                     token_totals = token_breakdown_for_day(payloads, current_day)
                     if token_totals is None:
                         minute_status = "empty"
@@ -1146,17 +1247,20 @@ class TokenData:
                                 FetchError("LOCAL_STORAGE", "分时缓存", "分钟缓存保存失败")
                             )
                             minute_status = "storage_error"
-            elif getattr(provider, "supports_estimated_minute_usage", False):
+            elif supports_minute_usage:
                 minute_status = "failed" if payload_errors else "empty"
 
             try:
                 if provider.supports_daily_usage:
                     data.daily_usage = history.recent_daily(371, provider.id)
-                per.total_cost_cny = (
-                    float(history.total_cost(provider.id))
-                    if provider.supports_cost
-                    else None
-                )
+                if supports_model_usage:
+                    data.daily_model_usage = history.recent_daily_model_usage(
+                        provider.id, current_day, 7
+                    )
+                else:
+                    data.daily_model_usage = []
+                if provider.supports_cost and per.total_cost_cny is None:
+                    per.total_cost_cny = float(history.total_cost(provider.id))
             except Exception:
                 config_manager.logger().exception("History read failed for %s", provider.id)
                 per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史读取失败"))
@@ -1168,15 +1272,21 @@ class TokenData:
                 per.status = "error"
                 per.is_stale = previous_per is not None
 
-        if getattr(provider, "supports_estimated_minute_usage", False):
+        if supports_minute_usage and not (
+            supports_exact_minutes and per.status == "not_configured"
+        ):
             try:
                 (
                     minute_rows,
                     minute_cost_rows,
+                    minute_model_rows,
                     minute_days,
                     minute_history,
                     minute_cost_history,
-                ) = _load_minute_history(provider.id, current_day)
+                    minute_model_history,
+                ) = _load_minute_history(
+                    provider.id, current_day, include_models=supports_model_usage
+                )
             except Exception:
                 config_manager.logger().exception(
                     "Minute usage history read failed for %s", provider.id
@@ -1221,6 +1331,13 @@ class TokenData:
         data.minute_usage_history = minute_history
         data.minute_cost_usage = minute_cost_rows
         data.minute_cost_usage_history = minute_cost_history
+        data.minute_model_usage = minute_model_rows
+        data.minute_model_usage_history = minute_model_history
+        data.minute_usage_source = (
+            "provider" if supports_exact_minutes else "estimated"
+            if supports_estimated_minutes
+            else ""
+        )
 
         if successes:
             if not quota_refresh_failed:

@@ -30,7 +30,7 @@ from api.providers.mimo import MiMoProvider
 from config import runtime as config_manager
 from core.identity import APP_DISPLAY_NAME
 from data.store import PerProviderData, TokenData
-from ui.formatting import format_money, format_reset_countdown
+from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown
 from ui.geometry import (
     WorkArea,
     clamp_window,
@@ -1321,9 +1321,14 @@ class FloatingWidget(QWidget):
         )
         if self._data.quota_windows:
             primary = self._data.quota_windows[0]
+            reset_text = (
+                format_codex_reset_time(primary.resets_at, compact=True)
+                if provider_id == "codex"
+                else format_reset_countdown(primary.resets_at)
+            )
             self.ball.set_quota_state(
                 None if loading else 100 - primary.used_percent,
-                "正在更新额度" if loading else format_reset_countdown(primary.resets_at),
+                "正在更新额度" if loading else reset_text,
                 primary.title,
             )
         elif quota_mode:
@@ -1353,9 +1358,14 @@ class FloatingWidget(QWidget):
         active_provider = str(
             captured_config.get("ACTIVE_PROVIDER", "")
         ).strip().lower()
+        background_provider_ids = captured_config.get("BACKGROUND_PROVIDER_IDS", [])
+        if not background_provider_ids:
+            # 未显式勾选时只刷新当前来源，避免旧版本行为继续请求所有已配置账户。
+            return
+        configured_ids = set(configured_provider_ids(captured_config))
         now = time.monotonic()
-        for provider_id in configured_provider_ids(captured_config):
-            if provider_id == active_provider:
+        for provider_id in background_provider_ids:
+            if provider_id == active_provider or provider_id not in configured_ids:
                 continue
             last_started = self._provider_last_started.get(provider_id)
             if (

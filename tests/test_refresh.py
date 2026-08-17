@@ -7,9 +7,10 @@ from unittest.mock import Mock, patch
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+
 from data.store import FetchError, PerProviderData, TokenData
 from deepseek_pricing import BEIJING_TIMEZONE, PricingState
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from ui.qt_panel import MainPanel
 from ui.qt_widget import (
     BACKGROUND_PROVIDER_INTERVAL_MS,
@@ -159,14 +160,18 @@ class RefreshTests(unittest.TestCase):
         self.assertTrue(task._lightweight)
         self.assertEqual(task._config["ACTIVE_PROVIDER"], "mimo")
 
-    def test_background_cycle_starts_every_configured_non_current_provider(self):
+    def test_background_cycle_starts_only_selected_configured_non_current_provider(self):
         widget = widget_stub()
-        config = {"ACTIVE_PROVIDER": "codex", "MARKER": "captured"}
+        config = {
+            "ACTIVE_PROVIDER": "codex",
+            "BACKGROUND_PROVIDER_IDS": ["deepseek", "codex", "nayuto"],
+            "MARKER": "captured",
+        }
         with (
             patch("ui.qt_widget.config_manager.all_config", return_value=config),
             patch(
                 "ui.qt_widget.configured_provider_ids",
-                return_value=["deepseek", "mimo", "codex"],
+                return_value=["deepseek", "mimo", "codex", "nayuto"],
             ),
             patch("ui.qt_widget.config_manager.get", return_value="codex"),
         ):
@@ -174,7 +179,9 @@ class RefreshTests(unittest.TestCase):
 
         self.assertEqual(widget._thread_pool.start.call_count, 2)
         tasks = [call.args[0] for call in widget._thread_pool.start.call_args_list]
-        self.assertEqual([task.provider_id for task in tasks], ["deepseek", "mimo"])
+        self.assertEqual(
+            [task.provider_id for task in tasks], ["deepseek", "nayuto"]
+        )
         self.assertTrue(all(task._lightweight for task in tasks))
         self.assertTrue(all(task._config["MARKER"] == "captured" for task in tasks))
 
@@ -183,12 +190,29 @@ class RefreshTests(unittest.TestCase):
         with (
             patch(
                 "ui.qt_widget.config_manager.all_config",
-                return_value={"ACTIVE_PROVIDER": "codex"},
+                return_value={
+                    "ACTIVE_PROVIDER": "codex",
+                    "BACKGROUND_PROVIDER_IDS": ["mimo"],
+                },
             ),
             patch("ui.qt_widget.configured_provider_ids", return_value=["codex"]),
         ):
             widget._periodic_background_refresh()
 
+        widget._thread_pool.start.assert_not_called()
+
+    def test_background_cycle_defaults_to_current_provider_only(self):
+        widget = widget_stub()
+        with (
+            patch(
+                "ui.qt_widget.config_manager.all_config",
+                return_value={"ACTIVE_PROVIDER": "codex"},
+            ),
+            patch("ui.qt_widget.configured_provider_ids") as configured,
+        ):
+            widget._periodic_background_refresh()
+
+        configured.assert_not_called()
         widget._thread_pool.start.assert_not_called()
 
     def test_provider_level_in_flight_does_not_block_other_provider(self):
@@ -231,7 +255,10 @@ class RefreshTests(unittest.TestCase):
         with (
             patch(
                 "ui.qt_widget.config_manager.all_config",
-                return_value={"ACTIVE_PROVIDER": "codex"},
+                return_value={
+                    "ACTIVE_PROVIDER": "codex",
+                    "BACKGROUND_PROVIDER_IDS": ["mimo"],
+                },
             ),
             patch("ui.qt_widget.configured_provider_ids", return_value=["mimo", "codex"]),
         ):
@@ -338,6 +365,38 @@ class RefreshTests(unittest.TestCase):
         self.assertTrue(widget._refreshing)
         self.assertIs(widget._provider_results["deepseek"], background)
         self.assertEqual(widget._provider_results["deepseek"].balance_cny, 1)
+
+    def test_late_nayuto_result_is_cached_without_replacing_deepseek_view(self):
+        widget = widget_stub()
+        current = TokenData(
+            currency="CNY",
+            today_cost_cny=2,
+            per_provider=[PerProviderData("deepseek", "DeepSeek")],
+        )
+        relay = TokenData(
+            currency="USD",
+            today_cost_cny=1,
+            daily_model_usage=[
+                {"date": "2026-08-15", "models": [{"model": "model-a"}]}
+            ],
+            minute_model_usage=[{"minute": 1, "model": "model-a"}],
+            per_provider=[PerProviderData("nayuto", "NayutoAI", currency="USD")],
+        )
+        widget._data = current
+        widget._refreshing = True
+
+        finish(widget, "nayuto", 1, relay, active_provider="deepseek")
+
+        self.assertIs(widget._data, current)
+        self.assertTrue(widget._refreshing)
+        self.assertIs(widget._provider_results["nayuto"], relay)
+        self.assertEqual(
+            widget._provider_results["nayuto"].minute_model_usage[0]["model"],
+            "model-a",
+        )
+        self.assertEqual(widget._data.per_provider[0].provider_id, "deepseek")
+        self.assertEqual(widget._data.daily_model_usage, [])
+        widget._apply_update.assert_not_called()
 
     def test_current_provider_result_updates_interface(self):
         widget = widget_stub()

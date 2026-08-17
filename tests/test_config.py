@@ -370,6 +370,15 @@ class ConfigTests(unittest.TestCase):
             ]
         )
         self.assertFalse(config_manager.validate_config({})["AUTO_START_ENABLED"])
+        self.assertEqual(config_manager.validate_config({})["BACKGROUND_PROVIDER_IDS"], [])
+        self.assertEqual(
+            config_manager.validate_config(
+                {"BACKGROUND_PROVIDER_IDS": ["MIMO", "codex", "mimo"]}
+            )["BACKGROUND_PROVIDER_IDS"],
+            ["mimo", "codex"],
+        )
+        with self.assertRaisesRegex(ValueError, "未知数据来源"):
+            config_manager.validate_config({"BACKGROUND_PROVIDER_IDS": ["unknown"]})
         self.assertTrue(
             config_manager.validate_config({"AUTO_START_ENABLED": "true"})[
                 "AUTO_START_ENABLED"

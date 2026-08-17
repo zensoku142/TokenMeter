@@ -23,18 +23,18 @@
 
 <p align="center">
   <strong>AI Token Usage, Cost & Balance Monitor for Windows</strong><br>
-  <sub>Track DeepSeek and Xiaomi MiMo usage from a lightweight desktop floating widget.</sub>
+  <sub>Track Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI from a lightweight desktop floating widget.</sub>
 </p>
 
 <p align="center">
   <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter product interface overview" width="960">
 </p>
 
-TokenMeter is a lightweight Windows desktop monitor for token usage, API costs, account balances, and historical trends on DeepSeek and Xiaomi MiMo. It stays in the system tray and provides a floating widget plus an expandable detail panel.
+TokenMeter is a lightweight Windows desktop monitor for subscription quotas, token usage, API costs, account balances, and historical trends across Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI. It stays in the system tray and provides a floating widget plus an expandable detail panel.
 
 ## Features
 
-- DeepSeek and Xiaomi MiMo support with isolated per-provider caches.
+- Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI support with isolated per-provider caches; only the current provider refreshes by default, with optional background providers selected in Settings.
 - Floating widget and system tray with dragging, edge docking, position memory, and collapse on focus loss.
 - Light, dark, and Windows system themes.
 - Balance, token usage, cost trends, model statistics, intraday charts, and an annual activity heatmap.
@@ -46,7 +46,7 @@ TokenMeter is a lightweight Windows desktop monitor for token usage, API costs, 
 ## Requirements
 
 - Windows 10 or Windows 11; Python 3.11+ for running from source.
-- A DeepSeek or Xiaomi MiMo Token Plan account and the corresponding Cookie / Token.
+- At least one supported account; Codex and Cursor can reuse local login data, while DeepSeek, MiMo, and NayutoAI use their platform credentials.
 - An optional DeepSeek API key for the official balance endpoint.
 
 > [!IMPORTANT]
@@ -142,7 +142,7 @@ See [Project structure](docs/PROJECT_STRUCTURE.md) for the complete layout.
 
 ## Version and releases
 
-Current version: `1.12.0`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
+Current version: `1.13.0`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
 
 ## License
 

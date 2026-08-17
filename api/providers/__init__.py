@@ -9,6 +9,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from api.providers.base import (
+    ExactMinuteUsage,
     FetchError,
     ModelUsage,
     Provider,
@@ -22,14 +23,15 @@ from api.providers.codex import CodexProvider
 from api.providers.cursor import CursorProvider
 from api.providers.deepseek import DeepSeekProvider
 from api.providers.mimo import MiMoProvider
+from api.providers.nayuto import NayutoProvider
 from config import runtime as config_manager
-
 
 PROVIDERS: dict[str, type[Provider]] = {
     DeepSeekProvider.id: DeepSeekProvider,
     MiMoProvider.id: MiMoProvider,
     CodexProvider.id: CodexProvider,
     CursorProvider.id: CursorProvider,
+    NayutoProvider.id: NayutoProvider,
 }
 
 
@@ -106,6 +108,7 @@ def active_providers(config: Mapping[str, Any] | None = None) -> Iterator[Provid
 
 __all__ = [
     "FetchError",
+    "ExactMinuteUsage",
     "ModelUsage",
     "Provider",
     "ProviderBalance",

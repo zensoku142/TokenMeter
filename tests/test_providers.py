@@ -676,6 +676,7 @@ class CursorProviderTests(unittest.TestCase):
                 ("mimo", "小米 MiMo"),
                 ("codex", "Codex"),
                 ("cursor", "Cursor"),
+                ("nayuto", "NayutoAI"),
             ],
         )
 

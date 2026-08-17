@@ -23,18 +23,18 @@
 
 <p align="center">
   <strong>Windows 向け AI Token 使用量・コスト・残高モニター</strong><br>
-  <sub>DeepSeek と Xiaomi MiMo の AI Token Usage, Cost & Balance Monitor。</sub>
+  <sub>Codex、Cursor、DeepSeek、Xiaomi MiMo、NayutoAI の使用量モニター。</sub>
 </p>
 
 <p align="center">
   <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter 製品画面の概要" width="960">
 </p>
 
-TokenMeter は、DeepSeek と Xiaomi MiMo の Token 消費量、API コスト、アカウント残高、履歴傾向を確認する軽量な Windows デスクトップツールです。システムトレイに常駐し、フローティングウィジェットと展開可能な詳細パネルを提供します。
+TokenMeter は、Codex、Cursor、DeepSeek、Xiaomi MiMo、NayutoAI のサブスクリプション枠、Token 消費量、API コスト、残高、履歴傾向を確認する軽量な Windows デスクトップツールです。システムトレイに常駐し、フローティングウィジェットと展開可能な詳細パネルを提供します。
 
 ## 機能
 
-- DeepSeek と Xiaomi MiMo に対応し、プロバイダーごとにキャッシュを分離。
+- Codex、Cursor、DeepSeek、Xiaomi MiMo、NayutoAI に対応し、プロバイダーごとにキャッシュを分離。既定では現在のプロバイダーだけを更新し、設定で選択したプロバイダーのみバックグラウンド取得します。
 - ドラッグ、画面端への吸着、位置記憶、フォーカス喪失時の折りたたみに対応。
 - ライト、ダーク、Windows システム連動テーマ。
 - 残高、Token 使用量、コスト推移、モデル統計、時間帯グラフ、年間アクティビティヒートマップ。
@@ -46,7 +46,7 @@ TokenMeter は、DeepSeek と Xiaomi MiMo の Token 消費量、API コスト、
 ## 動作要件
 
 - Windows 10 または Windows 11。ソース実行には Python 3.11+。
-- DeepSeek または Xiaomi MiMo Token Plan アカウントと対応する Cookie / Token。
+- 対応サービスのアカウントが 1 つ以上必要です。Codex と Cursor はローカルのログイン情報を利用でき、DeepSeek、MiMo、NayutoAI は各サービスの資格情報を使用します。
 - 公式残高 API 用の DeepSeek API Key は任意。
 
 > [!IMPORTANT]
@@ -134,7 +134,7 @@ TokenMeter/
 
 ## バージョンと Release
 
-現在のバージョン：`1.12.0`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) を参照してください。
+現在のバージョン：`1.13.0`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) を参照してください。
 
 ## License
 

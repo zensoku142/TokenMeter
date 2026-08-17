@@ -58,6 +58,20 @@ def validate_value(key: str, value: Any) -> Any:
             choices = ", ".join(meta["choices"])
             raise ValueError(f"{key} must be one of: {choices}")
         return normalized
+    if kind == "provider_list":
+        if isinstance(value, str):
+            value = [item.strip() for item in value.split(",") if item.strip()]
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"{key} 必须是数据来源列表")
+        choices = set(meta["choices"])
+        normalized: list[str] = []
+        for item in value:
+            provider_id = str(item).strip().lower()
+            if provider_id not in choices:
+                raise ValueError(f"{key} 包含未知数据来源: {provider_id}")
+            if provider_id not in normalized:
+                normalized.append(provider_id)
+        return normalized
     if kind == "time":
         return parse_time_text(value).strftime("%H:%M")
     return str(value)
@@ -69,8 +83,8 @@ def validate_config(values: dict[str, Any]) -> dict[str, Any]:
     for key in list(merged):
         merged[key] = validate_value(key, merged[key])
     active_provider = str(merged.get("ACTIVE_PROVIDER", "deepseek")).strip().lower()
-    if active_provider not in {"deepseek", "mimo", "codex", "cursor"}:
-        raise ValueError("ACTIVE_PROVIDER 必须是 deepseek、mimo、codex 或 cursor")
+    if active_provider not in {"deepseek", "mimo", "codex", "cursor", "nayuto"}:
+        raise ValueError("ACTIVE_PROVIDER 必须是 deepseek、mimo、codex、cursor 或 nayuto")
     merged["ACTIVE_PROVIDER"] = active_provider
     update_channel = str(merged.get("UPDATE_CHANNEL", "stable")).strip().lower()
     if update_channel not in {"stable", "prerelease"}:
