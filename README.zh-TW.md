@@ -115,7 +115,7 @@ TokenMeter/
 ├── ui/                  # PySide6 介面
 ├── packaging/           # PyInstaller、安裝器與 Windows 資源
 ├── scripts/             # 建置與發布自動化
-├── docs/                # 文件、任務封存與圖片
+├── docs/                # 專案結構說明與 README 圖片
 ├── examples/            # 設定範例
 ├── release-notes/       # 發布說明
 ├── tests/               # 單元與 Qt 測試

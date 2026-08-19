@@ -33,3 +33,10 @@ qa-*.png
 .codex-design-qa/
 design-qa.md
 *_Codex提示词.md
+
+# docs 默认只作为本地过程资料；公开仓库仅保留 README 依赖的文件。
+docs/*
+!docs/PROJECT_STRUCTURE.md
+!docs/images/
+docs/images/*
+!docs/images/readme-hero-v1.12.0.webp

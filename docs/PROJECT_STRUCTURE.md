@@ -13,7 +13,7 @@ TokenMeter/
 ├── packaging/           # PyInstaller、Inno Setup 和 Windows 版本资源
 ├── scripts/             # 构建与发布自动化
 ├── assets/              # 图标等运行时静态资源
-├── docs/                # 路线图、任务归档、结构说明和图片
+├── docs/                # 项目结构说明和 README 图片
 ├── examples/            # 示例配置
 ├── release-notes/       # 按版本维护的发布说明
 ├── tests/               # 单元测试、UI 测试和打包检查

@@ -140,7 +140,7 @@ TokenMeter/
 ├── ui/                  # PySide6 界面
 ├── packaging/           # PyInstaller、安装器与 Windows 版本资源
 ├── scripts/             # 构建与发布脚本
-├── docs/                # 项目文档、任务归档与图片
+├── docs/                # 项目结构说明与 README 图片
 ├── examples/            # 示例配置
 ├── release-notes/       # 版本发布说明
 ├── tests/               # 单元与 Qt 测试
@@ -160,8 +160,6 @@ TokenMeter/
 ## 版本与 Release
 
 当前版本：`1.13.1`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
-
-2.0 的 Provider 能力边界、分批计划和已执行基础见 [TokenMeter 2.0 路线图](docs/V2_ROADMAP.md)。
 
 ## License
 

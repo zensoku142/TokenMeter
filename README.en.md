@@ -123,7 +123,7 @@ TokenMeter/
 ├── ui/                  # PySide6 interface
 ├── packaging/           # PyInstaller, installer, and Windows version resources
 ├── scripts/             # Build and release automation
-├── docs/                # Project docs, task archives, and images
+├── docs/                # Project structure guide and README image
 ├── examples/            # Example configuration
 ├── release-notes/       # Version release notes
 ├── tests/               # Unit and Qt tests

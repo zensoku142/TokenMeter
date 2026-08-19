@@ -115,7 +115,7 @@ TokenMeter/
 ├── ui/                  # PySide6 인터페이스
 ├── packaging/           # PyInstaller, 설치 프로그램 및 Windows 리소스
 ├── scripts/             # 빌드 및 릴리스 자동화
-├── docs/                # 문서, 작업 보관 및 이미지
+├── docs/                # 프로젝트 구조 안내 및 README 이미지
 ├── examples/            # 설정 예제
 ├── release-notes/       # 릴리스 노트
 ├── tests/               # 단위 및 Qt 테스트
