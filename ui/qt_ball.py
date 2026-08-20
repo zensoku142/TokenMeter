@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QRadialGradient,
+    QTransform,
 )
 from PySide6.QtWidgets import QWidget
 
@@ -49,6 +50,32 @@ INTERNAL_FLOW_VELOCITY_DECAY = 3.2
 HIGH_LEVEL_SURFACE_START = 0.90
 FULL_LEVEL_OBSERVATION_BAND_PX = 7.0
 
+# Codex 专用的轻量真实液体参数。屏幕位移会按球直径归一化，避免滚轮缩放改变手感。
+REALISTIC_IDLE_SPEED = 0.55
+REALISTIC_IDLE_SCALE = 0.45
+REALISTIC_GRAVITY = 26.0
+REALISTIC_INERTIA_BASE_SCALE = 0.55
+REALISTIC_INERTIA_MAX_SCALE = 2.2
+REALISTIC_INERTIA_GAIN_START = 15.0
+REALISTIC_INERTIA_GAIN_END = 45.0
+REALISTIC_SLOSH_FREQUENCY = 8.2
+REALISTIC_SLOSH_DAMPING_RATIO = 0.28
+REALISTIC_NODE_DAMPING = 2.4
+REALISTIC_MAX_WAVE_HEIGHT = 0.24
+REALISTIC_FULL_RESPONSE_RATIO = 0.10
+REALISTIC_ACCELERATION_DECAY = 9.0
+REALISTIC_MAX_BULK_OFFSET = 0.14
+REALISTIC_BULK_STRENGTH = 72.0
+REALISTIC_BULK_DAMPING = 4.8
+REALISTIC_GRAVITY_RESPONSE = 16.0
+REALISTIC_BODY_LIFT_SCALE = 1.55
+REALISTIC_MAX_BODY_LIFT_RATIO = 0.18
+CONTAINER_VELOCITY_TAU = 0.05
+CONTAINER_ACCELERATION_TAU = 0.075
+CONTAINER_ACCELERATION_LIMIT = 80.0
+CONTAINER_JERK_LIMIT = 2000.0
+CONTAINER_STOP_TIME = 0.055
+
 
 class LiquidSurfaceState:
     """Fourteen-point free surface that creates fluid-looking separation cheaply."""
@@ -62,6 +89,15 @@ class LiquidSurfaceState:
         self.idle_weight = 1.0
         self.drag_tilt = 0.0
         self.vertical_compression = 0.0
+        self.realistic_motion = False
+        self.container_acceleration_x = 0.0
+        self.container_acceleration_y = 0.0
+        self.slosh_angle = 0.0
+        self.slosh_angular_velocity = 0.0
+        self.gravity_scale = 1.0
+        self.bulk_offset_y = 0.0
+        self.bulk_velocity_y = 0.0
+        self.impact_strength = 0.0
 
     def reset(self) -> None:
         self.heights[:] = [0.0] * self.node_count
@@ -71,30 +107,96 @@ class LiquidSurfaceState:
         self.idle_weight = 1.0
         self.drag_tilt = 0.0
         self.vertical_compression = 0.0
+        self.container_acceleration_x = 0.0
+        self.container_acceleration_y = 0.0
+        self.slosh_angle = 0.0
+        self.slosh_angular_velocity = 0.0
+        self.gravity_scale = 1.0
+        self.bulk_offset_y = 0.0
+        self.bulk_velocity_y = 0.0
+        self.impact_strength = 0.0
 
     def clear_motion(self) -> None:
         self.heights[:] = [0.0] * self.node_count
         self.velocities[:] = [0.0] * self.node_count
         self.drag_tilt = 0.0
         self.vertical_compression = 0.0
+        self.container_acceleration_x = 0.0
+        self.container_acceleration_y = 0.0
+        self.slosh_angle = 0.0
+        self.slosh_angular_velocity = 0.0
+        self.gravity_scale = 1.0
+        self.bulk_offset_y = 0.0
+        self.bulk_velocity_y = 0.0
+        self.impact_strength = 0.0
+
+    def set_realistic_motion(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self.realistic_motion == enabled:
+            return
+        self.realistic_motion = enabled
+        self.clear_motion()
+
+    @staticmethod
+    def _soft_clip(value: float, limit: float) -> float:
+        return limit * math.tanh(value / limit)
+
+    def apply_container_acceleration(self, acceleration_x: float, acceleration_y: float) -> None:
+        if not self.realistic_motion:
+            return
+        self.container_acceleration_x = self._soft_clip(
+            acceleration_x,
+            CONTAINER_ACCELERATION_LIMIT,
+        )
+        self.container_acceleration_y = self._soft_clip(
+            acceleration_y,
+            CONTAINER_ACCELERATION_LIMIT,
+        )
+        self.idle_weight = min(self.idle_weight, 0.18)
 
     @property
     def activity(self) -> float:
-        return max(
+        legacy_activity = max(
             max((abs(value) for value in self.heights), default=0.0),
             max((abs(value) for value in self.velocities), default=0.0) * 0.12,
             abs(self.drag_tilt),
             abs(self.vertical_compression),
         )
+        if not self.realistic_motion:
+            return legacy_activity
+        return max(
+            legacy_activity,
+            abs(self.slosh_angle) * 0.5,
+            abs(self.slosh_angular_velocity) * 0.05,
+            abs(self.bulk_offset_y),
+            abs(self.bulk_velocity_y) * 0.08,
+            abs(self.gravity_scale - 1.0) * 0.06,
+            abs(self.container_acceleration_x) * 0.001,
+            abs(self.container_acceleration_y) * 0.001,
+            self.impact_strength,
+        )
 
     @property
     def settled(self) -> bool:
-        return (
+        legacy_settled = (
             max((abs(value) for value in self.heights), default=0.0) < SETTLE_HEIGHT_THRESHOLD
             and max((abs(value) for value in self.velocities), default=0.0)
             < SETTLE_VELOCITY_THRESHOLD
             and abs(self.drag_tilt) < SETTLE_HEIGHT_THRESHOLD
             and abs(self.vertical_compression) < SETTLE_HEIGHT_THRESHOLD
+        )
+        if not self.realistic_motion:
+            return legacy_settled
+        return (
+            legacy_settled
+            and abs(self.slosh_angle) < 0.0012
+            and abs(self.slosh_angular_velocity) < 0.008
+            and abs(self.bulk_offset_y) < 0.0012
+            and abs(self.bulk_velocity_y) < 0.006
+            and abs(self.gravity_scale - 1.0) < 0.002
+            and abs(self.container_acceleration_x) < 0.05
+            and abs(self.container_acceleration_y) < 0.05
+            and self.impact_strength < 0.0012
         )
 
     def disturb(
@@ -156,6 +258,9 @@ class LiquidSurfaceState:
 
     def step(self, elapsed_seconds: float) -> None:
         dt = max(0.001, min(0.05, elapsed_seconds))
+        if self.realistic_motion:
+            self._step_realistic(dt)
+            return
         self.idle_phase += dt * self.idle_speed
         previous = list(self.heights)
         velocity_damping = math.exp(-DAMPING * dt)
@@ -193,6 +298,174 @@ class LiquidSurfaceState:
         self.drag_tilt *= math.exp(-5.4 * dt)
         self.vertical_compression *= math.exp(-7.0 * dt)
 
+    def _step_realistic(self, dt: float) -> None:
+        self.idle_phase += dt * self.idle_speed
+        previous = list(self.heights)
+        acceleration_x = self.container_acceleration_x
+        acceleration_y = self.container_acceleration_y
+
+        inertia_progress = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    math.hypot(acceleration_x, acceleration_y)
+                    - REALISTIC_INERTIA_GAIN_START
+                )
+                / (REALISTIC_INERTIA_GAIN_END - REALISTIC_INERTIA_GAIN_START),
+            ),
+        )
+        inertia_progress = inertia_progress * inertia_progress * (3 - 2 * inertia_progress)
+        inertia_scale = REALISTIC_INERTIA_BASE_SCALE + inertia_progress * (
+            REALISTIC_INERTIA_MAX_SCALE - REALISTIC_INERTIA_BASE_SCALE
+        )
+        inertial_acceleration_x = acceleration_x * inertia_scale
+        inertial_acceleration_y = acceleration_y * inertia_scale
+        effective_gravity_y = REALISTIC_GRAVITY - inertial_acceleration_y
+        effective_gravity_magnitude = math.hypot(
+            inertial_acceleration_x,
+            effective_gravity_y,
+        )
+        target_gravity_scale = max(
+            0.05,
+            min(1.8, effective_gravity_magnitude / REALISTIC_GRAVITY),
+        )
+        self.gravity_scale += (target_gravity_scale - self.gravity_scale) * (
+            1 - math.exp(-REALISTIC_GRAVITY_RESPONSE * dt)
+        )
+
+        target_angle = math.atan2(
+            inertial_acceleration_x,
+            effective_gravity_y,
+        )
+        angle_error = math.atan2(
+            math.sin(target_angle - self.slosh_angle),
+            math.cos(target_angle - self.slosh_angle),
+        )
+        response_frequency = REALISTIC_SLOSH_FREQUENCY * (
+            1.0 + inertia_progress * 0.75
+        )
+        angular_acceleration = (
+            response_frequency**2 * angle_error
+            - 2
+            * REALISTIC_SLOSH_DAMPING_RATIO
+            * response_frequency
+            * self.slosh_angular_velocity
+        )
+        self.slosh_angular_velocity += angular_acceleration * dt
+        self.slosh_angle += self.slosh_angular_velocity * dt
+        self.slosh_angle = math.atan2(
+            math.sin(self.slosh_angle),
+            math.cos(self.slosh_angle),
+        )
+        self.drag_tilt = math.sin(self.slosh_angle) * 0.5
+
+        bulk_target = max(
+            -REALISTIC_MAX_BULK_OFFSET,
+            min(
+                REALISTIC_MAX_BULK_OFFSET,
+                -inertial_acceleration_y
+                / REALISTIC_GRAVITY
+                * REALISTIC_MAX_BULK_OFFSET,
+            ),
+        )
+        bulk_acceleration = (
+            (bulk_target - self.bulk_offset_y) * REALISTIC_BULK_STRENGTH
+            - self.bulk_velocity_y * REALISTIC_BULK_DAMPING
+        )
+        previous_bulk_offset = self.bulk_offset_y
+        self.bulk_velocity_y += bulk_acceleration * dt
+        self.bulk_offset_y += self.bulk_velocity_y * dt
+
+        impact = 0.0
+        if (
+            previous_bulk_offset < 0 <= self.bulk_offset_y
+            and self.bulk_velocity_y > 0
+            and self.gravity_scale > 1.0
+        ):
+            impact = min(
+                0.12,
+                self.bulk_velocity_y * 0.12 + (self.gravity_scale - 1.0) * 0.025,
+            )
+        if self.bulk_offset_y > REALISTIC_MAX_BULK_OFFSET:
+            impact = max(impact, min(0.12, abs(self.bulk_velocity_y) * 0.09))
+            self.bulk_offset_y = REALISTIC_MAX_BULK_OFFSET
+            self.bulk_velocity_y *= -0.24
+        elif self.bulk_offset_y < -REALISTIC_MAX_BULK_OFFSET:
+            self.bulk_offset_y = -REALISTIC_MAX_BULK_OFFSET
+            self.bulk_velocity_y *= -0.18
+        self.impact_strength = max(
+            impact,
+            self.impact_strength * math.exp(-6.8 * dt),
+        )
+
+        vertical_target = max(
+            -REALISTIC_MAX_WAVE_HEIGHT * 0.45,
+            min(
+                REALISTIC_MAX_WAVE_HEIGHT * 0.45,
+                inertial_acceleration_y
+                / REALISTIC_GRAVITY
+                * REALISTIC_MAX_WAVE_HEIGHT
+                * 0.18,
+            ),
+        )
+        vertical_target -= self.impact_strength
+        self.vertical_compression += (vertical_target - self.vertical_compression) * (
+            1 - math.exp(-9.0 * dt)
+        )
+
+        velocity_damping = math.exp(
+            -REALISTIC_NODE_DAMPING
+            * (0.72 + min(1.5, self.gravity_scale) * 0.28)
+            * dt
+        )
+        spring_strength = SPRING_STRENGTH * (0.28 + self.gravity_scale * 0.72)
+        wave_spread = WAVE_SPREAD * (0.55 + min(1.5, self.gravity_scale) * 0.45)
+        target_idle_weight = 1.0 if self.activity < 0.009 else 0.18
+        blend_rate = 1.2 if target_idle_weight > self.idle_weight else 8.0
+        self.idle_weight += (target_idle_weight - self.idle_weight) * (
+            1 - math.exp(-blend_rate * dt)
+        )
+
+        for index in range(self.node_count):
+            progress = index / (self.node_count - 1)
+            centered = progress - 0.5
+            # 整体方向由渲染路径旋转；角速度只制造一层滞后的自由液面波，
+            # 避免转圈时把无限斜率重复叠加到已经旋转的水体上。
+            tilt_target = self.slosh_angular_velocity * centered * 0.018
+            compression_shape = 1 - centered * centered * 4 - 2 / 3
+            target = (
+                tilt_target
+                + self.vertical_compression * compression_shape
+                + self.bulk_offset_y * compression_shape * 1.1
+            )
+            left = previous[index - 1] if index > 0 else previous[index]
+            right = previous[index + 1] if index < self.node_count - 1 else previous[index]
+            neighbor_force = (left + right - previous[index] * 2) * wave_spread
+            node_acceleration = (
+                (target - previous[index]) * spring_strength + neighbor_force
+            )
+            self.velocities[index] = (
+                self.velocities[index] + node_acceleration * dt
+            ) * velocity_damping
+            self.heights[index] = max(
+                -REALISTIC_MAX_WAVE_HEIGHT,
+                min(
+                    REALISTIC_MAX_WAVE_HEIGHT,
+                    previous[index] + self.velocities[index] * dt,
+                ),
+            )
+
+        # 以零均值投影近似圆形容器内的面积守恒，避免晃动改变额度基准液位。
+        mean_height = sum(self.heights) / self.node_count
+        mean_velocity = sum(self.velocities) / self.node_count
+        self.heights[:] = [height - mean_height for height in self.heights]
+        self.velocities[:] = [velocity - mean_velocity for velocity in self.velocities]
+
+        acceleration_decay = math.exp(-REALISTIC_ACCELERATION_DECAY * dt)
+        self.container_acceleration_x *= acceleration_decay
+        self.container_acceleration_y *= acceleration_decay
+
 
 class FloatingUsageBall(QWidget):
     pressed = Signal(QPoint)
@@ -221,6 +494,12 @@ class FloatingUsageBall(QWidget):
         self._drag_last_global: QPointF | None = None
         self._drag_last_velocity = QPointF()
         self._drag_clock = QElapsedTimer()
+        self._motion_provider_id = ""
+        self._container_motion_active = False
+        self._container_last_position: QPointF | None = None
+        self._container_velocity = QPointF()
+        self._container_acceleration = QPointF()
+        self._container_clock = QElapsedTimer()
         self._wave_clock = QElapsedTimer()
         self._wave_clock.start()
         self._wave_timer = QTimer(self)
@@ -305,6 +584,167 @@ class FloatingUsageBall(QWidget):
             count, total_ns = 0, 0
         self._debug_profile[name] = (count, total_ns)
 
+    @property
+    def realistic_motion_enabled(self) -> bool:
+        return self._motion_provider_id == "codex"
+
+    def _reset_container_motion(self) -> None:
+        self._container_motion_active = False
+        self._container_last_position = None
+        self._container_velocity = QPointF()
+        self._container_acceleration = QPointF()
+
+    def set_motion_provider(self, provider_id: str) -> None:
+        provider_id = str(provider_id or "").strip().lower()
+        if self._motion_provider_id == provider_id:
+            return
+        self._motion_provider_id = provider_id
+        self._reset_container_motion()
+        self._liquid_surface.set_realistic_motion(provider_id == "codex")
+        if self._quota_remaining is not None and self._quota_remaining > 0:
+            ratio = self._quota_remaining / 100
+            self._liquid_surface.idle_speed = (
+                REALISTIC_IDLE_SPEED
+                if self.realistic_motion_enabled
+                else self._idle_flow_speed(ratio)
+            )
+            self._ensure_animation()
+        self.update()
+
+    @staticmethod
+    def _motion_soft_clip(value: float) -> float:
+        return CONTAINER_ACCELERATION_LIMIT * math.tanh(
+            value / CONTAINER_ACCELERATION_LIMIT
+        )
+
+    def begin_container_motion(self, position: QPointF) -> bool:
+        if (
+            not self.realistic_motion_enabled
+            or not self._quota_mode
+            or self._quota_remaining is None
+            or self._quota_remaining <= 0
+        ):
+            return False
+        self._container_motion_active = True
+        self._container_last_position = QPointF(position)
+        self._container_velocity = QPointF()
+        self._container_acceleration = QPointF()
+        self._container_clock.restart()
+        self._ensure_animation()
+        return True
+
+    def sample_container_motion(
+        self,
+        position: QPointF,
+        elapsed_seconds: float | None = None,
+    ) -> bool:
+        if not self._container_motion_active or self._container_last_position is None:
+            return False
+        explicit_elapsed = elapsed_seconds is not None
+        if elapsed_seconds is None:
+            elapsed_ms = self._container_clock.elapsed()
+            if 0 <= elapsed_ms < POINTER_SAMPLE_INTERVAL_MS:
+                return False
+            self._container_clock.restart()
+            elapsed_seconds = 0.016 if elapsed_ms <= 0 else elapsed_ms / 1000
+        dt = max(0.008, min(0.08, float(elapsed_seconds)))
+        delta = QPointF(position) - self._container_last_position
+        self._container_last_position = QPointF(position)
+        side = max(1.0, min(self.width(), self.height()))
+        raw_velocity = QPointF(
+            max(-12.0, min(12.0, delta.x() / side / dt)),
+            max(-12.0, min(12.0, delta.y() / side / dt)),
+        )
+        velocity_alpha = 1 - math.exp(-dt / CONTAINER_VELOCITY_TAU)
+        previous_velocity = QPointF(self._container_velocity)
+        velocity = QPointF(
+            previous_velocity.x()
+            + (raw_velocity.x() - previous_velocity.x()) * velocity_alpha,
+            previous_velocity.y()
+            + (raw_velocity.y() - previous_velocity.y()) * velocity_alpha,
+        )
+        raw_acceleration = QPointF(
+            (velocity.x() - previous_velocity.x()) / dt,
+            (velocity.y() - previous_velocity.y()) / dt,
+        )
+        acceleration_alpha = 1 - math.exp(-dt / CONTAINER_ACCELERATION_TAU)
+        candidate_acceleration = QPointF(
+            self._container_acceleration.x()
+            + (raw_acceleration.x() - self._container_acceleration.x())
+            * acceleration_alpha,
+            self._container_acceleration.y()
+            + (raw_acceleration.y() - self._container_acceleration.y())
+            * acceleration_alpha,
+        )
+        max_acceleration_delta = CONTAINER_JERK_LIMIT * dt
+        acceleration = QPointF(
+            self._container_acceleration.x()
+            + max(
+                -max_acceleration_delta,
+                min(
+                    max_acceleration_delta,
+                    candidate_acceleration.x() - self._container_acceleration.x(),
+                ),
+            ),
+            self._container_acceleration.y()
+            + max(
+                -max_acceleration_delta,
+                min(
+                    max_acceleration_delta,
+                    candidate_acceleration.y() - self._container_acceleration.y(),
+                ),
+            ),
+        )
+        acceleration = QPointF(
+            self._motion_soft_clip(acceleration.x()),
+            self._motion_soft_clip(acceleration.y()),
+        )
+        self._container_velocity = velocity
+        self._container_acceleration = acceleration
+        self._liquid_surface.apply_container_acceleration(
+            acceleration.x(),
+            acceleration.y(),
+        )
+        # Windows 拖动顶层窗口时可能暂停普通 Qt 定时器；仅记录加速度会让窗口
+        # 被系统搬动，但液面一直沿用拖动前的缓存画面。这里消费距上一物理帧的
+        # 实际时间并同步重绘，保证液面在拖动过程中就响应，而不是松手后才启动。
+        wave_elapsed_ms = self._wave_clock.restart()
+        if explicit_elapsed:
+            wave_elapsed_seconds = dt
+        elif wave_elapsed_ms <= 0:
+            wave_elapsed_seconds = 0.001
+        else:
+            wave_elapsed_seconds = min(wave_elapsed_ms, 50) / 1000
+        self._step_animation_state(wave_elapsed_seconds)
+        self.repaint()
+        self._ensure_animation()
+        return True
+
+    def end_container_motion(
+        self,
+        position: QPointF,
+        elapsed_seconds: float | None = None,
+    ) -> bool:
+        if not self._container_motion_active:
+            return False
+        position = QPointF(position)
+        if self._container_last_position is not None and position != self._container_last_position:
+            self.sample_container_motion(position, elapsed_seconds)
+        stop_acceleration = QPointF(
+            self._motion_soft_clip(-self._container_velocity.x() / CONTAINER_STOP_TIME),
+            self._motion_soft_clip(-self._container_velocity.y() / CONTAINER_STOP_TIME),
+        )
+        self._liquid_surface.apply_container_acceleration(
+            stop_acceleration.x(),
+            stop_acceleration.y(),
+        )
+        self._container_acceleration = stop_acceleration
+        self._container_motion_active = False
+        self._container_last_position = None
+        self._container_velocity = QPointF()
+        self._ensure_animation()
+        return True
+
     def set_values(self, today: str, balance: str) -> None:
         if self._today == today and self._balance == balance:
             return
@@ -353,7 +793,11 @@ class FloatingUsageBall(QWidget):
             self._liquid_surface.idle_speed = 0.0
             self._reset_internal_flow()
         else:
-            self._liquid_surface.idle_speed = self._idle_flow_speed(remaining / 100)
+            self._liquid_surface.idle_speed = (
+                REALISTIC_IDLE_SPEED
+                if self.realistic_motion_enabled
+                else self._idle_flow_speed(remaining / 100)
+            )
         remaining_text = "未知" if remaining is None else f"{remaining:.0f}%"
         self.setAccessibleName("Codex 剩余额度")
         self.setAccessibleDescription(remaining_text)
@@ -377,6 +821,7 @@ class FloatingUsageBall(QWidget):
         self._pointer_smoothed_velocity = QPointF()
         self._drag_last_global = None
         self._drag_last_velocity = QPointF()
+        self._reset_container_motion()
         self._reset_internal_flow()
         self.setAccessibleName("")
         self.setAccessibleDescription("")
@@ -392,15 +837,18 @@ class FloatingUsageBall(QWidget):
             self._wave_clock.restart()
             self._wave_timer.start()
 
+    def _step_animation_state(self, elapsed_seconds: float) -> None:
+        self._liquid_surface.step(elapsed_seconds)
+        self._advance_internal_flow(elapsed_seconds)
+        self._wave_phase = (self._liquid_surface.idle_phase * 0.4) % math.tau
+
     def _advance_wave(self) -> None:
         profile_timer = QElapsedTimer()
         if logger.isEnabledFor(logging.DEBUG):
             profile_timer.start()
         elapsed_ms = self._wave_clock.restart()
         elapsed_seconds = 0.016 if elapsed_ms <= 0 else min(elapsed_ms, 50) / 1000
-        self._liquid_surface.step(elapsed_seconds)
-        self._advance_internal_flow(elapsed_seconds)
-        self._wave_phase = (self._liquid_surface.idle_phase * 0.4) % math.tau
+        self._step_animation_state(elapsed_seconds)
         self.update()
         active_motion = (
             self._active
@@ -502,6 +950,9 @@ class FloatingUsageBall(QWidget):
 
     def hideEvent(self, event) -> None:
         self._wave_timer.stop()
+        if self.realistic_motion_enabled:
+            self._reset_container_motion()
+            self._liquid_surface.clear_motion()
         super().hideEvent(event)
 
     def set_peak_highlight(self, enabled: bool) -> None:
@@ -656,7 +1107,8 @@ class FloatingUsageBall(QWidget):
             profile_timer.start()
         try:
             if event.buttons() & Qt.MouseButton.LeftButton:
-                self._sample_drag_motion(event.globalPosition())
+                if not self.realistic_motion_enabled:
+                    self._sample_drag_motion(event.globalPosition())
                 self.dragged.emit(event.globalPosition().toPoint())
                 event.accept()
                 return
@@ -669,14 +1121,15 @@ class FloatingUsageBall(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            # 停止本身是一次反向加速度；把它注入节点后再清除拖拽采样状态。
-            stop_acceleration_x = -self._drag_last_velocity.x() / 0.045
-            stop_acceleration_y = -self._drag_last_velocity.y() / 0.045
-            self._liquid_surface.add_drag_acceleration(
-                stop_acceleration_x,
-                stop_acceleration_y,
-            )
-            self._ensure_animation()
+            if not self.realistic_motion_enabled:
+                # 旧供应商继续使用原有鼠标停止冲量，避免改变既有手感。
+                stop_acceleration_x = -self._drag_last_velocity.x() / 0.045
+                stop_acceleration_y = -self._drag_last_velocity.y() / 0.045
+                self._liquid_surface.add_drag_acceleration(
+                    stop_acceleration_x,
+                    stop_acceleration_y,
+                )
+                self._ensure_animation()
             self._active = False
             self._drag_last_global = None
             self._drag_last_velocity = QPointF()
@@ -752,23 +1205,84 @@ class FloatingUsageBall(QWidget):
         ratio: float,
         back_layer: bool = False,
     ) -> tuple[QPainterPath, QPainterPath]:
-        surface_scale = min(1.0, ratio / 0.16)
+        surface_scale = min(
+            1.0,
+            ratio
+            / (
+                REALISTIC_FULL_RESPONSE_RATIO
+                if self.realistic_motion_enabled
+                else 0.16
+            ),
+        )
         physics_scale = surface_scale * (1 - self._high_level_factor(ratio) * 0.52)
-        idle_scale = self._idle_flow_scale(ratio)
+        idle_scale = (
+            REALISTIC_IDLE_SCALE * min(1.0, ratio / 0.06)
+            if self.realistic_motion_enabled
+            else self._idle_flow_scale(ratio)
+        )
         layer_scale = 0.62 if back_layer else 1.0
         layer_shift = -1.2 if back_layer else 0.6
         idle_offsets = self._idle_surface_offsets(rect, 0.72 if back_layer else 0.0)
+        vertical_offsets = [0.0] * self._liquid_surface.node_count
+        if self.realistic_motion_enabled:
+            vertical_signal = (
+                self._liquid_surface.bulk_offset_y * 0.35
+                - self._liquid_surface.impact_strength * 0.72
+            )
+            vertical_offsets = [
+                vertical_signal
+                * (1 - (index / (self._liquid_surface.node_count - 1) - 0.5) ** 2 * 4 - 2 / 3)
+                * rect.height()
+                * 1.15
+                for index in range(self._liquid_surface.node_count)
+            ]
+            mean_vertical_offset = sum(vertical_offsets) / len(vertical_offsets)
+            vertical_offsets = [
+                offset - mean_vertical_offset for offset in vertical_offsets
+            ]
         offsets = [
             height * rect.height() * layer_scale * physics_scale
+                + vertical_offsets[index] * layer_scale * physics_scale
                 + idle_offsets[index] * (0.76 if back_layer else 1.0) * idle_scale
             for index, height in enumerate(self._liquid_surface.heights)
         ]
-        surface = self._smooth_surface_path(rect, surface_y + layer_shift, offsets)
+        body_lift = self._realistic_body_lift(rect)
+        surface = self._smooth_surface_path(
+            rect,
+            surface_y + layer_shift - body_lift,
+            offsets,
+        )
         fill = QPainterPath(surface)
-        fill.lineTo(rect.right(), rect.bottom() + 1)
-        fill.lineTo(rect.left(), rect.bottom() + 1)
+        fill_bottom = rect.bottom() + 1 - body_lift
+        fill.lineTo(rect.right(), fill_bottom)
+        fill.lineTo(rect.left(), fill_bottom)
         fill.closeSubpath()
+        if self.realistic_motion_enabled:
+            transform = self._realistic_body_transform(rect)
+            surface = transform.map(surface)
+            fill = transform.map(fill)
         return fill, surface
+
+    def _realistic_body_transform(self, rect: QRectF) -> QTransform:
+        transform = QTransform()
+        if not self.realistic_motion_enabled:
+            return transform
+        center = rect.center()
+        transform.translate(center.x(), center.y())
+        transform.rotate(math.degrees(self._liquid_surface.slosh_angle))
+        transform.translate(-center.x(), -center.y())
+        return transform
+
+    def _realistic_body_lift(self, rect: QRectF) -> float:
+        if not self.realistic_motion_enabled:
+            return 0.0
+        upright_weight = max(0.0, math.cos(self._liquid_surface.slosh_angle))
+        return min(
+            rect.height() * REALISTIC_MAX_BODY_LIFT_RATIO,
+            max(0.0, -self._liquid_surface.bulk_offset_y)
+            * rect.height()
+            * REALISTIC_BODY_LIFT_SCALE,
+        ) * upright_weight
 
     def _subsurface_highlight_path(
         self,
@@ -776,7 +1290,15 @@ class FloatingUsageBall(QWidget):
         surface_y: float,
         ratio: float,
     ) -> QPainterPath:
-        surface_scale = min(1.0, ratio / 0.16)
+        surface_scale = min(
+            1.0,
+            ratio
+            / (
+                REALISTIC_FULL_RESPONSE_RATIO
+                if self.realistic_motion_enabled
+                else 0.16
+            ),
+        )
         physics_scale = surface_scale * (1 - self._high_level_factor(ratio) * 0.52)
         idle_scale = self._idle_flow_scale(ratio)
         idle_offsets = self._idle_surface_offsets(rect, 1.1)
@@ -785,7 +1307,14 @@ class FloatingUsageBall(QWidget):
             + idle_offsets[index] * 0.72 * idle_scale
             for index, height in enumerate(self._liquid_surface.heights)
         ]
-        return self._smooth_surface_path(rect, surface_y + 3.2, offsets)
+        path = self._smooth_surface_path(
+            rect,
+            surface_y + 3.2 - self._realistic_body_lift(rect),
+            offsets,
+        )
+        if self.realistic_motion_enabled:
+            path = self._realistic_body_transform(rect).map(path)
+        return path
 
     def _internal_split_paths(self, inner: QRectF) -> tuple[QPainterPath, QPainterPath]:
         direction = self._internal_flow_direction
@@ -989,7 +1518,12 @@ class FloatingUsageBall(QWidget):
             painter.save()
             painter.setClipPath(clip)
             water_top = QColor(theme.heat[3] if theme.name == "light" else theme.accent_hover)
-            water = self._water_gradient(theme, surface_y, inner.bottom())
+            body_lift = self._realistic_body_lift(inner)
+            water = self._water_gradient(
+                theme,
+                surface_y - body_lift,
+                inner.bottom() - body_lift,
+            )
 
             back_path, _back_surface = self._surface_paths(
                 inner, surface_y, ratio, back_layer=True

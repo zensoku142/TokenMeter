@@ -811,6 +811,7 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     assert widget.ball._quota_title == "周额度"
     assert widget.ball._quota_reset_text == "8月20日11:58"
     assert widget.ball.accessibleDescription() == "75%"
+    assert widget.ball.realistic_motion_enabled
 
     widget._data = sample_data()
     widget._apply_update()
@@ -839,6 +840,7 @@ def test_cursor_ball_reuses_quota_mode_for_success_and_unavailable_states():
     assert widget.ball._quota_mode
     assert widget.ball._quota_remaining == 58
     assert widget.ball._quota_title == "每月额度"
+    assert not widget.ball.realistic_motion_enabled
 
     widget._data = TokenData(
         status="partial",
@@ -2246,6 +2248,68 @@ def test_compact_ball_uses_smaller_size_and_keeps_free_drag_position():
         widget.hide()
 
 
+def test_ball_drag_physics_receives_actual_window_position_after_move():
+    with (
+        patch("ui.qt_widget.FloatingWidget.refresh"),
+        patch("ui.qt_widget.config_manager.load_widget_size", return_value=None),
+    ):
+        widget = FloatingWidget()
+    widget.move(420, 260)
+
+    with (
+        patch.object(widget, "_work_area", return_value=WorkArea(0, 0, 1920, 1080)),
+        patch.object(widget.ball, "begin_container_motion") as begin_motion,
+        patch.object(widget.ball, "sample_container_motion") as sample_motion,
+        patch.object(widget.ball, "end_container_motion") as end_motion,
+    ):
+        widget._start_drag(QPoint(600, 400), "ball")
+        widget._move_drag(QPoint(640, 430))
+        widget._end_drag(QPoint(640, 430))
+
+    begin_motion.assert_called_once_with(QPointF(420, 260))
+    sample_motion.assert_called_once_with(QPointF(460, 290))
+    end_motion.assert_called_once_with(QPointF(460, 290))
+    widget._closed = True
+    widget.hide()
+
+
+def test_codex_widget_drag_advances_surface_when_window_move_starves_timer():
+    with (
+        patch("ui.qt_widget.FloatingWidget.refresh"),
+        patch("ui.qt_widget.config_manager.load_widget_size", return_value=None),
+    ):
+        widget = FloatingWidget()
+    widget._data = TokenData(
+        status="ok",
+        per_provider=[PerProviderData("codex", "Codex", status="ok")],
+        quota_windows=[QuotaWindow("weekly", "周额度", 88, None)],
+    )
+    widget._apply_update()
+    widget.move(420, 260)
+    widget.show()
+    APP.processEvents()
+
+    origin = QPoint(600, 400)
+    widget._start_drag(origin, "ball")
+    for index in range(1, 7):
+        # 模拟 Windows 搬动顶层窗口期间普通动画定时器没有机会执行。
+        widget.ball._wave_timer.stop()
+        QTest.qWait(14)
+        widget._move_drag(origin + QPoint(index * 14, 0))
+
+    assert widget.ball.realistic_motion_enabled
+    assert widget.ball._liquid_surface.slosh_angle > 0
+    assert (
+        widget.ball._liquid_surface.heights[-1]
+        - widget.ball._liquid_surface.heights[0]
+        > 0.001
+    )
+
+    widget._end_drag(origin + QPoint(84, 0))
+    widget._closed = True
+    widget.hide()
+
+
 def test_ball_wheel_resize_emits_vertical_steps_and_keeps_corner_drag_behavior():
     ball = FloatingUsageBall(88)
     ball.show()
@@ -2847,6 +2911,244 @@ def test_codex_water_ball_uses_custom_accent_for_water_and_border():
     finally:
         controller.set_appearance("dark", DARK_THEME.accent, 100)
         ball.close()
+
+
+def test_realistic_water_motion_is_enabled_only_for_codex():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(50, "2 小时后重置")
+
+    assert ball.realistic_motion_enabled
+    assert ball._liquid_surface.realistic_motion
+    assert ball._liquid_surface.idle_speed == pytest.approx(0.55)
+
+    ball._liquid_surface.apply_container_acceleration(30, 20)
+    ball.set_motion_provider("cursor")
+
+    assert not ball.realistic_motion_enabled
+    assert not ball._liquid_surface.realistic_motion
+    assert ball._liquid_surface.container_acceleration_x == 0
+    assert ball._liquid_surface.container_acceleration_y == 0
+    assert ball._liquid_surface.idle_speed == pytest.approx(
+        FloatingUsageBall._idle_flow_speed(0.5)
+    )
+    ball.close()
+
+
+def test_codex_container_speed_scales_acceleration_and_constant_speed_stabilizes():
+    def first_acceleration(elapsed_seconds: float) -> float:
+        ball = FloatingUsageBall(88)
+        ball.set_motion_provider("codex")
+        ball.set_quota_state(50, "2 小时后重置")
+        assert ball.begin_container_motion(QPointF(0, 0))
+        assert ball.sample_container_motion(QPointF(20, 0), elapsed_seconds)
+        acceleration = ball._container_acceleration.x()
+        ball.close()
+        return acceleration
+
+    slow_acceleration = first_acceleration(0.08)
+    fast_acceleration = first_acceleration(0.02)
+    assert fast_acceleration > slow_acceleration > 0
+
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(50, "2 小时后重置")
+    ball.begin_container_motion(QPointF(0, 0))
+    accelerations = []
+    for index in range(1, 31):
+        ball.sample_container_motion(QPointF(index * 10, 0), 0.04)
+        accelerations.append(abs(ball._container_acceleration.x()))
+
+    assert accelerations[-1] < accelerations[0] * 0.01
+    ball.end_container_motion(QPointF(300, 0), 0.04)
+    assert ball._liquid_surface.container_acceleration_x < 0
+    ball.close()
+
+
+def test_codex_faster_horizontal_motion_produces_a_larger_visible_slosh():
+    def acceleration_for_distance(distance: float) -> float:
+        ball = FloatingUsageBall(88)
+        ball.set_motion_provider("codex")
+        ball.set_quota_state(11, "2 小时后重置")
+        ball.begin_container_motion(QPointF(0, 0))
+        ball.sample_container_motion(QPointF(distance, 0), 0.04)
+        acceleration = ball._container_acceleration.x()
+        ball.close()
+        return acceleration
+
+    def peak_angle(acceleration: float) -> float:
+        surface = LiquidSurfaceState()
+        surface.set_realistic_motion(True)
+        surface.apply_container_acceleration(acceleration, 0)
+        peak = 0.0
+        for _ in range(24):
+            surface.step(0.016)
+            peak = max(peak, abs(surface.slosh_angle))
+        return peak
+
+    slow_peak = peak_angle(acceleration_for_distance(8))
+    fast_peak = peak_angle(acceleration_for_distance(28))
+
+    assert slow_peak > 0.12
+    assert fast_peak > slow_peak * 2.2
+    assert fast_peak > 0.35
+
+
+def test_codex_realistic_surface_tilts_reverses_and_settles():
+    surface = LiquidSurfaceState()
+    surface.set_realistic_motion(True)
+    surface.apply_container_acceleration(24, 0)
+    for _ in range(30):
+        surface.step(0.016)
+
+    assert surface.slosh_angle > 0
+    rightward_angle = surface.slosh_angle
+
+    surface.apply_container_acceleration(-60, 0)
+    reversed_angles = []
+    for _ in range(100):
+        surface.step(0.016)
+        reversed_angles.append(surface.slosh_angle)
+
+    assert rightward_angle > 0
+    assert any(angle < 0 for angle in reversed_angles)
+    for _ in range(320):
+        surface.step(0.016)
+    assert surface.settled
+
+
+def test_codex_downward_acceleration_reduces_gravity_and_stop_impacts():
+    surface = LiquidSurfaceState()
+    surface.set_realistic_motion(True)
+    surface.apply_container_acceleration(0, 26)
+    for _ in range(12):
+        surface.step(0.016)
+
+    assert surface.gravity_scale < 1
+    assert surface.bulk_offset_y < 0
+
+    surface.apply_container_acceleration(0, -60)
+    impact_strengths = []
+    compression_values = []
+    for _ in range(80):
+        surface.step(0.016)
+        impact_strengths.append(surface.impact_strength)
+        compression_values.append(surface.vertical_compression)
+
+    assert max(impact_strengths) > 0.02
+    assert min(compression_values) < 0
+
+
+def test_codex_fast_downward_acceleration_drives_liquid_to_top():
+    surface = LiquidSurfaceState()
+    surface.set_realistic_motion(True)
+
+    for _ in range(20):
+        surface.apply_container_acceleration(0, 60)
+        surface.step(0.016)
+
+    assert abs(surface.slosh_angle) > math.radians(135)
+    assert surface.gravity_scale > 1
+
+
+def test_codex_vertical_bulk_and_impact_change_rendered_surface():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(50, "2 小时后重置")
+    ball.show()
+    APP.processEvents()
+    ball._wave_timer.stop()
+    resting = ball.grab().toImage()
+
+    ball._liquid_surface.bulk_offset_y = -0.04
+    ball._liquid_surface.impact_strength = 0.06
+    ball.update()
+    APP.processEvents()
+    impacted = ball.grab().toImage()
+
+    changed_surface_pixels = sum(
+        1
+        for y in range(34, 55)
+        for x in range(8, 80)
+        if resting.pixelColor(x, y) != impacted.pixelColor(x, y)
+    )
+    assert changed_surface_pixels > 20
+    ball.close()
+
+
+def test_codex_weightlessness_detaches_liquid_from_ball_bottom():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(11, "2 小时后重置")
+    inner = QRectF(8, 8, 104, 104)
+    surface_y = ball._visual_surface_y(inner, 0.11)
+    bottom_point = QPointF(inner.center().x(), inner.bottom() - 0.5)
+
+    resting_path, _ = ball._surface_paths(inner, surface_y, 0.11)
+    ball._liquid_surface.bulk_offset_y = -0.10
+    floating_path, _ = ball._surface_paths(inner, surface_y, 0.11)
+
+    assert resting_path.contains(bottom_point)
+    assert not floating_path.contains(bottom_point)
+    assert ball._realistic_body_lift(inner) > 10
+    ball.close()
+
+
+def test_codex_liquid_body_can_rotate_through_every_quadrant():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(10, "2 小时后重置")
+    inner = QRectF(8, 8, 104, 104)
+    clip = QPainterPath()
+    clip.addEllipse(inner)
+    surface_y = ball._visual_surface_y(inner, 0.10)
+
+    visible_centers = []
+    for angle in (0.0, math.pi / 2, math.pi, -math.pi / 2):
+        ball._liquid_surface.slosh_angle = angle
+        water_path, _ = ball._surface_paths(inner, surface_y, 0.10)
+        visible_centers.append(water_path.intersected(clip).boundingRect().center())
+
+    bottom, left, top, right = visible_centers
+    assert bottom.y() > inner.center().y()
+    assert left.x() < inner.center().x()
+    assert top.y() < inner.center().y()
+    assert right.x() > inner.center().x()
+    ball.close()
+
+
+def test_codex_circular_container_motion_moves_liquid_through_every_side():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(10, "2 小时后重置")
+    radius = 120.0
+    steps_per_turn = 64
+    ball.begin_container_motion(QPointF(radius, 0))
+    visited: set[str] = set()
+
+    for index in range(1, steps_per_turn * 3 + 1):
+        orbit_angle = math.tau * index / steps_per_turn
+        ball.sample_container_motion(
+            QPointF(
+                radius * math.cos(orbit_angle),
+                radius * math.sin(orbit_angle),
+            ),
+            0.016,
+        )
+        if index < steps_per_turn:
+            continue
+        body_angle = ball._liquid_surface.slosh_angle
+        if abs(body_angle) <= math.pi / 4:
+            visited.add("bottom")
+        elif body_angle >= math.pi * 3 / 4 or body_angle <= -math.pi * 3 / 4:
+            visited.add("top")
+        elif body_angle > 0:
+            visited.add("left")
+        else:
+            visited.add("right")
+
+    assert visited == {"bottom", "left", "right", "top"}
+    ball.close()
 
 
 def test_codex_water_ball_pointer_impulse_propagates_and_settles():
