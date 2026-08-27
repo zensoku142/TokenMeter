@@ -142,7 +142,7 @@ See [Project structure](docs/PROJECT_STRUCTURE.md) for the complete layout.
 
 ## Version and releases
 
-Current version: `1.13.1`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
+Current version: `1.13.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
 
 ## License
 
