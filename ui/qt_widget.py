@@ -12,6 +12,7 @@ from PySide6.QtCore import (
     QEvent,
     QObject,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRunnable,
     Qt,
@@ -804,6 +805,8 @@ class FloatingWidget(QWidget):
         self._window_origin = self.pos()
         self._drag_started = False
         self._drag_source = source
+        if source == "ball":
+            self.ball.begin_container_motion(QPointF(self.pos()))
 
     def _move_drag(self, point: QPoint) -> None:
         delta = point - self._drag_origin
@@ -811,8 +814,11 @@ class FloatingWidget(QWidget):
             return
         self._drag_started = True
         self.move(self._window_origin + delta)
+        if self._drag_source == "ball":
+            self.ball.sample_container_motion(QPointF(self.pos()))
 
     def _end_drag(self, _point: QPoint) -> None:
+        drag_source = self._drag_source
         if self._drag_started:
             # 先判断边缘吸附；若没有贴边再做常规工作区约束。这样用户
             # 把球拖到桌面任意边缘接触时都会被吸附并自动隐藏，而不是
@@ -821,6 +827,8 @@ class FloatingWidget(QWidget):
                 self._clamp_to_work_area()
         elif self._drag_source == "ball":
             self.toggle()
+        if drag_source == "ball":
+            self.ball.end_container_motion(QPointF(self.pos()))
         self._drag_started = False
         self._drag_source = ""
 
@@ -1498,6 +1506,10 @@ class FloatingWidget(QWidget):
         provider_id = (
             self._data.per_provider[0].provider_id if self._data.per_provider else ""
         )
+        motion_provider_id = provider_id or str(
+            config_manager.get("ACTIVE_PROVIDER", "")
+        ).strip().lower()
+        self.ball.set_motion_provider(motion_provider_id)
         provider_cls = PROVIDERS.get(provider_id)
         quota_mode = bool(
             self._data.quota_windows

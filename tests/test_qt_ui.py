@@ -35,7 +35,7 @@ from api.providers.base import QuotaMetric, QuotaWindow
 from updater.client import CheckResult, ReleaseAsset, ReleaseInfo, SemVer
 from data.store import PerProviderData, TokenData
 from ui.geometry import WorkArea
-from ui.qt_ball import FloatingUsageBall, LiquidSurfaceState
+from ui.qt_ball import CodexLiquidMotion, FloatingUsageBall, LiquidSurfaceState
 from ui.qt_panel import (
     ACTIVITY_SECTION_HEIGHT,
     ANNUAL_ACTIVITY_SECTION_HEIGHT,
@@ -3899,6 +3899,215 @@ def test_codex_high_water_keeps_visible_surface_idle_motion(remaining):
 
     assert changed_surface_pixels > 10
     ball.close()
+
+
+def test_area_conserving_liquid_motion_is_enabled_only_for_codex():
+    ball = FloatingUsageBall(88)
+    ball.set_quota_state(50, "2 小时后重置")
+    inner = ball._liquid_inner_rect()
+    legacy_surface_y = ball._visual_surface_y(inner, 0.5)
+    _, legacy_surface = ball._surface_paths(inner, legacy_surface_y, 0.5)
+
+    ball.set_motion_provider("codex")
+    _, codex_surface = ball._surface_paths(inner, legacy_surface_y, 0.5)
+    assert ball.realistic_motion_enabled
+    assert ball.begin_container_motion(QPointF(0, 0))
+    assert codex_surface.elementCount() != legacy_surface.elementCount()
+
+    ball.set_motion_provider("cursor")
+    _, cursor_surface = ball._surface_paths(inner, legacy_surface_y, 0.5)
+    assert not ball.realistic_motion_enabled
+    assert not ball.begin_container_motion(QPointF(0, 0))
+    assert cursor_surface.elementCount() == legacy_surface.elementCount()
+    assert ball._codex_motion.settled
+    ball.close()
+
+
+def test_codex_circle_area_stays_equal_to_quota_across_tilts_and_small_waves():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    inner = QRectF(8, 8, 104, 104)
+    clip = QPainterPath()
+    clip.addEllipse(inner)
+    ball._liquid_surface.heights = [
+        math.sin(index / 13 * math.tau) * 0.045 for index in range(14)
+    ]
+
+    def sampled_ratio(path: QPainterPath) -> float:
+        water = 0
+        circle = 0
+        samples = 180
+        for y_index in range(samples):
+            y = inner.top() + inner.height() * (y_index + 0.5) / samples
+            for x_index in range(samples):
+                x = inner.left() + inner.width() * (x_index + 0.5) / samples
+                point = QPointF(x, y)
+                if not clip.contains(point):
+                    continue
+                circle += 1
+                water += path.contains(point)
+        return water / circle
+
+    high_water_samples = []
+    for ratio in (0.06, 0.5, 0.94, 1.0):
+        for angle in (-math.radians(12), 0.0, math.radians(12)):
+            ball._codex_motion.angle = angle
+            water_path, _ = ball._codex_surface_paths(inner, ratio)
+            actual = sampled_ratio(water_path)
+            assert actual == pytest.approx(ratio, abs=0.008)
+            if ratio == 0.94:
+                high_water_samples.append(actual)
+            if ratio == 1.0:
+                assert clip.subtracted(water_path).isEmpty()
+
+    assert max(high_water_samples) - min(high_water_samples) < 0.004
+    ball.close()
+
+
+def test_codex_motion_uses_acceleration_and_settles_after_constant_speed_stop():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(94, "2 小时后重置")
+    assert ball.begin_container_motion(QPointF(0, 0))
+
+    accelerations = []
+    angles = []
+    for index in range(1, 41):
+        assert ball.sample_container_motion(QPointF(index * 4, 0), 0.016)
+        accelerations.append(abs(ball._container_acceleration.x()))
+        angles.append(ball._codex_motion.angle)
+
+    assert max(angles) > math.radians(0.5)
+    assert abs(angles[-1]) < max(abs(angle) for angle in angles)
+    assert accelerations[-1] < accelerations[0] * 0.08
+
+    angle_before_stop = ball._codex_motion.angle
+    assert ball.end_container_motion(QPointF(160, 0), 0.016)
+    assert ball._codex_motion.external_acceleration_x < 0
+    rebound_angles = []
+    for _ in range(75):
+        ball._codex_motion.step(0.016)
+        rebound_angles.append(ball._codex_motion.angle)
+    assert any(angle < angle_before_stop for angle in rebound_angles)
+    assert abs(rebound_angles[-1]) < math.radians(0.2)
+    assert ball._codex_motion.settled
+    ball.close()
+
+
+def test_codex_motion_reverses_without_exploding_and_respects_tilt_limit():
+    motion = CodexLiquidMotion()
+    motion.apply_container_acceleration(48)
+    for _ in range(20):
+        motion.step(0.016)
+    positive_angle = motion.angle
+
+    motion.apply_container_acceleration(-48)
+    reversed_angles = []
+    for _ in range(80):
+        motion.step(0.016)
+        reversed_angles.append(motion.angle)
+
+    assert positive_angle > 0
+    assert min(reversed_angles) < 0
+    assert all(math.isfinite(angle) for angle in reversed_angles)
+    assert max(abs(angle) for angle in reversed_angles) <= math.radians(12)
+
+    motion.apply_container_acceleration(float("nan"))
+    motion.step(10)
+    assert math.isfinite(motion.angle)
+    assert math.isfinite(motion.angular_velocity)
+
+
+def test_codex_fixed_step_is_nearly_independent_of_render_interval():
+    def simulate(frame_seconds: float) -> tuple[float, float]:
+        motion = CodexLiquidMotion()
+        motion.apply_container_acceleration(36)
+        elapsed = 0.0
+        while elapsed + frame_seconds <= 0.96 + 1e-9:
+            motion.step(frame_seconds)
+            elapsed += frame_seconds
+        if elapsed < 0.96:
+            motion.step(0.96 - elapsed)
+        return motion.angle, motion.angular_velocity
+
+    reference = simulate(0.008)
+    for interval in (0.016, 0.024, 0.032):
+        result = simulate(interval)
+        assert result[0] == pytest.approx(reference[0], abs=math.radians(0.08))
+        assert result[1] == pytest.approx(reference[1], abs=math.radians(0.5))
+
+
+def test_codex_effective_gravity_and_drag_input_scale_with_ball_diameter():
+    horizontal = CodexLiquidMotion()
+    horizontal.apply_container_acceleration(3, 0)
+    reduced_gravity = CodexLiquidMotion()
+    reduced_gravity.apply_container_acceleration(3, 30)
+    for _ in range(12):
+        horizontal.step(0.016)
+        reduced_gravity.step(0.016)
+    assert reduced_gravity.angle > horizontal.angle > 0
+
+    def first_sample(size: int) -> tuple[float, float]:
+        ball = FloatingUsageBall(size)
+        ball.set_motion_provider("codex")
+        ball.set_quota_state(50, "2 小时后重置")
+        ball.begin_container_motion(QPointF(0, 0))
+        ball.sample_container_motion(QPointF(size * 0.3, 0), 0.04)
+        result = (ball._container_acceleration.x(), ball._codex_motion.angle)
+        ball.close()
+        return result
+
+    small = first_sample(88)
+    large = first_sample(176)
+    assert large[0] == pytest.approx(small[0])
+    assert large[1] == pytest.approx(small[1])
+
+
+def test_codex_zero_unknown_and_hidden_states_stop_motion_timer():
+    ball = FloatingUsageBall(88)
+    ball.set_motion_provider("codex")
+    ball.set_quota_state(50, "2 小时后重置")
+    ball.show()
+    APP.processEvents()
+    ball._codex_motion.apply_container_acceleration(36)
+    ball._ensure_animation()
+    assert ball._wave_timer.isActive()
+
+    ball.hide()
+    APP.processEvents()
+    assert not ball._wave_timer.isActive()
+    assert ball._codex_motion.settled
+
+    ball.show()
+    ball.set_quota_state(None, "额度暂不可用")
+    assert not ball._wave_timer.isActive()
+    assert ball._codex_motion.settled
+    ball.set_quota_state(0, "即将重置")
+    assert not ball._wave_timer.isActive()
+    ball.close()
+
+
+def test_floating_widget_reports_actual_window_positions_to_codex_motion():
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+    widget.move(420, 260)
+
+    with (
+        patch.object(widget.ball, "begin_container_motion") as begin_motion,
+        patch.object(widget.ball, "sample_container_motion") as sample_motion,
+        patch.object(widget.ball, "end_container_motion") as end_motion,
+        patch.object(widget, "_try_edge_snap", return_value=False),
+        patch.object(widget, "_clamp_to_work_area"),
+    ):
+        widget._start_drag(QPoint(600, 400), "ball")
+        widget._move_drag(QPoint(640, 430))
+        widget._end_drag(QPoint(640, 430))
+
+    begin_motion.assert_called_once_with(QPointF(420, 260))
+    sample_motion.assert_called_once_with(QPointF(460, 290))
+    end_motion.assert_called_once_with(QPointF(460, 290))
+    widget._closed = True
+    widget.hide()
 
 
 def test_settings_exposes_panel_auto_collapse_toggle():
