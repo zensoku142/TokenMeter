@@ -1,5 +1,6 @@
 import os
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
@@ -116,6 +117,158 @@ def test_main_stable_fallback_excludes_prerelease_versions():
     ]):
         with pytest.raises(UpdateError):
             client._load_latest_from_list(stable_only=True)
+
+
+def _notes_payload(version, body="History", **extra):
+    # 历史附件可以被移除；汇总仍应展示其正文，但不能把它选作下载目标。
+    return {"tag_name": f"v{version}", "body": body, "assets": [], **extra}
+
+
+@pytest.fixture
+def update_client(monkeypatch):
+    from config import runtime as config_manager
+
+    state = {}
+    monkeypatch.setattr(config_manager, "load_update_state", lambda: state.copy())
+    monkeypatch.setattr(config_manager, "save_update_state", state.update)
+    client = GitHubReleaseClient()
+    yield client, state
+    client._session.close()
+
+
+@pytest.mark.parametrize("channel", ["stable", "prerelease"])
+def test_update_notes_cover_upgrade_range_and_preserve_download_target(update_client, channel):
+    client, state = update_client
+    latest = replace(_setup_release("1.14.1"), body="Latest pet update reminder")
+    history = [
+        _notes_payload("1.14.0", "Pet, account isolation and HTTPS"),
+        _notes_payload("1.13.2", "Already installed"),
+        _notes_payload("1.15.0", "Future release"),
+        _notes_payload("1.14.1", "Different latest snapshot"),
+        _notes_payload("1.14.0", "Duplicate version"),
+        _notes_payload("1.14.0-beta.1", "Preview features"),
+        _notes_payload("1.13.9", "Marked preview", prerelease=True),
+        _notes_payload("1.13.8", "Draft release", draft=True),
+        {"tag_name": "pet-v1.14.0", "name": "1.14.0", "body": "Pet-only release"},
+        {"tag_name": "invalid", "body": "Invalid version"},
+        None,
+    ]
+    with (patch.object(client, "_load_latest_stable", return_value=latest),
+          patch.object(client, "_load_latest_from_list", return_value=latest),
+          patch.object(client, "_request_json", return_value=history)):
+        result = client.check_for_updates("1.13.2", channel, use_cache=False)
+    release = result.latest_release
+    assert result.update_available
+    assert release.version == latest.version and release.tag_name == latest.tag_name
+    assert release.setup_asset == latest.setup_asset and release.checksum_asset == latest.checksum_asset
+    assert release.body == latest.body
+    assert release.update_notes.startswith("## v1.14.1\n\nLatest pet update reminder")
+    assert "## v1.14.0\n\nPet, account isolation and HTTPS" in release.update_notes
+    assert release.update_notes.index("## v1.14.1") < release.update_notes.index("## v1.14.0\n")
+    for text in ("Already installed", "Future release", "Different latest snapshot", "Duplicate version",
+                 "Draft release", "Pet-only release", "Invalid version"):
+        assert text not in release.update_notes
+    assert ("Preview features" in release.update_notes) == (channel == "prerelease")
+    assert ("Marked preview" in release.update_notes) == (channel == "prerelease")
+    assert not release.notes_incomplete
+    assert state["notes_current_version"] == "1.13.2"
+
+
+def test_history_pagination_does_not_stop_at_old_or_pet_releases(update_client):
+    client, _state = update_client
+    latest = _setup_release("1.14.1")
+    old = _notes_payload("1.0.0")
+    pet = {"tag_name": "pet-v0.1.0"}
+    with patch.object(client, "_request_json", side_effect=[
+        [old, pet] * 50, [_notes_payload("1.14.0", "Late-published version")],
+    ]) as metadata:
+        release = client._with_update_notes("1.13.2", latest, "stable")
+    assert "Late-published version" in release.update_notes
+    assert metadata.call_count == 2
+    assert metadata.call_args.args[0].endswith("page=2")
+    assert not release.notes_incomplete
+
+
+@pytest.mark.parametrize("failure", [UpdateError("offline"), {"invalid": "response"}])
+def test_history_failure_preserves_available_notes_and_update(update_client, failure):
+    client, _state = update_client
+    latest = _setup_release("1.14.1")
+    first_page = [_notes_payload("1.14.0", "Fetched history")] * 100
+    with (patch.object(client, "_load_latest_stable", return_value=latest),
+          patch.object(client, "_request_json", side_effect=[first_page, failure])):
+        result = client.check_for_updates("1.13.2", "stable", use_cache=False)
+    assert result.update_available
+    assert result.latest_release.setup_asset == latest.setup_asset
+    assert result.latest_release.body == latest.body
+    assert "Fetched history" in result.latest_release.update_notes
+    assert result.latest_release.notes_incomplete
+
+
+def test_first_history_request_failure_falls_back_to_latest_notes(update_client):
+    client, _state = update_client
+    latest = _setup_release("1.14.1")
+    with patch.object(client, "_request_json", side_effect=UpdateError("rate limited")):
+        release = client._with_update_notes("1.13.2", latest, "stable")
+    assert release.update_notes == "## v1.14.1\n\nBug fixes"
+    assert release.notes_incomplete
+
+
+def test_history_requests_and_total_notes_size_are_bounded(update_client, monkeypatch):
+    import updater.client as module
+
+    client, _state = update_client
+    latest = _setup_release("1.14.1")
+    monkeypatch.setattr(module, "MAX_RELEASE_NOTES_PAGES", 2)
+    with patch.object(client, "_request_json", return_value=[_notes_payload("1.0.0")] * 100) as metadata:
+        release = client._with_update_notes("1.13.2", latest, "stable")
+    assert metadata.call_count == 2 and release.notes_incomplete
+    monkeypatch.setattr(module, "MAX_METADATA_BYTES", 30)
+    with patch.object(client, "_request_json", return_value=[_notes_payload("1.14.0", "x" * 31)]):
+        release = client._with_update_notes("1.13.2", latest, "stable")
+    assert release.notes_incomplete
+    assert "x" * 31 not in release.update_notes
+    assert latest.body in release.update_notes
+
+
+def test_missing_history_body_remains_visible_as_an_incomplete_version(update_client):
+    client, _state = update_client
+    with patch.object(client, "_request_json", return_value=[_notes_payload("1.14.0", None)]):
+        release = client._with_update_notes("1.13.2", _setup_release("1.14.1"), "stable")
+    assert "## v1.14.0" in release.update_notes
+    assert release.notes_incomplete
+
+
+def test_update_notes_cache_is_scoped_to_installed_version_and_channel(update_client):
+    client, state = update_client
+    latest = _setup_release("1.14.1")
+    with (patch.object(client, "_load_latest_stable", return_value=latest) as fetch_latest,
+          patch.object(client, "_request_json", return_value=[_notes_payload("1.14.0")]) as history):
+        first = client.check_for_updates("1.13.2", "stable", use_cache=False)
+        cached = client.check_for_updates("v1.13.2", "stable", use_cache=True)
+        assert cached.cached and cached.latest_release == first.latest_release
+        assert fetch_latest.call_count == history.call_count == 1
+        upgraded = client.check_for_updates("1.14.0", "stable", use_cache=True)
+        assert not upgraded.cached
+        assert "## v1.14.0" not in upgraded.latest_release.update_notes
+        assert fetch_latest.call_count == history.call_count == 2
+        # 没有范围标记的旧客户端缓存也必须重建，不能继续只展示最新版本正文。
+        state.pop("notes_current_version")
+        assert not client.check_for_updates("1.14.0", "stable", use_cache=True).cached
+        assert fetch_latest.call_count == history.call_count == 3
+        with patch.object(client, "_load_latest_from_list", return_value=latest) as preview:
+            assert not client.check_for_updates("1.14.0", "prerelease", use_cache=True).cached
+        preview.assert_called_once()
+
+
+@pytest.mark.parametrize("current", ["1.14.1", "1.15.0"])
+def test_no_update_does_not_fetch_release_history(update_client, current):
+    client, _state = update_client
+    with (patch.object(client, "_load_latest_stable", return_value=_setup_release("1.14.1")),
+          patch.object(client, "_request_json") as history):
+        result = client.check_for_updates(current, "stable", use_cache=False)
+    assert not result.update_available
+    assert result.latest_release.update_notes == ""
+    history.assert_not_called()
 
 
 def test_download_bundle_downloads_only_verified_setup_to_update_cache(tmp_path):

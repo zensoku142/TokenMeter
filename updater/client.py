@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -39,6 +39,7 @@ AUTO_CHECK_INTERVAL = timedelta(hours=24)
 DOWNLOAD_CHUNK_SIZE = 1024 * 128
 HTTP_TIMEOUT = (5, 30)
 MAX_METADATA_BYTES = 2 * 1024 * 1024
+MAX_RELEASE_NOTES_PAGES = 10
 MAX_DOWNLOAD_BYTES = 2 * 1024**3
 MANIFEST_VERSION = 1
 
@@ -161,6 +162,9 @@ class ReleaseInfo:
     is_prerelease: bool
     setup_asset: ReleaseAsset
     checksum_asset: ReleaseAsset
+    # 保留最新 Release 的原始正文；汇总说明只用于展示，不改变下载目标或原有调用方。
+    update_notes: str = ""
+    notes_incomplete: bool = False
 
 
 @dataclass(frozen=True)
@@ -353,7 +357,9 @@ class GitHubReleaseClient:
         channel = (channel or RELEASE_CHANNEL_STABLE).strip().lower()
         cached_state = config_manager.load_update_state()
         now = datetime.now(timezone.utc)
-        if use_cache and _cache_is_fresh(cached_state, now, channel):
+        # 汇总范围随已安装版本变化；旧缓存或升级前的缓存必须重新生成说明。
+        if (use_cache and _cache_is_fresh(cached_state, now, channel)
+                and cached_state.get("notes_current_version") == normalize_version(current_version)):
             cached_release = _release_from_state(cached_state)
             return CheckResult(
                 current_version=current_version,
@@ -370,12 +376,14 @@ class GitHubReleaseClient:
         else:
             release = self._load_latest_stable()
         update_available = compare_versions(current_version, release.version) < 0
+        if update_available:
+            release = self._with_update_notes(current_version, release, channel)
         message = (
             f"发现新版本 v{release.version}"
             if update_available
             else f"当前已是最新版本 v{current_version}"
         )
-        self._save_check_state(channel, release, now, message)
+        self._save_check_state(channel, release, now, message, current_version=current_version)
         return CheckResult(
             current_version=current_version,
             latest_release=release,
@@ -565,6 +573,55 @@ class GitHubReleaseClient:
             raise UpdateError("没有找到可用的 Release 附件")
         return max(candidates, key=lambda item: item.semver)
 
+    def _with_update_notes(
+        self, current_version: str, release: ReleaseInfo, channel: str,
+    ) -> ReleaseInfo:
+        current = SemVer.parse(current_version)
+        notes = {release.semver: release.body}
+        notes_size = len(release.body.encode("utf-8"))
+        incomplete = not bool(release.body.strip())
+        try:
+            # GitHub 列表并非按语义版本排序；不能遇到一个旧版就停，以免漏掉后补发的版本。
+            # 最多读取 1000 条记录，正文总量沿用元数据上限，避免历史增长拖住更新检查。
+            for page in range(1, MAX_RELEASE_NOTES_PAGES + 1):
+                payload = self._request_json(f"{GITHUB_RELEASES_API_URL}?per_page=100&page={page}")
+                if not isinstance(payload, list):
+                    raise UpdateError("GitHub Releases 返回格式不正确")
+                for item in payload:
+                    if (not isinstance(item, dict) or item.get("draft")
+                            or str(item.get("tag_name", "")).startswith(PET_RELEASE_TAG_PREFIX)):
+                        continue
+                    try:
+                        version = SemVer.parse(_release_version_from_payload(item))
+                    except (UpdateError, ValueError):
+                        continue
+                    if (channel != RELEASE_CHANNEL_PRERELEASE
+                            and (item.get("prerelease") or version.prerelease)):
+                        continue
+                    if not current < version or release.semver < version or version in notes:
+                        continue
+                    # 历史说明不依赖旧安装包是否仍在；下载始终使用已验证的最新附件。
+                    body = str(item.get("body") or "").strip()
+                    notes_size += len(body.encode("utf-8"))
+                    if notes_size > MAX_METADATA_BYTES:
+                        raise UpdateError("GitHub 更新信息超过大小限制")
+                    notes[version] = body
+                    incomplete = incomplete or not bool(body)
+                if len(payload) < 100:
+                    break
+            else:
+                incomplete = True
+        except (UpdateError, requests.RequestException):
+            # 历史查询失败不能让已发现的安装包消失；保留已获取的说明并在弹窗提示缺失。
+            incomplete = True
+        return replace(
+            release,
+            update_notes="\n\n".join(
+                f"## v{version.normalized()}\n\n{notes[version]}" for version in sorted(notes, reverse=True)
+            ),
+            notes_incomplete=incomplete,
+        )
+
     def _request_json(self, url: str) -> object:
         try:
             response = self._session.get(url, timeout=HTTP_TIMEOUT, stream=True)
@@ -707,6 +764,8 @@ class GitHubReleaseClient:
         release: ReleaseInfo,
         checked_at: datetime,
         message: str,
+        *,
+        current_version: str = APP_VERSION,
     ) -> None:
         config_manager.save_update_state(
             {
@@ -717,6 +776,9 @@ class GitHubReleaseClient:
                 "latest_tag_name": release.tag_name,
                 "latest_published_at": release.published_at,
                 "latest_body": release.body,
+                "latest_update_notes": release.update_notes,
+                "notes_incomplete": release.notes_incomplete,
+                "notes_current_version": normalize_version(current_version),
                 "latest_is_prerelease": release.is_prerelease,
                 "latest_setup_asset_name": release.setup_asset.name,
                 "latest_setup_asset_url": release.setup_asset.download_url,
@@ -836,6 +898,8 @@ def _release_from_state(state: dict[str, object]) -> ReleaseInfo | None:
         tag_name=str(state.get("latest_tag_name") or f"v{version}"),
         published_at=str(state.get("latest_published_at") or ""),
         body=str(state.get("latest_body") or ""),
+        update_notes=str(state.get("latest_update_notes") or ""),
+        notes_incomplete=bool(state.get("notes_incomplete")),
         is_prerelease=bool(state.get("latest_is_prerelease")),
         setup_asset=setup_asset,
         checksum_asset=checksum_asset,

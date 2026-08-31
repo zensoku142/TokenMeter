@@ -4843,6 +4843,26 @@ def test_settings_window_exposes_update_controls_without_controller():
     window.close()
 
 
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_update_dialog_shows_upgrade_range_history_and_fallback_notice(incomplete):
+    from dataclasses import replace
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    release = replace(sample_release("1.14.1"),
+                      update_notes="## v1.14.1\n\nPet update reminder\n\n## v1.14.0\n\nPet support",
+                      notes_incomplete=incomplete)
+    with patch("ui.qt_update.APP_VERSION", "1.13.2"):
+        dialog = UpdatePromptDialog(release)
+    assert dialog.findChild(QPlainTextEdit).toPlainText() == release.update_notes
+    labels = dialog.findChildren(QLabel)
+    assert any(label.text() == "v1.13.2 → v1.14.1" for label in labels)
+    assert any("https://github.com/zensoku142/TokenMeter/releases" in label.text()
+               and label.openExternalLinks() for label in labels)
+    assert any("部分更新说明暂不可用" in label.text() for label in labels) == incomplete
+    assert any(button.text() == "下载并更新" and button.isEnabled()
+               for button in dialog.findChildren(QPushButton))
+
+
 def test_auto_update_prompt_only_deduplicates_within_current_session():
     release = sample_release()
     result = CheckResult(

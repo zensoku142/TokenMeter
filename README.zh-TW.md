@@ -109,7 +109,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.14.1`，選用桌寵擴充套件 `0.1.0`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.14.2`，選用桌寵擴充套件 `0.1.0`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from config import runtime as config_manager
 from core import pet_extension
-from core.identity import APP_VERSION
+from core.identity import APP_VERSION, GITHUB_RELEASES_URL
 from ui.i18n import bind_text, tr
 from updater.client import (
     CheckResult,
@@ -143,6 +143,7 @@ class UpdatePromptDialog(QDialog):
         form = QFormLayout()
         form.setHorizontalSpacing(18)
         form.setVerticalSpacing(8)
+        form.addRow(bind_text(QLabel(), "升级范围"), QLabel(f"v{APP_VERSION} → v{release.version}"))
         form.addRow(bind_text(QLabel(), "发布时间"), bind_text(QLabel(), release_display_time(release.published_at)))
         form.addRow(bind_text(QLabel(), "文件大小"), bind_text(QLabel(), format_bytes(release.setup_asset.size)))
         form.addRow(bind_text(QLabel(), "更新通道"), bind_text(QLabel(), "预发布版" if release.is_prerelease else "正式版"))
@@ -154,8 +155,18 @@ class UpdatePromptDialog(QDialog):
 
         notes = QPlainTextEdit()
         notes.setReadOnly(True)
-        notes.setPlainText(release.body or "该版本未提供更新说明。")
+        notes.setPlainText(release.update_notes or release.body or tr("该版本未提供更新说明。"))
         root.addWidget(notes, 1)
+
+        if release.notes_incomplete:
+            warning = bind_text(QLabel(), "部分更新说明暂不可用，仍可继续更新；请查看完整更新记录。")
+            warning.setWordWrap(True)
+            root.addWidget(warning)
+        history_link = bind_text(QLabel(), lambda: (
+            f'<a href="{GITHUB_RELEASES_URL}">{tr("查看完整更新记录")}</a>'
+        ))
+        history_link.setOpenExternalLinks(True)
+        root.addWidget(history_link)
 
         buttons = QDialogButtonBox()
         later_button = bind_text(buttons.addButton('', QDialogButtonBox.ButtonRole.RejectRole), "稍后提醒")
