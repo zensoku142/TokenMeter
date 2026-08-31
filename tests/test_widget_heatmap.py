@@ -49,7 +49,7 @@ def test_missing_dates_are_zero_and_source_values_are_aggregated():
     assert by_date[date(2026, 7, 3)].amount == 0.3
 
 
-def test_levels_use_robust_dynamic_scale():
+def test_levels_preserve_large_usage_differences():
     _period, days = normalize_activity(
         [
             {"date": "2026-07-01", "tokens": 10},
@@ -61,7 +61,7 @@ def test_levels_use_robust_dynamic_scale():
     levels = activity_levels(days)
 
     assert levels[date(2026, 7, 1)] == 1
-    assert levels[date(2026, 7, 2)] == 2
+    assert levels[date(2026, 7, 2)] == 1
     assert levels[date(2026, 7, 3)] == 5
 
 
@@ -81,7 +81,7 @@ def test_levels_renormalize_when_visible_maximum_changes():
     assert date(2026, 7, 2) not in activity_levels(days_with_10_max)
 
 
-def test_levels_stretch_close_values_across_active_colors():
+def test_levels_keep_similar_usage_in_the_same_color_band():
     end = date(2026, 7, 3)
     rows = [
         {
@@ -94,13 +94,46 @@ def test_levels_stretch_close_values_across_active_colors():
 
     levels = activity_levels(days)
 
-    assert [levels[end - timedelta(days=index)] for index in range(5)] == [
-        5,
-        4,
-        3,
-        2,
-        1,
+    assert [levels[end - timedelta(days=index)] for index in range(5)] == [5] * 5
+
+
+def test_levels_do_not_saturate_when_a_small_usage_day_is_added():
+    end = date(2026, 7, 3)
+    rows = [
+        {"date": (end - timedelta(days=index)).isoformat(), "tokens": value}
+        for index, value in enumerate(
+            (100_000_000, 65_000_000, 45_000_000, 25_000_000, 5_000_000)
+        )
     ]
+    _period, days = normalize_activity(rows, end)
+    levels = activity_levels(days)
+    small_day = end - timedelta(days=5)
+    _period, days_with_small_usage = normalize_activity(
+        rows + [{"date": small_day.isoformat(), "tokens": 1}], end
+    )
+    updated_levels = activity_levels(days_with_small_usage)
+
+    assert [levels[end - timedelta(days=index)] for index in range(5)] == [5, 4, 3, 2, 1]
+    assert all(updated_levels[day] == level for day, level in levels.items())
+    assert updated_levels[small_day] == 1
+
+
+def test_levels_use_equal_twenty_percent_bands_and_leave_zero_uncolored():
+    end = date(2026, 7, 3)
+    values = (0, 1, 20, 21, 40, 41, 60, 61, 80, 81, 100)
+    rows = [
+        {"date": (end - timedelta(days=index)).isoformat(), "tokens": value}
+        for index, value in enumerate(values)
+    ]
+    _period, days = normalize_activity(rows, end)
+
+    levels = activity_levels(days)
+
+    assert end not in levels
+    assert [levels.get(end - timedelta(days=index), 0) for index in range(len(values))] == [
+        0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5,
+    ]
+    assert activity_levels([]) == {}
 
 
 def test_token_values_use_wan_units():
