@@ -347,7 +347,8 @@ namespace VPet_Simulator.Core
         /// </summary>
         public void ForceClose()
         {
-            EndTimer.Stop(); ShowTimer.Stop(); CloseTimer.Close();
+            // 关闭一条消息后还会再次提醒；这里只暂停，最终释放时才销毁计时器。
+            EndTimer.Stop(); ShowTimer.Stop(); CloseTimer.Stop();
             this.Visibility = Visibility.Collapsed;
             MessageBoxContent.Children.Clear();
             if ((m.DisplayType.Name == graphName || m.DisplayType.Type == GraphInfo.GraphType.Say) && m.DisplayType.Animat != GraphInfo.AnimatType.C_End)

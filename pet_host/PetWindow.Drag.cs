@@ -16,9 +16,9 @@ namespace TokenMeter.Pet;
 internal sealed partial class PetWindow
 {
     private readonly DispatcherTimer petPressTimer = new();
+    private const double EdgeSnapRange = 12;
     private bool petPointerDown;
     private bool petDragging;
-    private bool petLogicWasEnabled;
     private Point petPressScreen;
     private Point petPressLocal;
     private Point petWindowScreen;
@@ -68,13 +68,15 @@ internal sealed partial class PetWindow
         if (!Mouse.Capture(this, CaptureMode.SubTree)) return false;
         petPointerDown = true;
         petDragging = false;
+        CancelAutonomousSequence();
+        FinishNotification(restorePosition: false);
+        ResetCloudHover();
         petPressScreen = screenPoint;
         petPressLocal = localPoint;
         petWindowScreen = new Point(window.Left, window.Top);
         var dpi = VisualTreeHelper.GetDpi(this);
         petDragThreshold = new Size(SystemParameters.MinimumHorizontalDragDistance * dpi.DpiScaleX,
             SystemParameters.MinimumVerticalDragDistance * dpi.DpiScaleY);
-        petLogicWasEnabled = ambientTimer.IsEnabled;
         ambientTimer.Stop();
         pet!.SetMoveMode(false, false, 1200000);
         pet.isPress = true;
@@ -94,6 +96,7 @@ internal sealed partial class PetWindow
         if (DockedEdge.HasValue)
         {
             cloudDockedState = false;
+            cloudManualChoice = null;
             cloudEnabled = false;
         }
         pet!.ToolBar.Visibility = Visibility.Collapsed;
@@ -131,8 +134,8 @@ internal sealed partial class PetWindow
         // 先清状态再释放捕获，避免 LostMouseCapture 重入触发第二次点击或结束动画。
         if (Mouse.Captured == this) Mouse.Capture(null);
         pet!.isPress = false;
-        ambientTimer.IsEnabled = !closing && visible && petLogicWasEnabled;
-        pet.SetMoveMode(!closing && visible && allowMove, false, 1200000);
+        SyncAutonomy();
+        UpdateCloudPointer();
         if (closing || !visible) return;
         if (dragged)
         {
@@ -166,7 +169,8 @@ internal sealed partial class PetWindow
         var work = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
         // 原版贴边锚点基于 500px 画布；按实际窗口像素同步缩放热区与锚点，避免混用 WPF 单位和屏幕像素。
         double zoom = (rect.Right - rect.Left) / 500.0;
-        double threshold = 50 * zoom;
+        // 吸附只占很窄的边缘，给原版 100 单位的爬墙触发区留出可停放空间。
+        double threshold = EdgeSnapRange * zoom;
         bool left = leftEdge ?? rect.Left - work.Left <= threshold;
         if (leftEdge == null && !left && work.Right - rect.Right > threshold) return false;
         var animation = left ? GraphType.SideHide_Left_Main : GraphType.SideHide_Right_Main;
@@ -234,7 +238,7 @@ internal sealed partial class PetWindow
                 ResizePet(testSize - size);
                 foreach (bool left in new[] { true, false })
                 {
-                    foreach (int inset in new[] { 10, -80, 60 })
+                    foreach (int inset in new[] { 10, -80, 30, 60 })
                     {
                         ClampPosition();
                         UpdateLayout();
@@ -256,7 +260,7 @@ internal sealed partial class PetWindow
                         var side = graph!.GraphConfig.Data["side"];
                         double expectedX = left ? work.Left - side[(gdbe)"left"] * zoom
                             : work.Right - side[(gdbe)"right"] * zoom;
-                        bool shouldSnap = inset <= 50;
+                        bool shouldSnap = inset <= EdgeSnapRange;
                         if (!shouldSnap) expectedX = targetX;
                         int expectedY = Math.Clamp(targetY, work.Top, work.Bottom - (before.Bottom - before.Top));
                         string direction = left ? "Left" : "Right";

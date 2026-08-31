@@ -265,13 +265,29 @@ def test_vpet_rejects_mismatched_resource_revision_without_changing_checkout(tmp
         build_vpet.ensure_source()
 
 
-def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatch):
+@pytest.mark.parametrize("full_autonomy", [False, True])
+def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatch, full_autonomy):
     source = tmp_path / "build" / "vpet-upstream"
     vendor = tmp_path / "third_party" / "VPet"
     output = tmp_path / "build" / "vpet"
     animation = source / build_vpet.CORE_MOD / "pet/vup/Default/frame.png"
     animation.parent.mkdir(parents=True)
     animation.write_bytes(b"animation")
+    animations = ("Default",)
+    extra_frames = []
+    if full_autonomy:
+        assert "IDEL" in build_vpet.ANIMATION_DIRS
+        animations += ("IDEL", "State", "MOVE")
+        extra_frames = [
+            f"IDEL/{name}/Happy/B/frame.png" for name in (
+                "amusement_B", "aside", "Boring", "Bubbles", "happy_like520",
+                "Meow", "meowlook", "Squat", "Tennis", "yawning",
+            )
+        ] + ["State/StateTWO/Nomal/B/frame.png", "MOVE/walk.left/Happy/B/frame.png"]
+        for relative in extra_frames:
+            frame = source / build_vpet.CORE_MOD / "pet/vup" / relative
+            frame.parent.mkdir(parents=True)
+            frame.write_bytes(relative.encode())
     config = source / build_vpet.CORE_MOD / "pet/vup.lps"
     config.write_text("pet: vup\nwork: removed\n", encoding="utf-8")
     vendor.mkdir(parents=True)
@@ -287,7 +303,7 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     monkeypatch.setattr(build_vpet, "SOURCE", source)
     monkeypatch.setattr(build_vpet, "VENDORED_SOURCE", vendor)
     monkeypatch.setattr(build_vpet, "OUTPUT", output)
-    monkeypatch.setattr(build_vpet, "ANIMATION_DIRS", ("Default",))
+    monkeypatch.setattr(build_vpet, "ANIMATION_DIRS", animations)
 
     report = build_vpet.stage_resources()
 
@@ -298,4 +314,7 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     assert (output / "VPet-README.md").read_text(encoding="utf-8") == "upstream animation notices"
     assert (output / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8") == "integration notices"
     assert report["revision"] == build_vpet.REVISION
-    assert report["resource_files"] == 2
+    assert report["resource_files"] == 2 + len(extra_frames)
+    for relative in extra_frames:
+        assert (output / "resources/pet/vup" / relative).read_bytes() == relative.encode()
+    assert not (output / "resources/pet/vup/WORK").exists()

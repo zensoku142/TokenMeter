@@ -32,10 +32,7 @@ ANIMATION_DIRS = (
     "State",
     "Touch_Body",
     "Touch_Head",
-    "IDEL/amusement_B",
-    "IDEL/Boring",
-    "IDEL/Squat",
-    "IDEL/yawning",
+    "IDEL",
 )
 
 

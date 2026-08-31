@@ -21,6 +21,7 @@ internal sealed partial class PetWindow
         int originalSize = size;
         bool originalCloudEnabled = cloudEnabled;
         bool? originalCloudDockedState = cloudDockedState;
+        bool? originalManualChoice = cloudManualChoice;
         double originalLeft = Left, originalTop = Top;
         var handle = new WindowInteropHelper(this).Handle;
         void Usage(string provider, string primary, string status = "", bool warning = false, bool? pricingPeak = null, object? theme = null)
@@ -314,6 +315,7 @@ internal sealed partial class PetWindow
             EndPetGesture(cancel: true);
             cloudEnabled = originalCloudEnabled;
             cloudDockedState = originalCloudDockedState;
+            cloudManualChoice = originalManualChoice;
             pet!.CleanState();
             pet.DisplayToNomal();
             size = originalSize;

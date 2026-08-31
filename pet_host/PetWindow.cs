@@ -79,6 +79,7 @@ internal sealed partial class PetWindow : Window, IController
             closing = true;
             if (petMenu != null) petMenu.IsOpen = false;
             EndPetGesture(cancel: true);
+            DisposeNotifications();
             SaveState();
             saveTimer.Stop();
             ambientTimer.Stop();
@@ -110,6 +111,9 @@ internal sealed partial class PetWindow : Window, IController
             pet.Resources = Application.Current.Resources;
             pet.ToolBar.Resources = Application.Current.Resources;
             pet.MsgBar.This.Resources = Application.Current.Resources;
+            // 内核仍保留角色名以兼容原版资源；提醒只显示正文，不展示称呼或预留标题空行。
+            if (pet.MsgBar.This.FindName("LName") is FrameworkElement messageName)
+                messageName.Visibility = Visibility.Collapsed;
             // 轻点仅用于抚摸等角色交互；所有操作统一由右键菜单提供。
             pet.DefaultClickAction = null;
             AttachPetDragging();
@@ -141,12 +145,14 @@ internal sealed partial class PetWindow : Window, IController
             pet.MouseMove += (_, e) => quotaCloud.NotifyPointerMovement(PointToScreen(e.GetPosition(this)));
             pet.MouseLeave += (_, _) => quotaCloud.NotifyActivity();
             ready = true;
+            InitializeNotifications();
             if (pendingUsage is { } usage) UpdateUsage(usage);
             UpdateQuotaCloud();
             saveTimer.Tick += (_, _) => SaveState();
             saveTimer.Start();
-            ambientTimer.Tick += (_, _) => RunAutonomousBehavior();
-            if (visible && allowMove) ambientTimer.Start();
+            // 冒烟检查会主动调用真实动作；后台随机不能干扰其坐标和生命周期断言。
+            ambientTimer.Tick += (_, _) => { if (!smoke) RunAutonomousBehavior(); };
+            SyncAutonomy();
             Program.Send(new { @event = "ready", animations = graph.GraphsALL.Count });
             if (captureDirectory != null || smoke)
                 await RunVisualCheck();
@@ -179,19 +185,21 @@ internal sealed partial class PetWindow : Window, IController
         Add("查看用量面板", () => Request("open_panel"));
         quotaMenuItem = Add("显示额度气泡", () => {
             // 以点击时的状态应用手动选择，避免尚未处理的动画回调把本次开关覆盖掉。
-            cloudDockedState = DockedEdge.HasValue;
+            cloudDockedState = LogicalDockedEdge.HasValue;
+            cloudManualChoice = quotaMenuItem!.IsChecked;
             cloudEnabled = quotaMenuItem!.IsChecked;
+            if (!cloudEnabled && activeNotice == Notice.Quota) FinishNotification();
             UpdateQuotaCloud();
             SaveState();
         });
         quotaMenuItem.IsCheckable = true;
+        AddNotificationMenus();
         petMenu.Items.Add(new Separator());
         autonomyMenuItem = Add("自主活动", () => {
             allowMove = autonomyMenuItem!.IsChecked;
+            if (!allowMove) CancelAutonomousSequence();
             // WPF 可能先关闭弹出菜单再发送 Click；两种事件顺序都要应用最新的开关值。
-            bool enabled = allowMove && visible && !closing && !petMenu.IsOpen;
-            ambientTimer.IsEnabled = enabled;
-            pet.SetMoveMode(enabled, false, 1200000);
+            SyncAutonomy();
             SaveState();
         });
         autonomyMenuItem.IsCheckable = true;
@@ -203,18 +211,20 @@ internal sealed partial class PetWindow : Window, IController
         Add("默认角色来源与授权", ShowCredits);
         Add("退出 TokenMeter", () => Request("quit"));
         petMenu.Opened += (_, _) => {
+            CancelAutonomousSequence();
             UpdateQuotaCloud();
             quotaMenuItem.IsChecked = cloudEnabled;
             quotaCloud?.NotifyActivity();
             autonomyMenuItem.IsChecked = allowMove;
+            RefreshNotificationMenus();
             // 菜单打开期间暂停自主移动，避免点击目标随宠物移动；关闭后按用户开关恢复。
             ambientTimer.Stop();
             pet.SetMoveMode(false, false, 1200000);
         };
         petMenu.Closed += (_, _) => {
             quotaCloud?.NotifyActivity();
-            ambientTimer.IsEnabled = ready && visible && allowMove && !closing;
-            pet.SetMoveMode(ready && visible && allowMove && !closing, false, 1200000);
+            SyncAutonomy();
+            UpdateCloudPointer();
         };
         petMenu.MouseMove += (_, e) => quotaCloud?.NotifyPointerMovement(petMenu.PointToScreen(e.GetPosition(petMenu)));
         PreviewMouseDown += (_, e) => {
@@ -227,18 +237,6 @@ internal sealed partial class PetWindow : Window, IController
             if (ready && !closing) petMenu.IsOpen = true;
             e.Handled = true;
         };
-    }
-
-    private void RunAutonomousBehavior()
-    {
-        if (!ready || closing || !visible || !allowMove || petPointerDown || petMenu?.IsOpen == true || !pet!.IsIdel) return;
-        // 自主行为只使用原版移动和待机动画，不调用睡眠、工作或任何收益计算。
-        switch (Random.Shared.Next(5))
-        {
-            case 0: pet.DisplayToMove(); break;
-            case 1: pet.DisplayToIdel(); break;
-            case 2: pet.DisplayIdel_StateONE(); break;
-        }
     }
 
     internal void Receive(JsonElement command)
@@ -254,7 +252,9 @@ internal sealed partial class PetWindow : Window, IController
                 visible = command.GetProperty("visible").GetBoolean();
                 if (!visible) EndPetGesture(cancel: true);
                 if (!visible && petMenu != null) petMenu.IsOpen = false;
-                ambientTimer.IsEnabled = ready && visible && allowMove;
+                if (visible) ResumeNotifications();
+                else PauseNotifications();
+                SyncAutonomy();
                 if (visible) Show();
                 else { quotaCloud?.Hide(); Hide(); quota?.Hide(); }
                 if (pet != null)
@@ -287,7 +287,7 @@ internal sealed partial class PetWindow : Window, IController
         quotaCloud!.SetUsage(Text("provider"), Text("primary"), Text("secondary"), Text("status"), warning, peak);
         string key = Text("provider") + ":" + Text("status");
         // 仅在警告首次出现时提示，不能每次额度轮询都打断宠物动作。
-        if (warning && key != lastWarning) pet!.SayRnd(Text("status"), false);
+        if (warning && key != lastWarning) ShowUsageWarning(Text("status"));
         lastWarning = warning ? key : null;
     }
 
@@ -300,24 +300,37 @@ internal sealed partial class PetWindow : Window, IController
     private void OnPetGraphDisplayed(GraphInfo _)
     {
         // 动画回调可能来自后台线程；排回 UI 后读取最新状态，避免过期回调重新显示已隐藏的云朵。
-        if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(UpdateQuotaCloud);
+        if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(() => {
+            // 挥手等内核互动也会切换动画；保留新动作，同时取消未走完的自主序列。
+            if (autonomousSequence != null && pet?.DisplayType != autonomousFrame?.GraphInfo)
+                CancelAutonomousSequence(returnToNormal: false);
+            // 用户互动可能中断警告的开场动作；不能让等待标记永久阻止后续生活提醒。
+            if (warningSpeechPending && pet?.DisplayType.Name != pendingWarningAnimation)
+            {
+                warningSpeechPending = false;
+                ++notificationGeneration;
+            }
+            UpdateQuotaCloud();
+        });
     }
 
     private void UpdateQuotaCloud()
     {
         if (quotaCloud == null || closing) return;
-        if (!ready || !visible || !IsVisible || petDragging)
+        if (!ready || !visible || !IsVisible || petDragging || notificationsSuspended)
         {
             quotaCloud.Hide();
             return;
         }
         bool? edge = DockedEdge;
         // 手动显隐只覆盖当前状态；普通动画和刷新不重置，真正进入/离开贴边时才恢复默认。
-        if (cloudDockedState != edge.HasValue)
+        bool docked = LogicalDockedEdge.HasValue;
+        if (cloudDockedState != docked)
         {
-            cloudDockedState = edge.HasValue;
-            cloudEnabled = edge.HasValue;
+            cloudDockedState = docked;
+            cloudManualChoice = null;
         }
+        cloudEnabled = cloudManualChoice ?? AutomaticCloudVisible(docked);
         if (!cloudEnabled)
         {
             quotaCloud.Hide();
@@ -351,6 +364,8 @@ internal sealed partial class PetWindow : Window, IController
 
     private void ResizePet(int delta)
     {
+        CancelAutonomousSequence();
+        FinishNotification(restorePosition: false);
         bool? edge = DockedEdge;
         size = Math.Clamp(size + delta, 160, 320);
         Width = Height = size;
@@ -369,12 +384,13 @@ internal sealed partial class PetWindow : Window, IController
             string layout = Path.Combine(dataDirectory, "layout.json");
             if (!File.Exists(layout)) return;
             using var data = JsonDocument.Parse(File.ReadAllText(layout));
+            LoadNotificationPreferences(data.RootElement);
             Left = data.RootElement.GetProperty("x").GetDouble();
             Top = data.RootElement.GetProperty("y").GetDouble();
             size = Math.Clamp(data.RootElement.GetProperty("size").GetInt32(), 160, 320);
             allowMove = !data.RootElement.TryGetProperty("allowMove", out var autonomous) || autonomous.GetBoolean();
             quotaPinned = data.RootElement.GetProperty("quotaPinned").GetBoolean();
-            // 不恢复旧版全局 cloudEnabled；新交互每次启动都按贴边状态决定默认显隐。
+            // 手动显隐是临时覆盖；只恢复展示模式和提醒偏好。
             if (data.RootElement.TryGetProperty("quotaX", out var qx) &&
                 data.RootElement.TryGetProperty("quotaY", out var qy) &&
                 double.IsFinite(qx.GetDouble()) && double.IsFinite(qy.GetDouble()))
@@ -392,7 +408,9 @@ internal sealed partial class PetWindow : Window, IController
         if (!ready) return;
         try
         {
-            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = Left, y = Top, size, allowMove, quotaPinned,
+            var position = notificationOrigin?.Position ?? new Point(Left, Top);
+            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, allowMove, quotaPinned,
+                cloudMode, cloudRandomMinutes, drinkReminderEnabled, drinkReminderMinutes, restReminderEnabled, restReminderMinutes,
                 quotaX = quota?.Left ?? quotaPosition?.X ?? 0, quotaY = quota?.Top ?? quotaPosition?.Y ?? 0 }));
         }
         catch (IOException ex) { Console.Error.WriteLine("Pet state could not be saved: " + ex.Message); }
@@ -435,7 +453,8 @@ internal sealed partial class PetWindow : Window, IController
     public double GetWindowsDistanceUp() => Dispatcher.Invoke(() => Top - WorkArea().Top);
     public double GetWindowsDistanceDown() => Dispatcher.Invoke(() => WorkArea().Bottom - Top - Height);
     public void MoveWindows(double x, double y) => Dispatcher.Invoke(() => {
-        if (closing || !visible || petPointerDown || petMenu?.IsOpen == true) return;
+        if (closing || !visible || notificationsSuspended || activeNotice != Notice.None || autonomousSequence != null ||
+            petPointerDown || petMenu?.IsOpen == true) return;
         Left += x * ZoomRatio;
         Top += y * ZoomRatio;
     });
@@ -459,7 +478,8 @@ internal sealed partial class PetWindow : Window, IController
             graph.FindGraph("eat", AnimatType.Single, save.Mode) == null;
         checks["noBottomToolbar"] = !pet!.UIGrid.Children.Contains(pet.ToolBar) && pet.DefaultClickAction == null;
         checks["contextMenuActions"] = petMenu!.Items.OfType<MenuItem>().Select(item => item.Header.ToString())
-            .SequenceEqual(new[] { "查看用量面板", "显示额度气泡", "自主活动", "放大桌宠", "缩小桌宠",
+            .SequenceEqual(new[] { "查看用量面板", "显示额度气泡", "额度气泡展示", "额度随机间隔", "喝水提醒", "休息提醒",
+                "自主活动", "放大桌宠", "缩小桌宠",
                 "TokenMeter 设置", "返回悬浮球", "默认角色来源与授权", "退出 TokenMeter" });
         double strengthBefore = save.Strength, feelingBefore = save.Feeling, expBefore = save.Exp;
         await RunDragChecks(checks);
@@ -495,6 +515,8 @@ internal sealed partial class PetWindow : Window, IController
             Receive(update.RootElement.Clone());
         await Task.Delay(150);
         await RunCloudChecks(checks, output);
+        await RunNotificationChecks(checks, output);
+        await RunAutonomyChecks(checks, output);
         if (quota?.ActualWidth > 0) Capture(quota, Path.Combine(output, "quota.png"));
         SaveState();
         checks["noGrowthChanges"] = !EnableFunction && save.Strength == strengthBefore &&
