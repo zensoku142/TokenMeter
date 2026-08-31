@@ -221,6 +221,7 @@ class FloatingWidget(QWidget):
         self._panel_resize_origin: tuple[QPoint, int, int, bool] | None = None
         self._settings_window: SettingsWindow | None = None
         self._update_controller = AppUpdateController(self)
+        self._update_controller.pet_update_requested.connect(self._start_pet_update)
         self._thread_pool = QThreadPool.globalInstance()
         # Edge auto-hide state.
         self._edge_snapped = False
@@ -1132,6 +1133,12 @@ class FloatingWidget(QWidget):
         self._update_controller.schedule_startup_check()
         self._reschedule_refresh()
         self.refresh()
+
+    def _start_pet_update(self, release) -> None:
+        if self._closed:
+            return
+        self.open_settings()
+        self._settings_window.start_pet_update(release)
 
     @Slot(str)
     def _switch_provider(self, provider_id: str) -> None:

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import shutil
 import zipfile
@@ -564,3 +565,298 @@ def test_settings_worker_installs_without_auto_enabling_then_removes_pack(pack, 
     finally:
         window.stop_pet_task()
         window.close()
+
+
+@pytest.fixture
+def pet_update_ui(tmp_path, monkeypatch, qapp):
+    from PySide6.QtWidgets import QWidget
+    from config.defaults import DEFAULT_CONFIG
+    from ui.i18n import configure_language
+    from ui.qt_update import AppUpdateController
+
+    values = DEFAULT_CONFIG.copy()
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path / "data")
+    monkeypatch.setattr(pet.config_manager, "CONFIG_PATH", tmp_path / "data/config.json")
+    monkeypatch.setattr(pet.config_manager, "_config", values)
+    monkeypatch.setattr(pet.config_manager, "_initialized", True)
+    monkeypatch.setattr(pet.config_manager, "load_config", lambda: values.copy())
+    monkeypatch.setattr(pet.config_manager, "load_update_state", lambda: {})
+    monkeypatch.setattr(pet.config_manager, "logger", lambda: logging.getLogger(__name__))
+    monkeypatch.setattr("ui.qt_update.is_packaged_windows_executable", lambda: True)
+    configure_language(qapp, "zh-cn")
+    owner = QWidget()
+    controller = AppUpdateController(owner)
+    yield controller
+    controller.stop_pet_check()
+
+
+@pytest.mark.parametrize("reason", ["missing", "disabled", "development", "app-download", "pet-task"])
+def test_pet_auto_check_skips_ineligible_states(pet_update_ui, monkeypatch, reason):
+    controller = pet_update_ui
+    if reason != "missing":
+        payload(pet.extension_directory())
+    if reason == "disabled":
+        monkeypatch.setitem(pet.config_manager._config, "UPDATE_AUTO_CHECK_ENABLED", False)
+    elif reason == "development":
+        monkeypatch.setattr("ui.qt_update.is_packaged_windows_executable", lambda: False)
+    elif reason == "app-download":
+        controller._download_worker = Mock()
+    elif reason == "pet-task":
+        controller.pet_task_active = True
+    with patch.object(GitHubReleaseClient, "latest_pet_release") as discover:
+        controller.check_pet_updates()
+    assert controller._pet_check_worker is None
+    discover.assert_not_called()
+
+
+@pytest.mark.parametrize("main_failed", [False, True])
+def test_main_auto_check_also_checks_disabled_but_installed_pet(pet_update_ui, qtbot, main_failed):
+    from PySide6.QtWidgets import QMessageBox
+    from updater.client import CheckResult
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    assert not pet.config_manager.get("VPET_ENABLED")
+    release = release_info("0.2.0")
+    requested = []
+    controller.pet_update_requested.connect(requested.append)
+    with (patch.object(GitHubReleaseClient, "check_for_updates",
+                       return_value=CheckResult(APP_VERSION, None, False, "latest"),
+                       side_effect=UpdateError("offline") if main_failed else None),
+          patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release) as discover,
+          patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as prompt):
+        controller.check_for_updates(manual=False)
+        qtbot.waitUntil(lambda: controller._check_worker is None and controller._pet_check_worker is None)
+        controller.check_pet_updates()
+        controller.check_pet_updates()
+        discover.assert_called_once()
+        prompt.assert_called_once()
+        assert "0.2.0" in prompt.call_args.args[2]
+    assert controller.latest_pet_release() == release
+    assert requested == []
+
+
+def test_main_update_defers_pet_check_until_restarted_app(pet_update_ui, qtbot):
+    from PySide6.QtWidgets import QMessageBox, QWidget
+    from ui.qt_update import AppUpdateController
+    from updater.client import CheckResult
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+
+    def begin_app_download(*_args):
+        controller._download_worker = Mock()
+
+    with (patch.object(controller, "_prompt_for_release", side_effect=begin_app_download),
+          patch("ui.qt_update.skipped_version", return_value=""),
+          patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release_info("0.2.0")) as discover,
+          patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as prompt):
+        controller._finish_check(CheckResult(APP_VERSION, Mock(version="9.0.0"), True, "new"), None,
+                                 manual=False, parent=None)
+        discover.assert_not_called()
+        prompt.assert_not_called()
+        next_owner = QWidget()
+        next_controller = AppUpdateController(next_owner)
+        next_controller._finish_check(CheckResult(APP_VERSION, None, False, "latest"), None,
+                                      manual=False, parent=None)
+        qtbot.waitUntil(lambda: next_controller._pet_check_worker is None)
+    discover.assert_called_once()
+    prompt.assert_called_once()
+
+
+@pytest.mark.parametrize("manifest", [None, {"version": "0.2.0"}, {"version": "0.3.0"}])
+def test_pet_auto_prompt_rechecks_installation_after_network_check(pet_update_ui, monkeypatch, manifest):
+    controller = pet_update_ui
+    controller._latest_pet_release = release_info("0.2.0")
+    if manifest is not None:
+        payload(pet.extension_directory())
+    monkeypatch.setattr(pet, "installed_manifest", lambda: manifest)
+    with patch("ui.qt_update.QMessageBox.question") as prompt:
+        controller._prompt_for_pet_release()
+    prompt.assert_not_called()
+
+
+def test_pet_auto_prompt_repeats_after_restart_and_supports_legacy_install(pet_update_ui, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox, QWidget
+    from ui.qt_update import AppUpdateController
+
+    payload(pet.extension_directory())
+    monkeypatch.setattr(pet, "installed_manifest", lambda: {"app_version": "1.14.0-beta.1"})
+    controller = pet_update_ui
+    controller._latest_pet_release = release_info("0.2.0")
+    next_owner = QWidget()
+    next_controller = AppUpdateController(next_owner)
+    next_controller._latest_pet_release = controller.latest_pet_release()
+    with patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as prompt:
+        controller._prompt_for_pet_release()
+        controller._prompt_for_pet_release()
+        assert prompt.call_count == 1
+        next_controller._prompt_for_pet_release()
+        assert prompt.call_count == 2
+        controller._prompt_for_pet_release(manual=True)
+        assert prompt.call_count == 3
+
+
+def test_failed_pet_auto_check_is_quiet_and_manual_check_can_retry(pet_update_ui, qtbot):
+    from PySide6.QtWidgets import QMessageBox
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    with (patch.object(GitHubReleaseClient, "latest_pet_release", side_effect=UpdateError("offline")),
+          patch("ui.qt_update.QMessageBox.warning") as warning):
+        controller.check_pet_updates()
+        qtbot.waitUntil(lambda: controller._pet_check_worker is None)
+    warning.assert_not_called()
+    with (patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release_info("0.2.0")),
+          patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as prompt):
+        controller.check_pet_updates(manual=True)
+        qtbot.waitUntil(lambda: controller._pet_check_worker is None)
+    prompt.assert_called_once()
+
+
+@pytest.mark.parametrize("state", ["download", "prompt", "pet-task"])
+def test_pet_prompt_waits_for_active_update_flow(pet_update_ui, monkeypatch, state):
+    from PySide6.QtWidgets import QMessageBox
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    controller._latest_pet_release = release_info("0.2.0")
+    controller._pet_checked_in_session = True
+    field = {"download": "_download_worker", "prompt": "_prompt_active", "pet-task": "pet_task_active"}[state]
+    with patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as prompt:
+        monkeypatch.setattr(controller, field, Mock() if state == "download" else True)
+        controller.check_pet_updates()
+        prompt.assert_not_called()
+        monkeypatch.setattr(controller, field, None if state == "download" else False)
+        controller.check_pet_updates()
+        prompt.assert_called_once()
+
+
+def test_main_download_cancellation_resumes_pet_prompt(pet_update_ui):
+    from PySide6.QtWidgets import QMessageBox
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    controller._latest_pet_release = release_info("0.2.0")
+    controller._pet_checked_in_session = True
+    controller._download_worker = Mock()
+    with patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as prompt:
+        controller._finish_download(None, DownloadCancelled("cancelled"), controller.parent())
+    prompt.assert_called_once()
+
+
+def test_pet_auto_check_shutdown_cancels_worker_and_suppresses_prompt(pet_update_ui, qtbot):
+    from threading import Event
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    started = Event()
+
+    def discover(*, cancel_requested):
+        started.set()
+        assert controller._pet_check_worker.isRunning()
+        while not cancel_requested():
+            Event().wait(0.005)
+        raise DownloadCancelled("cancelled")
+
+    with (patch.object(GitHubReleaseClient, "latest_pet_release", side_effect=discover),
+          patch("ui.qt_update.QMessageBox.question") as prompt,
+          patch("ui.qt_update.QMessageBox.warning") as warning):
+        controller.check_pet_updates()
+        qtbot.waitUntil(started.is_set)
+        worker = controller._pet_check_worker
+        controller.stop_pet_check()
+        assert not worker.isRunning()
+        qtbot.waitUntil(lambda: controller._pet_check_worker is None)
+    prompt.assert_not_called()
+    warning.assert_not_called()
+
+
+def test_confirmed_auto_pet_update_reuses_settings_install_and_preserves_preferences(
+    pet_update_ui, pack, qtbot,
+):
+    from PySide6.QtWidgets import QMessageBox
+    from ui.qt_settings import SettingsWindow
+
+    controller = pet_update_ui
+    destination = payload(pet.extension_directory())
+    manifest = dict(build_release.PET_MANIFEST, version="0.0.1")
+    (destination / pet.PACK_MANIFEST).write_text(json.dumps(manifest))
+    preferences = pet.config_manager.CONFIG_DIR / "vpet/layout.json"
+    preferences.parent.mkdir()
+    preferences.write_text('{"cloudMode":"hover"}')
+    original_config = pet.config_manager.all_config()
+    window = SettingsWindow(update_controller=controller)
+    controller.pet_update_requested.connect(window.start_pet_update)
+    events = []
+    window.pet_update_started.connect(lambda: events.append("pause"))
+    window.pet_update_finished.connect(lambda: events.append("resume"))
+
+    def download(directory, **_kwargs):
+        result = directory / "pet.zip"
+        shutil.copy2(pack, result)
+        return result
+
+    try:
+        with (patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release_info()),
+              patch.object(GitHubReleaseClient, "download_pet_pack", side_effect=download),
+              patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes) as prompt):
+            controller.check_pet_updates()
+            qtbot.waitUntil(lambda: events == ["pause", "resume"])
+        prompt.assert_called_once()
+        assert window.tabs.currentIndex() == window._pet_tab_index
+        assert pet.installed_manifest()["version"] == build_release.PET_MANIFEST["version"]
+        assert preferences.read_text() == '{"cloudMode":"hover"}'
+        assert pet.config_manager.all_config() == original_config
+        assert not controller.pet_task_active
+        assert "已更新" in window.pet_status_label.text()
+    finally:
+        window.stop_pet_task()
+
+
+def test_app_upgrade_can_offer_update_for_now_incompatible_installed_pet(pet_update_ui, qtbot):
+    from PySide6.QtWidgets import QMessageBox
+    from ui.qt_settings import SettingsWindow
+
+    controller = pet_update_ui
+    destination = payload(pet.extension_directory())
+    manifest = dict(build_release.PET_MANIFEST, max_app_version=APP_VERSION)
+    (destination / pet.PACK_MANIFEST).write_text(json.dumps(manifest))
+    assert pet.installed_manifest() is None
+    window = SettingsWindow(update_controller=controller)
+    controller.pet_update_requested.connect(window.start_pet_update)
+    try:
+        with (patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release_info("0.2.0")),
+              patch("ui.qt_update.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes),
+              patch.object(window, "_start_pet_task") as start):
+            controller.check_pet_updates()
+            qtbot.waitUntil(lambda: controller._pet_check_worker is None)
+        start.assert_called_once_with("update")
+        assert window._pet_release.version == "0.2.0"
+    finally:
+        window.stop_pet_task()
+
+
+def test_pet_and_main_update_cannot_replace_files_concurrently(pet_update_ui):
+    from ui.qt_settings import SettingsWindow
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    window = SettingsWindow(update_controller=controller)
+    try:
+        controller._download_worker = Mock()
+        with patch("ui.qt_update.QMessageBox.information") as busy:
+            window.start_pet_update(release_info("0.2.0"))
+        assert window._pet_worker is None
+        busy.assert_called_once()
+
+        controller._download_worker = None
+        controller.pet_task_active = True
+        with (patch("ui.qt_update.QMessageBox.information") as busy,
+              patch("ui.qt_update.UpdateDownloadWorker") as download):
+            controller.download_release(Mock())
+        busy.assert_called_once()
+        download.assert_not_called()
+    finally:
+        controller.pet_task_active = False
+        window.stop_pet_task()

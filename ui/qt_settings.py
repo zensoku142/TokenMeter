@@ -59,9 +59,9 @@ from ui.i18n import (
     tr,
 )
 from ui.qt_theme import DARK_THEME, LIGHT_THEME, current_theme, fluent_icon, theme_controller
-from ui.qt_update import AppUpdateController
+from ui.qt_update import AppUpdateController, PetExtensionWorker
 from updater.client import (
-    DownloadCancelled, GitHubReleaseClient, PetReleaseInfo, compare_versions, format_bytes,
+    DownloadCancelled, PetReleaseInfo, compare_versions, format_bytes,
 )
 
 _CARD_PADDING = 18
@@ -221,34 +221,6 @@ class _CookieAcquireWorker(QThread):
         self.success.emit(_AcquiredCookie(cookie, direct_usable))
 
 
-class _PetExtensionWorker(QThread):
-    progress_changed = Signal(object)
-
-    def __init__(self, operation: str, parent=None, *, release: PetReleaseInfo | None = None):
-        super().__init__(parent)
-        self.operation = operation
-        self.error: Exception | None = None
-        self.release = release
-
-    def run(self) -> None:
-        try:
-            if self.operation == "check":
-                client = GitHubReleaseClient()
-                try:
-                    self.release = client.latest_pet_release(cancel_requested=self.isInterruptionRequested)
-                finally:
-                    client._session.close()
-            elif self.operation in {"install", "update"}:
-                pet_extension.download_and_install(
-                    self.progress_changed.emit, self.isInterruptionRequested,
-                    release=self.release, replace_existing=self.operation == "update",
-                )
-            else:
-                pet_extension.uninstall()
-        except Exception as exc:
-            self.error = exc
-
-
 class SettingsWindow(QDialog):
     theme_requested = Signal(str)
     appearance_preview_requested = Signal(str, str, int)
@@ -277,7 +249,7 @@ class SettingsWindow(QDialog):
             self.setMaximumWidth(720)
         self.on_saved = on_saved
         self.update_controller = update_controller
-        self._pet_worker: _PetExtensionWorker | None = None
+        self._pet_worker: PetExtensionWorker | None = None
         self._pet_release: PetReleaseInfo | None = None
         QApplication.instance().aboutToQuit.connect(self.stop_pet_task)
         self._worker: ConnectionWorker | None = None
@@ -524,6 +496,7 @@ class SettingsWindow(QDialog):
         pet_layout = self._add_settings_page(
             "桌宠", "下载安装桌宠扩展包后可启用；扩展独立更新，不影响主程序。"
         )
+        self._pet_tab_index = self.tabs.count() - 1
         self.vpet_check = _SettingsSwitch("启用 VPet 精简桌宠")
         self._add_switch_row(
             pet_layout, "启用 VPet 精简桌宠",
@@ -653,6 +626,7 @@ class SettingsWindow(QDialog):
         update_form.setVerticalSpacing(8)
         self.current_version_label = QLabel()
         self.auto_check_updates = _SettingsSwitch("启动后自动检查")
+        bind_text(self.auto_check_updates, "同时检查已安装的桌宠扩展，确认后更新。", method="setToolTip")
         self.update_channel_combo = _SettingsComboBox()
         add_item(self.update_channel_combo, "正式版", "stable")
         add_item(self.update_channel_combo, "预发布版", "prerelease")
@@ -761,6 +735,19 @@ class SettingsWindow(QDialog):
         if answer == QMessageBox.StandardButton.Yes:
             self._start_pet_task("update")
 
+    def start_pet_update(self, release: PetReleaseInfo) -> None:
+        if (self._pet_worker is not None
+                or not any(path.exists() for path in pet_extension.removable_directories())):
+            return
+        manifest = pet_extension.installed_manifest() or {}
+        version = manifest.get("version")
+        if version and compare_versions(version, release.version) >= 0:
+            return
+        # 自动提示已取得确认；复用同一下载/回滚流程，并直接展示桌宠页的进度与取消入口。
+        self._pet_release = release
+        self.tabs.setCurrentIndex(self._pet_tab_index)
+        self._start_pet_task("update")
+
     def _install_pet(self) -> None:
         if self._pet_worker is not None:
             return
@@ -784,6 +771,10 @@ class SettingsWindow(QDialog):
         )
         if answer != QMessageBox.StandardButton.Yes or self._pet_worker is not None:
             return
+        if self.update_controller is not None and self.update_controller.is_downloading():
+            # 确认框期间主程序可能开始下载；在改写启用偏好之前再次检查互斥条件。
+            QMessageBox.information(self, tr("软件更新"), tr("当前已有下载任务正在进行。"))
+            return
         try:
             # 先持久化关闭状态并通知主窗口停止子进程，再删除文件，避免占用和重启后反复报错。
             config_manager.save_config({"VPET_ENABLED": False})
@@ -798,7 +789,13 @@ class SettingsWindow(QDialog):
     def _start_pet_task(self, operation: str) -> None:
         if self._pet_worker is not None:
             return
-        worker = _PetExtensionWorker(operation, self, release=self._pet_release)
+        if self.update_controller is not None:
+            if self.update_controller.is_downloading():
+                QMessageBox.information(self, tr("软件更新"), tr("当前已有下载任务正在进行。"))
+                return
+            # 安装器退出主程序前不能与扩展替换交叉执行，也不要在手动任务中弹出自动提示。
+            self.update_controller.pet_task_active = True
+        worker = PetExtensionWorker(operation, self, release=self._pet_release)
         self._pet_worker = worker
         worker.progress_changed.connect(self._pet_progress)
         worker.finished.connect(self._pet_task_finished)
@@ -853,6 +850,9 @@ class SettingsWindow(QDialog):
             self.pet_update_finished.emit()
         worker.deleteLater()
         self._refresh_pet_controls(message)
+        if self.update_controller is not None:
+            self.update_controller.pet_task_active = False
+            self.update_controller.check_pet_updates()
 
     def stop_pet_task(self) -> None:
         if self._pet_worker is not None:
@@ -983,8 +983,15 @@ class SettingsWindow(QDialog):
         bind_text(self.current_version_label, self.update_controller.version_text())
         self.update_controller.status_changed.connect(self._set_update_status)
         self.update_controller.latest_release_changed.connect(self._on_latest_release_changed)
+        self.update_controller.latest_pet_release_changed.connect(self._on_pet_release_changed)
         self._set_update_status(self.update_controller.status_text())
         self._on_latest_release_changed(self.update_controller.latest_release())
+        self._on_pet_release_changed(self.update_controller.latest_pet_release())
+
+    def _on_pet_release_changed(self, release: PetReleaseInfo | None) -> None:
+        if self._pet_worker is None:
+            self._pet_release = release
+            self._refresh_pet_controls()
 
     def _set_update_status(self, text: str) -> None:
         bind_text(self.update_status_label, text)

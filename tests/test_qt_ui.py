@@ -2542,7 +2542,7 @@ def test_vpet_uninstall_stops_host_before_removing_pack_and_preserves_panel():
 
 @pytest.mark.parametrize("failed", [False, True])
 def test_pet_update_pauses_only_host_and_restores_enabled_preference(failed, monkeypatch):
-    from ui.qt_settings import _PetExtensionWorker
+    from ui.qt_update import PetExtensionWorker
     from updater.client import UpdateError
 
     monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.1.0"})
@@ -2554,7 +2554,7 @@ def test_pet_update_pauses_only_host_and_restores_enabled_preference(failed, mon
     panel = widget.panel
     original = config_manager.all_config()
     try:
-        with (patch.object(_PetExtensionWorker, "start"),
+        with (patch.object(PetExtensionWorker, "start"),
               patch.object(widget._vpet, "stop") as stop,
               patch.object(widget._vpet, "start") as start):
             window._start_pet_task("update")
@@ -2570,6 +2570,37 @@ def test_pet_update_pauses_only_host_and_restores_enabled_preference(failed, mon
             assert not widget._vpet_updating
             start.assert_called_once()
             assert config_manager.all_config() == original
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_confirmed_pet_auto_update_opens_settings_and_uses_existing_host_lifecycle(tmp_path, monkeypatch):
+    from ui.qt_update import PetExtensionWorker
+    from updater.client import PetReleaseInfo
+
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.1.0"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.removable_directories", lambda: [tmp_path])
+    config_manager.save_config({"VPET_ENABLED": True})
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start"):
+        widget = FloatingWidget()
+    release = PetReleaseInfo("0.2.0", {}, ReleaseAsset("pet.zip", "https://example.com/pet.zip", 1), "a" * 64)
+    try:
+        with (patch.object(FloatingWidget, "refresh"),
+              patch.object(PetExtensionWorker, "start"),
+              patch.object(widget._vpet, "stop") as stop,
+              patch.object(widget._vpet, "start") as start):
+            widget._update_controller.pet_update_requested.emit(release)
+            window = widget._settings_window
+            assert widget._expanded and widget.isVisible()
+            assert window.tabs.currentIndex() == window._pet_tab_index
+            assert window._pet_worker.release == release
+            assert widget._vpet_updating
+            stop.assert_called_once()
+            window._pet_task_finished()
+            start.assert_called_once()
+            assert config_manager.get("VPET_ENABLED")
     finally:
         widget._closed = True
         widget.hide()

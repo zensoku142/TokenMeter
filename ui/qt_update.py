@@ -8,6 +8,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import runtime as config_manager
+from core import pet_extension
 from core.identity import APP_VERSION
 from ui.i18n import bind_text, tr
 from updater.client import (
@@ -29,7 +31,9 @@ from updater.client import (
     DownloadBundle,
     DownloadCancelled,
     GitHubReleaseClient,
+    PetReleaseInfo,
     ReleaseInfo,
+    compare_versions,
     format_bytes,
     format_speed,
     is_packaged_windows_executable,
@@ -40,6 +44,34 @@ from updater.client import (
     status_summary,
 )
 from core.identity import MAIN_EXECUTABLE_NAME
+
+
+class PetExtensionWorker(QThread):
+    progress_changed = Signal(object)
+
+    def __init__(self, operation: str, parent=None, *, release: PetReleaseInfo | None = None):
+        super().__init__(parent)
+        self.operation = operation
+        self.error: Exception | None = None
+        self.release = release
+
+    def run(self) -> None:
+        try:
+            if self.operation == "check":
+                client = GitHubReleaseClient()
+                try:
+                    self.release = client.latest_pet_release(cancel_requested=self.isInterruptionRequested)
+                finally:
+                    client._session.close()
+            elif self.operation in {"install", "update"}:
+                pet_extension.download_and_install(
+                    self.progress_changed.emit, self.isInterruptionRequested,
+                    release=self.release, replace_existing=self.operation == "update",
+                )
+            else:
+                pet_extension.uninstall()
+        except Exception as exc:
+            self.error = exc
 
 
 class UpdateCheckWorker(QThread):
@@ -205,6 +237,8 @@ class DownloadProgressDialog(QDialog):
 class AppUpdateController(QObject):
     status_changed = Signal(str)
     latest_release_changed = Signal(object)
+    latest_pet_release_changed = Signal(object)
+    pet_update_requested = Signal(object)
 
     def __init__(self, owner: QWidget):
         super().__init__(owner)
@@ -213,8 +247,17 @@ class AppUpdateController(QObject):
         self._download_worker: UpdateDownloadWorker | None = None
         self._progress_dialog: DownloadProgressDialog | None = None
         self._latest_release: ReleaseInfo | None = None
+        self._pet_check_worker: PetExtensionWorker | None = None
+        self._latest_pet_release: PetReleaseInfo | None = None
+        self._pet_checked_in_session = False
+        self._pet_check_manual = False
+        self._prompt_active = False
+        self._stopping = False
+        self.pet_task_active = False
         # 自动检查只在本次运行内去重；跨重启仍应再次提醒，避免用户只能手动点检查更新。
         self._prompted_versions_in_session: set[str] = set()
+        self._prompted_pet_versions_in_session: set[str] = set()
+        QApplication.instance().aboutToQuit.connect(self.stop_pet_check)
         self.status_changed.emit(self.status_text())
         self.reload_cached_release()
 
@@ -228,6 +271,12 @@ class AppUpdateController(QObject):
 
     def latest_release(self) -> ReleaseInfo | None:
         return self._latest_release
+
+    def latest_pet_release(self) -> PetReleaseInfo | None:
+        return self._latest_pet_release
+
+    def is_downloading(self) -> bool:
+        return self._download_worker is not None
 
     def reload_cached_release(self) -> None:
         state = config_manager.load_update_state()
@@ -294,29 +343,111 @@ class AppUpdateController(QObject):
             self.reload_cached_release()
             if manual:
                 QMessageBox.warning(parent or self._owner, tr("软件更新"), tr(str(error)))
-            return
+        else:
+            assert result is not None
+            self._latest_release = result.latest_release
+            self.latest_release_changed.emit(self._latest_release)
+            self.status_changed.emit(self.status_text())
+            if not result.update_available or not result.latest_release:
+                if manual:
+                    QMessageBox.information(parent or self._owner, tr("软件更新"), tr(result.message))
+            elif manual:
+                self._prompt_for_release(result.latest_release, parent or self._owner)
+            elif not self.pet_task_active and not self._prompt_active:
+                version = result.latest_release.version
+                if version != skipped_version() and version not in self._prompted_versions_in_session:
+                    self._prompted_versions_in_session.add(version)
+                    self._prompt_for_release(result.latest_release, parent or self._owner)
+        # 主程序安装会重启进程；届时按新主程序的兼容范围检查桌宠，避免并行替换。
+        self.check_pet_updates(manual=manual)
 
-        assert result is not None
-        self._latest_release = result.latest_release
-        self.latest_release_changed.emit(self._latest_release)
-        self.status_changed.emit(self.status_text())
-        if not result.update_available or not result.latest_release:
-            if manual:
-                QMessageBox.information(parent or self._owner, tr("软件更新"), tr(result.message))
+    def check_pet_updates(self, *, manual: bool = False) -> None:
+        if self._stopping or not is_packaged_windows_executable():
             return
-        if manual:
-            self._prompt_for_release(result.latest_release, parent or self._owner)
+        if not manual and not config_manager.get("UPDATE_AUTO_CHECK_ENABLED", True):
             return
+        if (self._check_worker is not None or self.is_downloading()
+                or self.pet_task_active or self._prompt_active):
+            return
+        if self._pet_check_worker is not None:
+            return
+        # 主程序升级后旧扩展可能暂不兼容；仍需按已安装目录发现可用更新，不能只看能否启动。
+        if not any(path.exists() for path in pet_extension.removable_directories()):
+            return
+        # 自动保存也会重排启动检查；桌宠每次运行只请求一次，手动检查仍可重试。
+        if not manual and self._pet_checked_in_session:
+            self._prompt_for_pet_release()
+            return
+        self._pet_checked_in_session = True
+        self._pet_check_manual = manual
+        self._pet_check_worker = PetExtensionWorker("check", self)
+        self._pet_check_worker.finished.connect(self._finish_pet_check)
+        self._pet_check_worker.start()
 
-        version = result.latest_release.version
-        if version == skipped_version() or version in self._prompted_versions_in_session:
+    def _finish_pet_check(self) -> None:
+        worker = self._pet_check_worker
+        if worker is None:
             return
-        self._prompted_versions_in_session.add(version)
-        self._prompt_for_release(result.latest_release, parent or self._owner)
+        # 使用 finished 信号后才释放线程；退出时会等待取消完成，不能销毁运行中的 QThread。
+        self._pet_check_worker = None
+        worker.deleteLater()
+        if self._stopping:
+            return
+        if worker.error is not None:
+            if self._pet_check_manual:
+                QMessageBox.warning(self._owner, tr("检查桌宠更新"), tr(str(worker.error)))
+            else:
+                config_manager.logger().warning("Automatic pet update check failed: %s", worker.error)
+            return
+        self._latest_pet_release = worker.release
+        self.latest_pet_release_changed.emit(worker.release)
+        self._prompt_for_pet_release(manual=self._pet_check_manual)
+
+    def _prompt_for_pet_release(self, *, manual: bool = False) -> None:
+        release = self._latest_pet_release
+        if (self._stopping or release is None or self.pet_task_active or self._prompt_active
+                or self._check_worker is not None or self.is_downloading()):
+            return
+        if not manual and not config_manager.get("UPDATE_AUTO_CHECK_ENABLED", True):
+            return
+        # 网络检查期间可能已手动更新或卸载；提示前重新核对，不能重新安装已移除的扩展。
+        if not any(path.exists() for path in pet_extension.removable_directories()):
+            return
+        manifest = pet_extension.installed_manifest() or {}
+        version = manifest.get("version")
+        if version and compare_versions(version, release.version) >= 0:
+            return
+        if not manual and release.version in self._prompted_pet_versions_in_session:
+            return
+        self._prompted_pet_versions_in_session.add(release.version)
+        # 模态对话框仍处理 Qt 事件，阻止另一条更新检查在此期间嵌套弹窗。
+        self._prompt_active = True
+        try:
+            answer = QMessageBox.question(
+                self._owner, tr("更新桌宠扩展包"),
+                tr("将更新桌宠至 v{version}，期间暂停桌宠；主程序和主题保持不变。是否继续？",
+                   version=release.version),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+        finally:
+            self._prompt_active = False
+        if answer == QMessageBox.StandardButton.Yes:
+            self.pet_update_requested.emit(release)
+
+    def stop_pet_check(self) -> None:
+        self._stopping = True
+        if self._pet_check_worker is not None:
+            self._pet_check_worker.requestInterruption()
+            self._pet_check_worker.wait()
 
     def _prompt_for_release(self, release: ReleaseInfo, parent: QWidget) -> None:
         dialog = UpdatePromptDialog(release, parent)
-        dialog.exec()
+        self._prompt_active = True
+        try:
+            dialog.exec()
+        finally:
+            self._prompt_active = False
         if dialog.action == UpdatePromptDialog.ACTION_SKIP:
             mark_skipped_version(release.version)
             self.status_changed.emit(self.status_text())
@@ -325,7 +456,7 @@ class AppUpdateController(QObject):
             self.download_release(release, parent)
 
     def download_release(self, release: ReleaseInfo, parent: QWidget | None = None) -> None:
-        if self._download_worker and self._download_worker.isRunning():
+        if self.is_downloading() or self.pet_task_active:
             QMessageBox.information(parent or self._owner, tr("软件更新"), tr("当前已有下载任务正在进行。"))
             return
         self._progress_dialog = DownloadProgressDialog(parent or self._owner)
@@ -352,9 +483,10 @@ class AppUpdateController(QObject):
         if error is not None:
             if isinstance(error, DownloadCancelled):
                 self.status_changed.emit("已取消更新下载")
-                return
-            QMessageBox.warning(parent, tr("软件更新"), tr(str(error)))
-            self.status_changed.emit(self.status_text())
+            else:
+                QMessageBox.warning(parent, tr("软件更新"), tr(str(error)))
+                self.status_changed.emit(self.status_text())
+            self.check_pet_updates()
             return
 
         assert bundle is not None
@@ -363,6 +495,7 @@ class AppUpdateController(QObject):
         except Exception as exc:
             QMessageBox.warning(parent, tr("软件更新"), tr(str(exc)))
             self.status_changed.emit(self.status_text())
+            self.check_pet_updates()
             return
         self.status_changed.emit("更新器已启动，正在关闭当前程序…")
         self._owner.close()
