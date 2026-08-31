@@ -27,39 +27,51 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter product interface overview" width="960">
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter: Codex quotas, DeepSeek intraday usage and balance, floating widgets, and VPet (demo data)" width="960"></a>
 </p>
 
-TokenMeter is a lightweight Windows desktop monitor for subscription quotas, token usage, API costs, account balances, and historical trends across Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI. It stays in the system tray and provides a floating widget plus an expandable detail panel.
+Actual component screenshots in Chinese, using demo data. [Original images and sources](docs/images/readme/README.md).
+
+TokenMeter is a lightweight Windows desktop monitor for Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI.
 
 ## Features
 
-- Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI support with isolated per-provider caches; only the current provider refreshes by default, with optional background providers selected in Settings.
-- Floating widget and system tray with dragging, edge docking, position memory, and collapse on focus loss.
-- Light, dark, and Windows system themes.
-- The interface follows your system language, with Simplified Chinese, Traditional Chinese, English, Japanese, and Korean support. Switch instantly in Settings → Appearance → Language; your choice is remembered. Unsupported system languages fall back to English.
-- Balance, token usage, cost trends, model statistics, intraday charts, and an annual activity heatmap.
-- DeepSeek peak-pricing hints; MiMo Cookie collection and renewal through a dedicated Chrome profile.
-- Last successful data remains visible during network failures; history is cached in local SQLite.
-- API keys, Bearer tokens, and Cookies are stored in Windows Credential Manager.
-- Data-directory migration, automatic updates, and single-instance operation.
+- **Subscription quotas**: used and remaining percentages and reset times for Codex / Cursor; Codex also shows seven-day tokens, annual activity, and usage statistics.
+- **API usage**: costs and balances, today's intraday chart, token breakdowns, and historical trends for DeepSeek / MiMo / NayutoAI.
+- **Floating display**: a quota water-level widget or balance display, with dragging, mouse-wheel resizing, edge hiding, and a system tray icon.
+- **Appearance and languages**: light, dark, and system themes, custom colors and opacity; Simplified Chinese, Traditional Chinese, English, Japanese, and Korean.
+- **Collection and caching**: refresh only the current provider by default, with optional background providers; offline caching, DeepSeek peak-pricing hints, and MiMo Cookie collection and renewal.
+- **Desktop integration**: launch at sign-in, automatic updates, data-directory migration, and an optional VPet extension.
 
-## Requirements
+## Installation and setup
 
-- Windows 10 or Windows 11; Python 3.11+ for running from source.
-- At least one supported account; Codex and Cursor can reuse local login data, while DeepSeek, MiMo, and NayutoAI use their platform credentials.
-- An optional DeepSeek API key for the official balance endpoint.
+Requires Windows 10 / 11 and at least one supported account.
 
-> [!IMPORTANT]
-> Usage data depends on web-console endpoints; the MiMo Cookie must include `api-platform_ph`. Platform API or risk-control changes may temporarily affect data. Use only your own credentials and keep them secure.
+1. Download and run `TokenMeter-Setup-vX.Y.Z-x64.exe` from [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases/latest). Checksums are in `SHA256SUMS.txt`.
+2. Click the floating widget and select a provider in Settings. Codex / Cursor can read local login data; enter DeepSeek credentials or an optional API key, use MiMo's Cookie collection, or enter NayutoAI credentials.
+3. Settings save automatically; the default refresh interval is 60 seconds. Appearance contains theme and language options; Floating & Startup contains launch and edge behavior.
 
-## Installation
+> Data depends on platform endpoints and login state. API or risk-control changes may interrupt collection. Use only your own credentials.
 
-1. Download `TokenMeter-Setup-vX.Y.Z-x64.exe` from [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases/latest) and verify `SHA256SUMS.txt` when needed.
-2. Run the installer and choose an install directory. The default is `%LOCALAPPDATA%\Programs\TokenMeter`.
-3. Start TokenMeter from its desktop or Start menu shortcut.
+## VPet desktop pet (optional)
 
-## Quick start
+The main installer does not include the pet. Download it in Settings → Pet, then enable it after installation completes; no separate .NET installation is needed. The pet replaces the floating widget. Disabling or uninstalling it restores the widget without affecting accounts or the panel.
+
+- Touch interactions, dragging, resizing, autonomous activity, and an edge quota bubble. Double-click the bubble to open the usage panel.
+- The context menu controls bubble visibility and optional water / break reminders, which are off by default. The pet's menu is currently in Chinese.
+- The lite extension omits feeding, work, progression, Steam, and online features. It updates independently and exits with the main app.
+
+See [pet development](pet_host/README.md) for implementation and build details, and read the [source and licensing notices](pet_host/THIRD_PARTY_NOTICES.md) before reusing assets.
+
+## Data, privacy, and updates
+
+- Data defaults to `install directory\data` and can be moved in Settings. Legacy migration copies data and preserves the original directory; history is cached in local SQLite.
+- API keys, Bearer tokens, and Cookies are stored in Windows Credential Manager, not configuration files or logs. The pet receives display fields only, never credentials.
+- Updates verify SHA256 and preserve data and shortcuts. Uninstall also keeps `data`; remove it manually only when no longer needed. A checksum is not a release signature.
+
+## Run from source
+
+Requires Python 3.11+. Source and installed builds share a single-instance limit; exit any running TokenMeter first.
 
 ```powershell
 git clone https://github.com/zensoku142/TokenMeter.git
@@ -71,80 +83,36 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-## First-time setup
-
-1. Start the app and click the floating widget to open the panel.
-2. Open Settings and select DeepSeek or Xiaomi MiMo.
-3. Enter a Bearer token, Cookie, or optional DeepSeek API key. For MiMo, “Get MiMo Cookie” also extracts `api-platform_ph` automatically.
-4. Changes save automatically, with save status shown in the header. The default refresh interval is 60 seconds.
-
-`examples/config.example.py` only documents fields; do not copy it to `config.py`. A legacy `config.py` is migrated on first launch when possible.
-
-## Local data and privacy
-
-New installations store data in `install directory\data`. When upgrading from TokenSpider, the app copies `%APPDATA%\TokenSpider`, validates configuration and SQLite data, and atomically switches only after validation. The old directory is never moved or deleted; a failed migration continues using it without blocking startup.
-
-Windows Credential Manager is read in `TokenMeter/`, `TokenSpider/`, then `TokenScope/` order. Secrets are never written to `config.json` or logs. Settings can also move data to a new empty local directory; network shares are unsupported.
-
-## Automatic updates
-
-Update checks use GitHub Releases from `zensoku142/TokenMeter`. The app downloads only `TokenMeter-Setup-vX.Y.Z-x64.exe` and `SHA256SUMS.txt`, verifies SHA256, and silently upgrades the existing install directory. The fixed AppId preserves `data` and shortcut targets. If installation fails, the previous version remains available from the same shortcut.
-
-## Uninstall
-
-By default, uninstall removes program files and shortcuts but keeps `data`. Delete that directory manually only after confirming its settings, history, and browser sessions are no longer needed.
-
-## Testing
+<details>
+<summary>Development, tests, and builds</summary>
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
-```
-
-Run Qt tests in an available Windows desktop session when possible.
-
-## Build
-
-```powershell
-python -m pip install pyinstaller
-.\.venv\Scripts\pyinstaller.exe --clean --noconfirm packaging\pyinstaller\TokenMeter.spec
+python -m ruff check .
+pyright
+python -m pip install -r requirements-build.txt
 python scripts/build_release.py
 ```
 
-The release script produces the `dist\TokenMeter\` onedir tree. With Inno Setup installed it also creates `dist-installer\TokenMeter-Setup-vX.Y.Z-x64.exe` and `SHA256SUMS.txt`. The verified release stack is Python 3.12, PyInstaller 6.21, and PySide6 6.11; UPX is optional.
+Qt tests need an available Windows desktop session; installer builds require Inno Setup. Pet builds require .NET SDK 8+; see [pet development](pet_host/README.md).
 
-## Project structure
+[Project structure](docs/PROJECT_STRUCTURE.md) · [Example configuration](examples/config.example.py) (do not copy it to `config.py`)
 
-```text
-TokenMeter/
-├── api/                 # Platform APIs, providers, and pricing rules
-├── config/              # Configuration, credentials, migration, and runtime state
-├── core/                # Application identity and shared metadata
-├── data/                # Data directories, aggregation, and SQLite history
-├── updater/             # Update client and standalone updater
-├── ui/                  # PySide6 interface
-├── packaging/           # PyInstaller, installer, and Windows version resources
-├── scripts/             # Build and release automation
-├── docs/                # Project structure guide and README image
-├── examples/            # Example configuration
-├── release-notes/       # Version release notes
-├── tests/               # Unit and Qt tests
-└── main.py              # Application entry point
-```
-
-See [Project structure](docs/PROJECT_STRUCTURE.md) for the complete layout.
+</details>
 
 ## Troubleshooting
 
-- Not configured: select a provider and enter credentials in Settings.
-- Expired credentials: collect the Cookie again; MiMo first tries its dedicated browser session.
-- Rate limit or risk control: wait before refreshing and do not repeatedly shorten the interval.
-- Stale data: inspect `TokenSpider.log` in the active data directory, normally `install directory\data` for a new installation.
-- No window: check the system tray; only one instance can run.
+- No window: check the system tray and avoid starting a second instance.
+- Expired credentials or rate limits: renew the login / Cookie, or wait before refreshing.
+- Data problems: inspect `TokenSpider.log` in the active data directory; remove sensitive information before reporting an issue.
 
-## Version and releases
+## Versions
 
-Current version: `1.13.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for change notes and checksums.
+Main app: `1.14.0`; optional pet extension: `0.1.0`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
-## License
+## License and acknowledgments
 
-TokenMeter is available under the [MIT License](LICENSE). You may use, modify, and distribute it while preserving the copyright and license notice.
+TokenMeter's own code uses the [MIT License](LICENSE).
+
+The pet core, default character, and animations come from [LorisYounger/VPet](https://github.com/LorisYounger/VPet). Thanks to its authors and contributors. The core uses [Apache-2.0](third_party/VPet/LICENSE); the character and animations are copyrighted by 虚拟主播模拟器制作组 and have separate terms, outside TokenMeter's MIT license. See the [third-party notices](pet_host/THIRD_PARTY_NOTICES.md).

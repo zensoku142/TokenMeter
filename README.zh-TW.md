@@ -27,37 +27,51 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter 產品介面概覽" width="960">
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 額度、DeepSeek 今日分時與餘額、懸浮球及 VPet 桌寵（示範資料）" width="960"></a>
 </p>
 
-TokenMeter 是輕量級 Windows 桌面 AI 用量監控工具，用於查看 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI 的訂閱額度、Token 消耗、呼叫費用、帳戶餘額與歷史趨勢。程式常駐系統匣，提供浮動小工具與可展開的詳細面板。
+真實元件截圖，介面為簡體中文，使用示範資料。[查看原圖與來源](docs/images/readme/README.md)。
+
+TokenMeter 是輕量級 Windows 桌面 AI 用量監控工具，支援 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI。
 
 ## 功能
 
-- 支援 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI，各平台快取互不混用；預設只更新目前平台，僅在設定中勾選的平台會於背景同步取得。
-- 浮動小工具與系統匣常駐，支援拖曳、邊緣吸附、位置記憶及失焦收合。
-- 提供淺色、深色及跟隨 Windows 的主題。
-- 介面預設跟隨電腦語言，支援簡體中文、繁體中文、英文、日文與韓文；可於「設定 → 外觀 → Language / 语言」立即切換並記住選擇，未支援的系統語言使用英文。
-- 顯示餘額、Token 用量、費用趨勢、模型統計、分時圖與年度活躍熱力圖。
-- DeepSeek 峰谷計價提示；MiMo Cookie 可透過專用 Chrome 工作階段取得與續期。
-- 網路異常時保留最近成功資料；歷史資料快取於本機 SQLite。
-- API Key、Bearer Token 與 Cookie 儲存於 Windows 認證管理員。
-- 支援資料目錄遷移、自動更新及單一執行個體。
+- **訂閱額度**：Codex / Cursor 的已用與剩餘比例、重設時間；Codex 另有近 7 天 Token、年度活動和使用統計。
+- **API 用量**：DeepSeek / MiMo / NayutoAI 的費用與餘額、今日分時圖、Token 組成和歷史趨勢。
+- **懸浮顯示**：額度水球或餘額顯示，支援拖曳、滾輪縮放、貼邊隱藏和系統匣常駐。
+- **外觀與語言**：淺色、深色及系統主題，可調整主題色和透明度；支援簡中、繁中、英語、日語、韓語。
+- **擷取與快取**：預設只更新目前平台，可選背景同步；支援離線快取、DeepSeek 峰谷提示及 MiMo Cookie 取得與續期。
+- **桌面整合**：開機自動啟動、自動更新、資料目錄遷移，以及選用的 VPet 桌寵擴充套件。
 
-## 系統需求
+## 安裝與設定
 
-- Windows 10 或 Windows 11；從原始碼執行需要 Python 3.11+。
-- 至少一個支援的平台帳戶；Codex 與 Cursor 可使用本機登入資料，DeepSeek、MiMo 與 NayutoAI 使用各平台憑據。
-- DeepSeek API Key 為選用，用於官方餘額端點。
+需要 Windows 10 / 11 和至少一個支援的平台帳戶。
 
-> [!IMPORTANT]
-> 用量資料依賴平台網頁控制台端點；MiMo Cookie 必須包含 `api-platform_ph`。平台 API 或風控變更可能暫時影響資料。請只使用自己的憑據並妥善保管。
+1. 從 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases/latest) 下載並安裝 `TokenMeter-Setup-vX.Y.Z-x64.exe`；校驗檔為 `SHA256SUMS.txt`。
+2. 點擊懸浮球，在「設定」選擇平台。Codex / Cursor 可讀取本機登入；DeepSeek 填寫憑據或選用的 API Key，MiMo 可一鍵取得 Cookie，NayutoAI 使用其平台憑據。
+3. 設定自動儲存，預設每 60 秒更新。主題和語言位於「外觀」，啟動與貼邊選項位於「懸浮與啟動」。
 
-## 下載
+> 資料依賴平台介面與登入狀態，介面變更或風控可能暫時影響取得。請只使用自己的帳戶憑據。
 
-從 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases/latest) 下載 `TokenMeter-Setup-vX.Y.Z-x64.exe`，需要時核對 `SHA256SUMS.txt`。執行安裝程式並選擇安裝目錄，再從桌面或開始功能表捷徑啟動；預設安裝到 `%LOCALAPPDATA%\Programs\TokenMeter`。
+## VPet 桌寵（選用）
 
-## 快速開始
+主安裝程式不含桌寵。在「設定 → 桌寵」下載擴充套件，完整安裝後再啟用；無需另裝 .NET。啟用後桌寵取代懸浮球，停用或解除安裝後恢復球體，不影響帳戶與面板。
+
+- 支援輕觸互動、拖曳縮放、自主活動和貼邊額度氣泡；按兩下氣泡可開啟用量面板。
+- 右鍵選單可設定氣泡顯示方式，以及預設關閉的喝水、休息提醒；桌寵選單目前為簡體中文。
+- 精簡版不含餵食、工作、養成、Steam 或連線功能。擴充套件可獨立更新，主程式結束時桌寵一同結束。
+
+實作細節與獨立建置見 [桌寵開發說明](pet_host/README.md)，使用素材前請閱讀 [來源與授權](pet_host/THIRD_PARTY_NOTICES.md)。
+
+## 資料、隱私與更新
+
+- 資料預設存於 `安裝目錄\data`，可在設定中遷移。舊版升級採複製遷移，保留原目錄；歷史快取於本機 SQLite。
+- API Key、Bearer Token 與 Cookie 存入 Windows 認證管理員，不寫入設定或記錄檔；桌寵只接收顯示欄位，不接收憑據。
+- 更新套件通過 SHA256 驗證後安裝，保留資料與捷徑。預設解除安裝也保留 `data`，請確認不再需要後再手動刪除。SHA256 驗證不等同於發布簽章。
+
+## 從原始碼執行
+
+需要 Python 3.11+。原始碼版與安裝版共用單一執行個體限制，請先結束已執行的 TokenMeter。
 
 ```powershell
 git clone https://github.com/zensoku142/TokenMeter.git
@@ -69,74 +83,36 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-## 首次設定
-
-1. 啟動程式並點擊浮動小工具展開面板。
-2. 開啟「設定」，選擇 DeepSeek 或 Xiaomi MiMo。
-3. 填寫 Bearer Token、Cookie 或選用的 DeepSeek API Key。MiMo 的「一鍵取得 MiMo Cookie」會自動擷取 `api-platform_ph`。
-4. 修改後自動儲存，頂部顯示儲存狀態；預設重新整理間隔為 60 秒。
-
-`examples/config.example.py` 僅展示欄位，不必複製為 `config.py`。舊版 `config.py` 會在首次啟動時嘗試遷移。
-
-## 本機資料與隱私
-
-全新安裝把資料存於 `安裝目錄\data`。從舊 TokenSpider 升級時，程式會複製 `%APPDATA%\TokenSpider`，驗證設定與 SQLite 後才原子切換；舊目錄不會被移動或刪除，失敗時仍使用舊資料啟動。Windows 認證管理員依序相容 `TokenMeter/`、`TokenSpider/`、`TokenScope/`。
-
-## 自動更新
-
-更新只下載 `TokenMeter-Setup-vX.Y.Z-x64.exe` 與 `SHA256SUMS.txt`，驗證 SHA256 後靜默覆蓋原安裝目錄。固定 AppId 會保留 `data` 與捷徑；失敗時舊版本仍可從相同捷徑啟動。預設解除安裝只刪除程式與捷徑，保留 `data`。
-
-## 測試
+<details>
+<summary>開發、測試與建置</summary>
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 python -m pytest -q
-```
-
-Qt 測試建議在可用的 Windows 桌面工作階段中執行。
-
-## 建置
-
-```powershell
-python -m pip install pyinstaller
-.\.venv\Scripts\pyinstaller.exe --clean --noconfirm packaging\pyinstaller\TokenMeter.spec
+python -m ruff check .
+pyright
+python -m pip install -r requirements-build.txt
 python scripts/build_release.py
 ```
 
-發布腳本會產生 `dist\TokenMeter\` onedir 結構；安裝 Inno Setup 後也會產生 `dist-installer\TokenMeter-Setup-vX.Y.Z-x64.exe` 與 `SHA256SUMS.txt`。
+Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 Inno Setup。桌寵建置需要 .NET SDK 8+，詳見 [桌寵開發說明](pet_host/README.md)。
 
-## 專案結構
+[專案結構](docs/PROJECT_STRUCTURE.md) · [設定範例](examples/config.example.py)（無需複製為 `config.py`）
 
-```text
-TokenMeter/
-├── api/                 # 平台 API、Provider 與計價規則
-├── config/              # 設定、憑據、遷移與執行階段狀態
-├── core/                # 應用程式身分與共用中繼資料
-├── data/                # 資料目錄、聚合與 SQLite 歷史
-├── updater/             # 更新用戶端與獨立更新器
-├── ui/                  # PySide6 介面
-├── packaging/           # PyInstaller、安裝器與 Windows 資源
-├── scripts/             # 建置與發布自動化
-├── docs/                # 專案結構說明與 README 圖片
-├── examples/            # 設定範例
-├── release-notes/       # 發布說明
-├── tests/               # 單元與 Qt 測試
-└── main.py              # 程式進入點
-```
+</details>
 
-完整內容請見 [專案結構](docs/PROJECT_STRUCTURE.md)。
+## 常見問題
 
-## 疑難排解
+- 無視窗：檢查系統匣，並確認未重複啟動。
+- 憑據失效或請求受限：更新登入 / Cookie，或稍後再更新資料。
+- 資料異常：查看目前資料目錄的 `TokenSpider.log`；回報問題前請移除敏感資訊。
 
-- 尚未設定：在設定中選擇平台並填入憑據。
-- 憑據失效：重新取得 Cookie；MiMo 會先嘗試專用瀏覽器工作階段。
-- 請求頻繁或風控：等待後再重新整理，不要持續縮短間隔。
-- 資料未更新：檢查目前資料目錄中的 `TokenSpider.log`；全新安裝通常位於 `安裝目錄\data`。
-- 未出現視窗：檢查系統匣；程式只允許一個執行個體。
+## 版本
 
-## 版本與 Release
+主程式 `1.14.0`，選用桌寵擴充套件 `0.1.0`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
-目前版本：`1.13.2`。更新說明與校驗檔請見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+## 授權與致謝
 
-## License
+TokenMeter 自有程式碼採用 [MIT License](LICENSE)。
 
-本專案採用 [MIT License](LICENSE)，保留著作權與授權聲明後即可使用、修改及散布。
+桌寵核心及預設角色、動畫來自 [LorisYounger/VPet](https://github.com/LorisYounger/VPet)，感謝上游作者及貢獻者。核心採用 [Apache-2.0](third_party/VPet/LICENSE)；角色與動畫著作權歸虚拟主播模拟器制作组所有，適用單獨授權，不屬於本專案的 MIT 授權範圍。詳見 [第三方聲明](pet_host/THIRD_PARTY_NOTICES.md)。
