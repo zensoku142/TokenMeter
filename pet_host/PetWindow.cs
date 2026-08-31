@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -66,6 +67,13 @@ internal sealed partial class PetWindow : Window, IController
         // 独立演示保留任务栏入口，便于找回窗口并验证真实鼠标操作；集成模式仍只使用主程序托盘。
         ShowInTaskbar = demo;
         ShowActivated = false;
+        SourceInitialized += (_, _) => {
+            if (demo) return;
+            var handle = new WindowInteropHelper(this).Handle;
+            // ShowInTaskbar 只控制任务栏；透明无边框窗还需 TOOLWINDOW 并移除 APPWINDOW，才能排除 Alt+Tab。
+            // 不加 NOACTIVATE 或鼠标穿透，保留原有触摸、拖动和右键菜单交互。
+            SetWindowLong(handle, -20, (GetWindowLong(handle, -20) | 0x80) & ~0x40000);
+        };
         Topmost = true;
         Content = loading;
         LoadState();
@@ -468,6 +476,16 @@ internal sealed partial class PetWindow : Window, IController
         if (quota?.IsVisible == true) Capture(quota, Path.Combine(output, "quota.png"));
         if (!smoke) return;
         var checks = new Dictionary<string, bool>();
+        var handle = new WindowInteropHelper(this).Handle;
+        int style = GetWindowLong(handle, -20);
+        checks["hostWindowSwitcherPolicy"] = ShowInTaskbar == demo &&
+            (demo ? (style & 0x40080) == 0x40000 : (style & 0x40080) == 0x80);
+        // 重新显示不能让 WPF 恢复独立应用窗口样式；用真实 HWND 检查，而非只检查托管属性。
+        Hide();
+        Show();
+        await Task.Delay(100);
+        checks["hostWindowSwitcherPolicySurvivesReshow"] =
+            (GetWindowLong(handle, -20) & 0x40080) == (style & 0x40080);
         checks["noStandaloneQuotaOnStartup"] = quota?.IsVisible != true;
         foreach (var kind in new[] { GraphType.Default, GraphType.Touch_Head, GraphType.Touch_Body })
             checks[kind.ToString()] = graph!.FindName(kind) != null;
@@ -528,6 +546,11 @@ internal sealed partial class PetWindow : Window, IController
         }, new JsonSerializerOptions { WriteIndented = true }));
         Application.Current.Shutdown(checks.Values.All(x => x) ? 0 : 1);
     }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+    private static extern int SetWindowLong(IntPtr window, int index, int value);
 
     private static void Capture(FrameworkElement window, string path)
     {

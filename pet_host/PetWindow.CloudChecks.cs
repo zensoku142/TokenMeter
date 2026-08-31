@@ -88,7 +88,8 @@ internal sealed partial class PetWindow
                 }
             }
             checks["cloudDoesNotActivate"] = noFocusChange;
-            int style = CloudWindowStyle(new WindowInteropHelper(quotaCloud).Handle, -20);
+            int style = GetWindowLong(new WindowInteropHelper(quotaCloud).Handle, -20);
+            checks["cloudExcludedFromWindowSwitcher"] = !quotaCloud.ShowInTaskbar && (style & 0x40080) == 0x80;
             checks["cloudAcceptsMouseWithoutActivation"] = (style & 0x08000020) == 0x08000000 && quotaCloud.IsHitTestVisible;
             bool quotaWasVisible = quota!.IsVisible;
             quota.Hide();
@@ -362,6 +363,4 @@ internal sealed partial class PetWindow
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
-    private static extern int CloudWindowStyle(IntPtr window, int index);
 }
