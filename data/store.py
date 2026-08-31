@@ -283,7 +283,8 @@ def provider_usage_day(provider_id: str, observed_at: datetime) -> date:
 
 
 def _load_minute_history(
-    provider_id: str, current_day: date, include_models: bool = False
+    provider_id: str, current_day: date, include_models: bool = False,
+    *, include_history: bool = True,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -295,6 +296,11 @@ def _load_minute_history(
 ]:
     """Load retained minute rows once after the current refresh has been saved."""
     current_key = current_day.isoformat()
+    if not include_history:
+        rows, costs, models = history.minute_history_for_day(provider_id, current_day, include_models)
+        days = history.minute_usage_dates(provider_id, populated_only=True)
+        # 磁盘保护期不等于常驻内存窗口；其余日期在用户选择时按需查询。
+        return rows, costs, models, days, {current_key: rows}, {current_key: costs}, {current_key: models}
     minute_rows = history.minute_usage_for_day(provider_id, current_day)
     minute_cost_rows = history.minute_cost_usage_for_day(provider_id, current_day)
     minute_model_rows = (
@@ -415,6 +421,9 @@ class TokenData:
     minute_model_usage: list[dict[str, Any]] = field(default_factory=list)
     minute_model_usage_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     minute_usage_source: str = ""
+    account_key: str = ""
+    history_provider: str = ""
+    minute_history_complete: bool = True
 
     _last_snapshot: ClassVar["TokenData | None"] = None
     _provider_snapshots: ClassVar[dict[str, "TokenData"]] = {}
@@ -527,17 +536,32 @@ class TokenData:
         )
 
     @classmethod
-    def _base_snapshot(cls, provider_id: str = "") -> "TokenData":
+    def _base_snapshot(cls, provider_id: str = "", account_key: str | None = None) -> "TokenData":
         with cls._cache_lock:
             snapshot = cls._provider_snapshots.get(provider_id) if provider_id else cls._last_snapshot
+            if snapshot is not None and account_key is not None and snapshot.account_key != account_key:
+                snapshot = None
             return cls._copy_for_refresh(snapshot) if snapshot else cls()
 
     @classmethod
-    def cached_snapshot(cls, provider_id: str) -> "TokenData | None":
+    def cached_snapshot(cls, provider_id: str, account_key: str | None = None) -> "TokenData | None":
         """Return an isolated successful snapshot for one provider, if available."""
         with cls._cache_lock:
             snapshot = cls._provider_snapshots.get(provider_id)
+            if snapshot is not None and account_key is not None and snapshot.account_key != account_key:
+                return None
             return copy.deepcopy(snapshot) if snapshot else None
+
+    @classmethod
+    def account_key_for_config(cls, config: Mapping[str, Any]) -> str:
+        providers = list(active_providers(config))
+        if not providers:
+            return ""
+        provider = providers[0]
+        try:
+            return cls._snapshot_identity(provider)
+        finally:
+            provider.close()
 
     @classmethod
     def persisted_snapshot(
@@ -716,6 +740,7 @@ class TokenData:
         )
         return cls(
             currency=currency,
+            account_key=account_key,
             per_provider=[per],
             quota_windows=list(windows),
             quota_metrics=list(metrics),
@@ -736,7 +761,8 @@ class TokenData:
 
     @classmethod
     def _save_persisted_quota_snapshot(cls, provider, data: "TokenData") -> None:
-        account_key = cls._snapshot_identity(provider)
+        # 使用请求开始时的身份，不能在请求返回后把旧账号结果写入新登录账号。
+        account_key = data.account_key
         if not account_key or not data.per_provider or data.last_success_at is None:
             return
         per = data.per_provider[0]
@@ -797,6 +823,7 @@ class TokenData:
         today: date | None = None,
         lightweight: bool = False,
         config: Mapping[str, Any] | None = None,
+        include_minute_history: bool = True,
     ) -> "TokenData":
         # Background workers must use the configuration captured when they were
         # created. Otherwise a queued task can silently switch providers before
@@ -817,7 +844,7 @@ class TokenData:
             reset_cache = getattr(provider, "reset_refresh_cache", None)
             if reset_cache is not None:
                 reset_cache()
-            return cls._fetch_with_provider(provider, today, lightweight)
+            return cls._fetch_with_provider(provider, today, lightweight, include_minute_history)
         finally:
             close = getattr(provider, "close", None)
             if close is not None:
@@ -825,11 +852,13 @@ class TokenData:
 
     @classmethod
     def _fetch_with_provider(
-        cls, provider, today: date | None = None, lightweight: bool = False
+        cls, provider, today: date | None = None, lightweight: bool = False,
+        include_minute_history: bool = True,
     ) -> "TokenData":
         observed_at = provider_observed_at(provider.id, datetime.now().astimezone())
         current_day = today or observed_at.date()
-        cached = cls._base_snapshot(provider.id)
+        account_key = cls._snapshot_identity(provider)
+        cached = cls._base_snapshot(provider.id, account_key)
         if (
             not cached.per_provider
             and getattr(provider, "supports_subscription_quota", False)
@@ -844,6 +873,26 @@ class TokenData:
                 if persisted is not None:
                     cached = persisted
         data = cached
+        data.account_key = account_key
+        try:
+            history_provider = (
+                history.scoped_provider(provider.id, account_key)
+                if not getattr(provider, "supports_subscription_quota", False) else provider.id
+            )
+        except Exception:
+            # 账号隔离迁移失败时不能退回无账号历史；保留同账号快照并报告存储错误。
+            config_manager.logger().exception("Account history initialization failed for %s", provider.id)
+            data.errors = [FetchError("LOCAL_STORAGE", "历史缓存", "账号历史初始化失败")]
+            data.is_stale = True
+            data.status = "partial" if data.last_success_at else "error"
+            if not data.per_provider:
+                data.per_provider = [PerProviderData(provider.id, provider.name)]
+            data.per_provider[0].errors = list(data.errors)
+            data.per_provider[0].status = data.status
+            return data
+        data.history_provider = history_provider
+        provider.history_scope = history_provider
+        data.minute_history_complete = include_minute_history
         data.status = "loading"
         data.errors = []
         data.last_attempt_at = datetime.now()
@@ -895,7 +944,7 @@ class TokenData:
                 # 每次启动/刷新均按设置的保留天数清理；失败不能影响原有账单刷新。
                 retention_days = int(provider.config_get("MINUTE_USAGE_RETENTION_DAYS", 3))
                 history.clear_expired_minute_usage(
-                    provider.id, current_day, retention_days
+                    history_provider, current_day, retention_days
                 )
                 minute_status = "empty"
             except Exception:
@@ -1094,7 +1143,7 @@ class TokenData:
                 request_months = [current_month]
                 try:
                     unsynced = history.unsynced_months(
-                        months_for_activity(current_day), provider.id
+                        months_for_activity(current_day), history_provider
                     )
                     for month in unsynced:
                         if month in request_months:
@@ -1118,7 +1167,7 @@ class TokenData:
                     continue
                 try:
                     cached_payload = history.provider_monthly_payload(
-                        provider.id, year, month
+                        history_provider, year, month
                     )
                 except Exception:
                     config_manager.logger().exception(
@@ -1162,7 +1211,7 @@ class TokenData:
                         fetched_payloads,
                         fetched_payloads,
                         completed,
-                        provider.id,
+                        history_provider,
                     )
                 except Exception:
                     config_manager.logger().exception("History save failed for %s", provider.id)
@@ -1190,7 +1239,7 @@ class TokenData:
                         exact_dates.add(current_day)
                         try:
                             minute_status = history.replace_exact_minute_usage(
-                                provider=provider.id,
+                                provider=history_provider,
                                 usage_dates=exact_dates,
                                 token_rows=[
                                     row
@@ -1236,7 +1285,7 @@ class TokenData:
                             cost_total = None
                         try:
                             minute_status = history.save_estimated_minute_usage(
-                                provider.id,
+                                history_provider,
                                 current_day,
                                 token_totals,
                                 observed_at,
@@ -1256,15 +1305,16 @@ class TokenData:
 
             try:
                 if provider.supports_daily_usage:
-                    data.daily_usage = history.recent_daily(371, provider.id)
+                    data.daily_usage = history.recent_daily(371, history_provider)
                 if supports_model_usage:
                     data.daily_model_usage = history.recent_daily_model_usage(
-                        provider.id, current_day, 7
+                        history_provider, current_day, 7
                     )
                 else:
                     data.daily_model_usage = []
-                if provider.supports_cost and per.total_cost_cny is None:
-                    per.total_cost_cny = float(history.total_cost(provider.id))
+                if provider.supports_cost and (summary is None or summary.total_cost is None):
+                    # 本地累计值在历史更新后重算；上一轮非空值不能永久屏蔽新账单。
+                    per.total_cost_cny = float(history.total_cost(history_provider))
             except Exception:
                 config_manager.logger().exception("History read failed for %s", provider.id)
                 per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史读取失败"))
@@ -1276,9 +1326,7 @@ class TokenData:
                 per.status = "error"
                 per.is_stale = previous_per is not None
 
-        if supports_minute_usage and not (
-            supports_exact_minutes and per.status == "not_configured"
-        ):
+        if supports_minute_usage and per.status != "not_configured":
             try:
                 (
                     minute_rows,
@@ -1289,7 +1337,8 @@ class TokenData:
                     minute_cost_history,
                     minute_model_history,
                 ) = _load_minute_history(
-                    provider.id, current_day, include_models=supports_model_usage
+                    history_provider, current_day, include_models=supports_model_usage,
+                    include_history=include_minute_history,
                 )
             except Exception:
                 config_manager.logger().exception(
@@ -1343,6 +1392,11 @@ class TokenData:
             else ""
         )
 
+        if cls._snapshot_identity(provider) != account_key:
+            # CLI 登录文件可能在网络等待期间被替换；丢弃本轮，不能污染缓存或落盘身份。
+            return cls(account_key=account_key, status="error", errors=[
+                FetchError("ACCOUNT_CHANGED", provider.name, "账号已变化，等待重新刷新")
+            ])
         if successes:
             if not quota_refresh_failed:
                 data.last_success_at = datetime.now()

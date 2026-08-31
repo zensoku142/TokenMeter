@@ -38,6 +38,8 @@ RELEASE_CHANNEL_PRERELEASE = "prerelease"
 AUTO_CHECK_INTERVAL = timedelta(hours=24)
 DOWNLOAD_CHUNK_SIZE = 1024 * 128
 HTTP_TIMEOUT = (5, 30)
+MAX_METADATA_BYTES = 2 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 2 * 1024**3
 MANIFEST_VERSION = 1
 
 _SEMVER_RE = re.compile(
@@ -565,28 +567,43 @@ class GitHubReleaseClient:
 
     def _request_json(self, url: str) -> object:
         try:
-            response = self._session.get(url, timeout=HTTP_TIMEOUT)
+            response = self._session.get(url, timeout=HTTP_TIMEOUT, stream=True)
         except requests.Timeout as exc:
             raise UpdateError("连接 GitHub 超时，请稍后重试") from exc
         except requests.RequestException as exc:
             raise UpdateError("无法连接 GitHub，请检查网络后重试") from exc
         if response.status_code == 403:
+            response.close()
             raise UpdateError("GitHub API 限流，请稍后再试")
         if response.status_code == 404:
+            response.close()
             raise UpdateError("GitHub Release 不存在或仓库地址无效")
         if response.status_code >= 400:
+            response.close()
             raise UpdateError(f"GitHub API 请求失败（HTTP {response.status_code}）")
         try:
-            return response.json()
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=8192):
+                content.extend(chunk)
+                if len(content) > MAX_METADATA_BYTES:
+                    raise UpdateError("GitHub 更新信息超过大小限制")
+            return json.loads(content)
         except ValueError as exc:
             raise UpdateError("GitHub API 返回了无法解析的数据") from exc
+        finally:
+            response.close()
 
     def _load_checksums(self, release: ReleaseInfo | ReleaseAsset) -> dict[str, str]:
         # 主程序更新与可选扩展共用官方来源检查、重定向限制和 SHA256 校验。
         asset = release.checksum_asset if isinstance(release, ReleaseInfo) else release
         response, _ = self._open_download_stream(asset.download_url)
         try:
-            content = response.text
+            content_bytes = bytearray()
+            for chunk in response.iter_content(chunk_size=8192):
+                content_bytes.extend(chunk)
+                if len(content_bytes) > MAX_METADATA_BYTES:
+                    raise UpdateError("SHA256 校验清单超过大小限制")
+            content = content_bytes.decode("utf-8")
         finally:
             response.close()
         mapping: dict[str, str] = {}
@@ -623,6 +640,10 @@ class GitHubReleaseClient:
                         raise DownloadCancelled("已取消下载")
                     if not chunk:
                         continue
+                    # 流式响应也必须有实际字节上限；哈希只在下载结束后才能发现错误。
+                    limit = min(asset.size, MAX_DOWNLOAD_BYTES) if asset.size > 0 else MAX_DOWNLOAD_BYTES
+                    if downloaded + len(chunk) > limit:
+                        raise UpdateError(f"{asset.name} 超过下载大小限制")
                     handle.write(chunk)
                     sha256.update(chunk)
                     downloaded += len(chunk)

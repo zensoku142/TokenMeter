@@ -270,6 +270,66 @@ def test_empty_page_terminates_and_max_page_guard_fails_atomically():
     assert provider.exact_minute_usage() is None
 
 
+def test_persistent_sync_resumes_and_catches_new_head_without_double_counting(tmp_path, monkeypatch):
+    current = date.today()
+    rows = [{
+        "request_id": f"synthetic-{index}", "id": index,
+        "created_at": current.isoformat() + "T00:00:00Z", "model": "synthetic",
+        "input_tokens": 1, "cache_read_tokens": 0, "output_tokens": 1, "actual_cost": "0.01",
+    } for index in range(10, 0, -1)]
+    monkeypatch.setattr(history, "DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr("api.providers.nayuto._PAGE_SIZE", 2)
+    monkeypatch.setattr("api.providers.nayuto._MAX_PAGES", 2)
+    requests_made = []
+
+    def page(_path, *, params):
+        requests_made.append(params["page"])
+        offset = (params["page"] - 1) * 2
+        return {"items": rows[offset:offset + 2], "total": len(rows)}
+
+    def refresh():
+        provider = NayutoProvider({"NAYUTO_AUTH": "synthetic"})
+        provider.history_scope = "nayuto:synthetic"
+        provider._request_json = page
+        try:
+            return provider.fetch_payloads([(current.month, current.year)])
+        finally:
+            provider.close()
+
+    payloads, errors = refresh()
+    assert payloads == []
+    assert errors[0].code == "SYNC_INCOMPLETE"
+    assert len(list(history.nayuto_records("nayuto:synthetic", current))) == 4
+    rows.insert(0, {**rows[0], "request_id": "new-head", "id": 11})
+    for _ in range(12):
+        payloads, errors = refresh()
+        if not errors:
+            break
+    assert not errors
+    assert usage_totals(payloads, current.isoformat())["cost_cny"] == Decimal("0.11")
+
+    # 同账号新 Provider 实例复用磁盘水位；已完成历史只重读头部重叠页。
+    requests_made.clear()
+    rows[0]["actual_cost"] = "0.02"
+    payloads, errors = refresh()
+    assert not errors
+    assert requests_made == [1, 2]
+    assert usage_totals(payloads, current.isoformat())["cost_cny"] == Decimal("0.12")
+    assert history.load_nayuto_sync("nayuto:other-account") == {}
+    state = history.load_nayuto_sync("nayuto:synthetic")
+    state["full_day"] = "2000-01-01"
+    history.save_nayuto_page("nayuto:synthetic", [], state)
+    rows[-1]["actual_cost"] = "0.02"
+    requests_made.clear()
+    for _ in range(12):
+        payloads, errors = refresh()
+        if not errors:
+            break
+    assert not errors
+    assert 3 in requests_made
+    assert usage_totals(payloads, current.isoformat())["cost_cny"] == Decimal("0.13")
+
+
 @pytest.mark.parametrize(
     ("status_code", "expected_code"),
     [(401, "AUTH_EXPIRED"), (403, "AUTH_EXPIRED"), (429, "RATE_LIMITED"), (503, "SERVER_ERROR")],

@@ -43,7 +43,8 @@ namespace VPet_Simulator.Core
             {
                 if (GraphsALL == null)
                     return;
-                long cleanTicks = DateTime.Now.Ticks - IdleCacheTimeout;
+                // Touch 使用 UTC；本地时间会让非零时区提前清理或滞留缓存数小时。
+                long cleanTicks = DateTime.UtcNow.Ticks - IdleCacheTimeout;
                 for (int i = 0; i < GraphsALL.Count; i++)
                 {
                     GraphsALL[i].CleanupIdleCache(cleanTicks);

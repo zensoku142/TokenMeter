@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -72,78 +72,81 @@ def _connect() -> Iterator[sqlite3.Connection]:
         # 多 Provider 首次并发访问时只串行化建表/旧结构检查；实际读写事务
         # 仍由各自连接独立执行。
         with _SCHEMA_LOCK, connection:
-            connection.execute("PRAGMA journal_mode=WAL")
-            _ensure_daily_usage_schema(connection)
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS sync_state (
-                    provider TEXT PRIMARY KEY,
-                    last_success_at TEXT,
-                    last_error TEXT
-                );
-                CREATE TABLE IF NOT EXISTS monthly_sync (
-                    provider TEXT NOT NULL,
-                    year INTEGER NOT NULL,
-                    month INTEGER NOT NULL,
-                    last_success_at TEXT NOT NULL,
-                    PRIMARY KEY (provider, year, month)
-                );
-                CREATE TABLE IF NOT EXISTS minute_usage (
-                    provider TEXT NOT NULL,
-                    usage_date TEXT NOT NULL,
-                    minute_index INTEGER NOT NULL,
-                    token_type TEXT NOT NULL,
-                    token_amount INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (provider, usage_date, minute_index, token_type)
-                );
-                CREATE INDEX IF NOT EXISTS idx_minute_usage_provider_date
-                    ON minute_usage(provider, usage_date);
-                CREATE TABLE IF NOT EXISTS minute_usage_snapshot (
-                    provider TEXT NOT NULL,
-                    usage_date TEXT NOT NULL,
-                    token_type TEXT NOT NULL,
-                    token_amount INTEGER NOT NULL DEFAULT 0,
-                    observed_at TEXT NOT NULL,
-                    PRIMARY KEY (provider, usage_date, token_type)
-                );
-                CREATE INDEX IF NOT EXISTS idx_minute_snapshot_provider_date
-                    ON minute_usage_snapshot(provider, usage_date);
-                CREATE TABLE IF NOT EXISTS minute_cost_usage (
-                    provider TEXT NOT NULL,
-                    usage_date TEXT NOT NULL,
-                    minute_index INTEGER NOT NULL,
-                    cost_cny TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (provider, usage_date, minute_index)
-                );
-                CREATE INDEX IF NOT EXISTS idx_minute_cost_usage_provider_date
-                    ON minute_cost_usage(provider, usage_date);
-                CREATE TABLE IF NOT EXISTS minute_model_usage (
-                    provider TEXT NOT NULL,
-                    usage_date TEXT NOT NULL,
-                    minute_index INTEGER NOT NULL,
-                    model TEXT NOT NULL,
-                    cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
-                    cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
-                    output_tokens INTEGER NOT NULL DEFAULT 0,
-                    cost_cny TEXT NOT NULL DEFAULT '0',
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (provider, usage_date, minute_index, model)
-                );
-                CREATE INDEX IF NOT EXISTS idx_minute_model_usage_provider_date
-                    ON minute_model_usage(provider, usage_date);
-                CREATE TABLE IF NOT EXISTS minute_cost_snapshot (
-                    provider TEXT NOT NULL,
-                    usage_date TEXT NOT NULL,
-                    cost_cny TEXT,
-                    observed_at TEXT NOT NULL,
-                    PRIMARY KEY (provider, usage_date)
-                );
-                CREATE INDEX IF NOT EXISTS idx_minute_cost_snapshot_provider_date
-                    ON minute_cost_snapshot(provider, usage_date);
-                """
-            )
+            # 版本仅在建表/迁移成功后写入；普通查询不再反复执行整套 DDL。
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 1:
+                connection.execute("PRAGMA journal_mode=WAL")
+                _ensure_daily_usage_schema(connection)
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS sync_state (
+                        provider TEXT PRIMARY KEY,
+                        last_success_at TEXT,
+                        last_error TEXT
+                    );
+                    CREATE TABLE IF NOT EXISTS monthly_sync (
+                        provider TEXT NOT NULL,
+                        year INTEGER NOT NULL,
+                        month INTEGER NOT NULL,
+                        last_success_at TEXT NOT NULL,
+                        PRIMARY KEY (provider, year, month)
+                    );
+                    CREATE TABLE IF NOT EXISTS minute_usage (
+                        provider TEXT NOT NULL,
+                        usage_date TEXT NOT NULL,
+                        minute_index INTEGER NOT NULL,
+                        token_type TEXT NOT NULL,
+                        token_amount INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (provider, usage_date, minute_index, token_type)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_minute_usage_provider_date
+                        ON minute_usage(provider, usage_date);
+                    CREATE TABLE IF NOT EXISTS minute_usage_snapshot (
+                        provider TEXT NOT NULL,
+                        usage_date TEXT NOT NULL,
+                        token_type TEXT NOT NULL,
+                        token_amount INTEGER NOT NULL DEFAULT 0,
+                        observed_at TEXT NOT NULL,
+                        PRIMARY KEY (provider, usage_date, token_type)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_minute_snapshot_provider_date
+                        ON minute_usage_snapshot(provider, usage_date);
+                    CREATE TABLE IF NOT EXISTS minute_cost_usage (
+                        provider TEXT NOT NULL,
+                        usage_date TEXT NOT NULL,
+                        minute_index INTEGER NOT NULL,
+                        cost_cny TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (provider, usage_date, minute_index)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_minute_cost_usage_provider_date
+                        ON minute_cost_usage(provider, usage_date);
+                    CREATE TABLE IF NOT EXISTS minute_model_usage (
+                        provider TEXT NOT NULL,
+                        usage_date TEXT NOT NULL,
+                        minute_index INTEGER NOT NULL,
+                        model TEXT NOT NULL,
+                        cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+                        cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+                        output_tokens INTEGER NOT NULL DEFAULT 0,
+                        cost_cny TEXT NOT NULL DEFAULT '0',
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (provider, usage_date, minute_index, model)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_minute_model_usage_provider_date
+                        ON minute_model_usage(provider, usage_date);
+                    CREATE TABLE IF NOT EXISTS minute_cost_snapshot (
+                        provider TEXT NOT NULL,
+                        usage_date TEXT NOT NULL,
+                        cost_cny TEXT,
+                        observed_at TEXT NOT NULL,
+                        PRIMARY KEY (provider, usage_date)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_minute_cost_snapshot_provider_date
+                        ON minute_cost_snapshot(provider, usage_date);
+                    """
+                )
+                connection.execute("PRAGMA user_version = 1")
         with connection:
             yield connection
     finally:
@@ -250,6 +253,84 @@ def needs_initial_sync(provider: str = "deepseek") -> bool:
             "SELECT last_success_at FROM sync_state WHERE provider = ?", (provider,)
         ).fetchone()
     return not row or not row[0]
+
+
+def scoped_provider(provider: str, account_key: str) -> str:
+    if not account_key:
+        return provider
+    scoped = f"{provider}:{account_key}"
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS history_account (provider TEXT PRIMARY KEY, account_key TEXT NOT NULL)"
+        )
+        inserted = connection.execute(
+            "INSERT OR IGNORE INTO history_account VALUES (?, ?)", (provider, account_key)
+        ).rowcount
+        if inserted:
+            # 旧历史没有账号标识，只在首次升级时归给当前凭据；随后换号保留旧记录但不混用。
+            for table in (
+                "daily_usage", "sync_state", "monthly_sync", "minute_usage",
+                "minute_usage_snapshot", "minute_cost_usage", "minute_model_usage",
+                "minute_cost_snapshot",
+            ):
+                connection.execute(f"UPDATE {table} SET provider = ? WHERE provider = ?", (scoped, provider))
+    return scoped
+
+
+def _ensure_nayuto_cache(connection: sqlite3.Connection) -> None:
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS nayuto_records (
+            provider TEXT NOT NULL, record_key TEXT NOT NULL,
+            usage_date TEXT NOT NULL, payload TEXT NOT NULL,
+            PRIMARY KEY (provider, record_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_nayuto_records_date ON nayuto_records(provider, usage_date);
+        CREATE TABLE IF NOT EXISTS nayuto_sync (
+            provider TEXT PRIMARY KEY, payload TEXT NOT NULL
+        );
+    """)
+
+
+def load_nayuto_sync(provider: str) -> dict[str, Any]:
+    with _connect() as connection:
+        _ensure_nayuto_cache(connection)
+        row = connection.execute("SELECT payload FROM nayuto_sync WHERE provider = ?", (provider,)).fetchone()
+    return json.loads(row[0]) if row else {}
+
+
+def save_nayuto_page(
+    provider: str, rows: list[tuple[str, str, dict[str, Any]]], state: dict[str, Any],
+) -> None:
+    # 页面与断点同一事务提交；中断后重复读取重叠页可按记录 ID 幂等覆盖。
+    with _connect() as connection:
+        _ensure_nayuto_cache(connection)
+        connection.executemany(
+            "INSERT INTO nayuto_records VALUES (?, ?, ?, ?) ON CONFLICT(provider, record_key) "
+            "DO UPDATE SET usage_date = excluded.usage_date, payload = excluded.payload",
+            ((provider, key, day, json.dumps(payload, separators=(",", ":"))) for key, day, payload in rows),
+        )
+        connection.execute(
+            "INSERT INTO nayuto_sync VALUES (?, ?) ON CONFLICT(provider) DO UPDATE SET payload = excluded.payload",
+            (provider, json.dumps(state, separators=(",", ":"))),
+        )
+
+
+def nayuto_records(provider: str, earliest: date) -> Iterator[dict[str, Any]]:
+    with _connect() as connection:
+        _ensure_nayuto_cache(connection)
+        for (payload,) in connection.execute(
+            "SELECT payload FROM nayuto_records WHERE provider = ? AND usage_date >= ? ORDER BY usage_date",
+            (provider, earliest.isoformat()),
+        ):
+            yield json.loads(payload)
+
+
+def prune_nayuto_records(provider: str, earliest_needed: date) -> None:
+    # 请求级缓存只支持年度明细重算；保留日聚合账单，不能无限积累逐请求 JSON。
+    cutoff = min(earliest_needed, date.today() - timedelta(days=400)).isoformat()
+    with _connect() as connection:
+        connection.execute("DELETE FROM nayuto_records WHERE provider = ? AND usage_date < ?", (provider, cutoff))
 
 
 def unsynced_months(
@@ -862,10 +943,10 @@ def replace_exact_minute_usage(
     return "recorded" if token_totals or cost_totals or model_totals else "empty"
 
 
-def minute_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
+def minute_usage_for_day(provider: str, usage_day: date, *, _connection: sqlite3.Connection | None = None) -> list[dict[str, Any]]:
     """读取指定日期的临时估算数据；稀疏行由界面补齐为 1,440 个分钟点。"""
     result: list[dict[str, Any]] = []
-    with _connect() as connection:
+    with (nullcontext(_connection) if _connection is not None else _connect()) as connection:
         rows = connection.execute(
             """SELECT minute_index, token_type, token_amount
                  FROM minute_usage
@@ -885,10 +966,10 @@ def minute_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]
     return result
 
 
-def minute_cost_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
+def minute_cost_usage_for_day(provider: str, usage_day: date, *, _connection: sqlite3.Connection | None = None) -> list[dict[str, Any]]:
     """读取指定日期的分钟费用估算；缺失行表示该分钟尚无可靠费用。"""
     result: list[dict[str, Any]] = []
-    with _connect() as connection:
+    with (nullcontext(_connection) if _connection is not None else _connect()) as connection:
         rows = connection.execute(
             """SELECT minute_index, cost_cny
                  FROM minute_cost_usage
@@ -907,10 +988,10 @@ def minute_cost_usage_for_day(provider: str, usage_day: date) -> list[dict[str, 
     return result
 
 
-def minute_model_usage_for_day(provider: str, usage_day: date) -> list[dict[str, Any]]:
+def minute_model_usage_for_day(provider: str, usage_day: date, *, _connection: sqlite3.Connection | None = None) -> list[dict[str, Any]]:
     """读取指定日期按分钟和模型保存的服务商原始明细。"""
     result: list[dict[str, Any]] = []
-    with _connect() as connection:
+    with (nullcontext(_connection) if _connection is not None else _connect()) as connection:
         rows = connection.execute(
             """SELECT minute_index, model, cache_hit_tokens, cache_miss_tokens,
                       output_tokens, cost_cny
@@ -940,9 +1021,27 @@ def minute_model_usage_for_day(provider: str, usage_day: date) -> list[dict[str,
     return result
 
 
-def minute_usage_dates(provider: str) -> list[str]:
+def minute_history_for_day(
+    provider: str, usage_day: date, include_models: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    # 同一天的三个视图共享连接和读事务，避免重复开库及读到不同轮次的数据。
+    with _connect() as connection:
+        connection.execute("BEGIN")
+        return (
+            minute_usage_for_day(provider, usage_day, _connection=connection),
+            minute_cost_usage_for_day(provider, usage_day, _connection=connection),
+            minute_model_usage_for_day(provider, usage_day, _connection=connection) if include_models else [],
+        )
+
+
+def minute_usage_dates(provider: str, *, populated_only: bool = False) -> list[str]:
     """读取指定提供商仍保留分时缓存的日期，按日期升序返回。"""
     with _connect() as connection:
+        if populated_only:
+            return [str(row[0]) for row in connection.execute(
+                "SELECT DISTINCT usage_date FROM minute_usage WHERE provider = ? ORDER BY usage_date",
+                (provider,),
+            )]
         rows = connection.execute(
             """SELECT usage_date
                  FROM (

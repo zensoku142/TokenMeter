@@ -114,6 +114,8 @@ namespace VPet_Simulator.Core
         /// 最大同时加载数
         /// </summary>
         public static int MaxLoadMemory = 2000;
+        // 每路径锁只防止同一张图重复构建；还需限制不同动画同时解码时的原生内存峰值。
+        private static readonly SemaphoreSlim BuildSlots = new SemaphoreSlim(2, 2);
 
         private async void startup(string path, FileInfo[] paths)
         {
@@ -130,69 +132,66 @@ namespace VPet_Simulator.Core
                 await sem.WaitAsync();
                 try
                 {
-                    if (!File.Exists(Path) && !((List<string>)GraphCore.CommConfig["Cache"]).Contains(path))
+                    await BuildSlots.WaitAsync();
+                    try
                     {
-                        ((List<string>)GraphCore.CommConfig["Cache"]).Add(path);
-                        int w = 0;
-                        int h = 0;
-                        // Load the first image
-                        using (var firstImage = SKBitmap.Decode(paths[0].FullName))
+                        if (!File.Exists(Path))
                         {
-                            w = firstImage.Width;
-                            h = firstImage.Height;
-
-                            // Adjust width and height based on resolution
-                            if (w > GraphCore.Resolution)
-                            {
-                                w = GraphCore.Resolution;
-                                h = (int)(h * (GraphCore.Resolution / (double)firstImage.Width));
-                            }
-
-                            if (paths.Length * w >= 60000)
-                            {//修复大长动画导致过长分辨率导致可能的报错
-                                w = 60000 / paths.Length;
-                                h = (int)(firstImage.Height * (w / (double)firstImage.Width));
-                            }
-                        }
-
-                        FrameWidth = w;
-                        FrameHeight = h;
-
-                        // Create a new bitmap to draw on
-                        using (var combinedBitmap = new SKBitmap(w * paths.Length, h))
-                        using (var canvas = new SKCanvas(combinedBitmap))
-                        {
-                            // Draw the first image
+                            int w = 0;
+                            int h = 0;
+                            // Load the first image
                             using (var firstImage = SKBitmap.Decode(paths[0].FullName))
                             {
-                                canvas.DrawBitmap(firstImage, new SKRect(0, 0, w, h));
+                                w = firstImage.Width;
+                                h = firstImage.Height;
+
+                                // Adjust width and height based on resolution
+                                if (w > GraphCore.Resolution)
+                                {
+                                    w = GraphCore.Resolution;
+                                    h = (int)(h * (GraphCore.Resolution / (double)firstImage.Width));
+                                }
+
+                                if (paths.Length * w >= 60000)
+                                {//修复大长动画导致过长分辨率导致可能的报错
+                                    w = 60000 / paths.Length;
+                                    h = (int)(firstImage.Height * (w / (double)firstImage.Width));
+                                }
                             }
 
-                            // Create an array to hold bitmaps for the remaining images
-                            SKBitmap[] bitmaps = new SKBitmap[paths.Length - 1];
+                            FrameWidth = w;
+                            FrameHeight = h;
 
-                            // Load and draw remaining images in parallel
-                            Parallel.For(1, paths.Length, i =>
+                            // Create a new bitmap to draw on
+                            using (var combinedBitmap = new SKBitmap(w * paths.Length, h))
+                            using (var canvas = new SKCanvas(combinedBitmap))
                             {
-                                var img = SKBitmap.Decode(paths[i].FullName);
-                                bitmaps[i - 1] = img; // Store the bitmap in the array
-                            });
+                                // Draw the first image
+                                using (var firstImage = SKBitmap.Decode(paths[0].FullName))
+                                {
+                                    canvas.DrawBitmap(firstImage, new SKRect(0, 0, w, h));
+                                }
 
-                            // Now draw the bitmaps onto the combined canvas
-                            for (int i = 0; i < bitmaps.Length; i++)
-                            {
-                                canvas.DrawBitmap(bitmaps[i], new SKRect(w * (i + 1), 0, w * (i + 2), h));
-                                bitmaps[i]?.Dispose();
-                            }
+                                // 原尺寸帧逐张解码、绘制后立即释放；异常时 using 也会释放当前帧。
+                                for (int i = 1; i < paths.Length; i++)
+                                {
+                                    using var frame = SKBitmap.Decode(paths[i].FullName);
+                                    canvas.DrawBitmap(frame, new SKRect(w * i, 0, w * (i + 1), h));
+                                }
 
-                            // Save the combined image to the cache path
-                            using (var image = SKImage.FromBitmap(combinedBitmap))
-                            using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
-                            using (var stream = File.OpenWrite(Path))
-                            {
-                                data.SaveTo(stream);
+                                // Save the combined image to the cache path
+                                using (var image = SKImage.FromBitmap(combinedBitmap))
+                                using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                                using (var stream = File.OpenWrite(Path))
+                                {
+                                    data.SaveTo(stream);
+                                }
                             }
                         }
+                    }
+                    finally
+                    {
+                        BuildSlots.Release();
                     }
                 }
                 finally

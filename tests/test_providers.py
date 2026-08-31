@@ -365,7 +365,7 @@ class MultiProviderTests(unittest.TestCase):
 
         self.assertEqual(result, server_activity)
         provider._profile_activity.assert_called_once()
-        provider._local_activity.assert_called_once_with()
+        provider._local_activity.assert_not_called()
 
     def test_codex_subscription_metadata_failure_does_not_discard_quota(self):
         provider = CodexProvider()

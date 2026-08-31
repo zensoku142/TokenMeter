@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -11,6 +13,8 @@ from typing import Any
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+from api.http import HttpsSession
 
 
 @dataclass(frozen=True)
@@ -107,7 +111,7 @@ def safe_int(value: Any) -> int:
 
 
 def build_session(*, retry_post: bool = False) -> requests.Session:
-    session = requests.Session()
+    session = HttpsSession()
     retry_methods = {"GET", "POST"} if retry_post else {"GET"}
     retry = Retry(
         total=3,
@@ -144,6 +148,7 @@ class Provider:
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         self._config = config
+        self.history_scope: str | None = None
 
     def config_get(self, key: str, default: Any = None) -> Any:
         if self._config is not None:
@@ -164,8 +169,17 @@ class Provider:
         """Reset data that is valid only within one refresh task."""
 
     def snapshot_identity(self) -> str:
-        """Return a stable non-secret identity for persisted provider snapshots."""
-        return ""
+        """Return a non-secret identity for account/cache isolation."""
+        fields = {
+            name: str(self.config_get(f"{self.id.upper()}_{name}", "")).strip()
+            for name, meta in self.credential_fields.items()
+            if meta.get("secret") or name == "API_PLATFORM_PH"
+        }
+        if not any(fields.values()):
+            return ""
+        # 未提供稳定账号 ID 的 API 使用凭据指纹隔离；只存指纹，不保存密钥明文。
+        fields["base"] = str(self.config_get(f"{self.id.upper()}_BASE", self.default_base)).strip().rstrip("/")
+        return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
     def close(self) -> None:
         """Release provider-owned resources."""

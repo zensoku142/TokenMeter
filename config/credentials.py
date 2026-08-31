@@ -101,14 +101,15 @@ def write_credential(key: str, value: str) -> None:
             raise OSError("非 Windows 环境请通过同名环境变量提供凭证")
         return
     if _advapi32 is None:
-        if value:
-            raise OSError("Windows 凭据管理器不可用，凭据未保存")
-        return
+        # 包括清空操作也必须报告失败，不能把“无法访问后端”伪装成已删除。
+        raise OSError("Windows 凭据管理器不可用，凭据未保存或清除")
     if not value:
-        if not _advapi32.CredDeleteW(credential_target(key), _CREDENTIALW_TYPE, 0):
-            error = ctypes.get_last_error()
-            if error != 1168:
-                raise ctypes.WinError(error)
+        # 清除必须覆盖兼容读取来源，否则下一次加载会把旧凭据重新迁回。
+        for prefix in ("TokenSpider", "TokenScope", "TokenMeter"):
+            if not _advapi32.CredDeleteW(f"{prefix}/{key}", _CREDENTIALW_TYPE, 0):
+                error = ctypes.get_last_error()
+                if error != 1168:
+                    raise ctypes.WinError(error)
         return
     raw = value.encode("utf-16-le")
     blob = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)

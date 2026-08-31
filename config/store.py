@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from api.deepseek_pricing import configured_periods, parse_time_text
+from api.http import is_https_url
 from config.defaults import DEFAULT_CONFIG, FIELD_META, OFFICIAL_HOSTS, SECRET_KEYS
 
 
@@ -107,21 +108,28 @@ def validate_config(values: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("UPDATE_CHANNEL must be stable or prerelease")
     merged["UPDATE_CHANNEL"] = update_channel
     configured_periods(merged)
-    # 凭据会随请求发送；自定义地址至少必须是完整 HTTP(S) URL。
+    # 凭据随首个请求发送，不能依赖服务端稍后重定向到 HTTPS 来保护它们。
     for key in FIELD_META:
         if not key.endswith("_BASE"):
             continue
         value = str(merged.get(key, "")).strip()
         if not value:
             continue
-        parsed = urlparse(value)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(f"{key} 必须是有效的 HTTP(S) 地址")
+        if not is_https_url(value):
+            raise ValueError(f"{key} 必须是有效的 HTTPS 地址")
     return merged
 
 
-def is_official_base_url(value: str) -> bool:
-    return (urlparse(value).hostname or "").lower() in OFFICIAL_HOSTS
+def is_official_base_url(value: str, provider_id: str = "") -> bool:
+    if not is_https_url(value):
+        return False
+    parsed = urlparse(value)
+    hosts = {
+        "deepseek": {"platform.deepseek.com", "api.deepseek.com"},
+        "mimo": {"platform.xiaomimimo.com"},
+        "nayuto": {"nayutoai.xyz"},
+    }.get(provider_id, OFFICIAL_HOSTS if not provider_id else set())
+    return parsed.port in (None, 443) and (parsed.hostname or "").lower() in hosts
 
 
 def public_values(values: dict[str, Any]) -> dict[str, Any]:

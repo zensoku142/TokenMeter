@@ -2926,7 +2926,10 @@ class MainPanel(QFrame):
         provider_changed = bool(
             self._minute_provider_id
             and provider_id
-            and provider_id != self._minute_provider_id
+            and (
+                provider_id != self._minute_provider_id
+                or data.history_provider != getattr(self, "_minute_history_provider", data.history_provider)
+            )
         )
         if provider_id:
             self._minute_provider_id = provider_id
@@ -2937,6 +2940,8 @@ class MainPanel(QFrame):
         self._minute_current_model_rows = data.minute_model_usage
         self._minute_current_status = data.minute_usage_status
         self._minute_usage_source = data.minute_usage_source
+        self._minute_history_provider = data.history_provider
+        self._minute_history_complete = data.minute_history_complete
         self._minute_usage_history = dict(data.minute_usage_history)
         self._minute_cost_usage_history = dict(data.minute_cost_usage_history)
         self._minute_model_usage_history = dict(data.minute_model_usage_history)
@@ -2964,6 +2969,7 @@ class MainPanel(QFrame):
                         and minimum_date <= parsed <= current_date
                         and (
                             value == data.minute_usage_date
+                            or not data.minute_history_complete
                             or bool(self._minute_usage_history.get(value))
                         )
                     )
@@ -3021,6 +3027,24 @@ class MainPanel(QFrame):
 
     def _render_minute_date(self, loading: bool) -> None:
         selected_date = self._minute_selected_date
+        read_failed = False
+        if (
+            selected_date and selected_date != self._minute_current_date
+            and not getattr(self, "_minute_history_complete", True)
+            and selected_date not in self._minute_usage_history
+        ):
+            from data import history
+            try:
+                rows, costs, models = history.minute_history_for_day(
+                    self._minute_history_provider, date.fromisoformat(selected_date)
+                )
+                # 只保留所选旧日，翻阅历史不能再次累计整个保护期的字典对象。
+                self._minute_usage_history = {selected_date: rows}
+                self._minute_cost_usage_history = {selected_date: costs}
+                self._minute_model_usage_history = {selected_date: models}
+            except (OSError, ValueError, history.sqlite3.Error):
+                config_manager.logger().warning("Selected minute history could not be read")
+                read_failed = True
         if selected_date == self._minute_current_date:
             rows = self._minute_current_rows
             cost_rows = self._minute_current_cost_rows
@@ -3038,6 +3062,9 @@ class MainPanel(QFrame):
             model_rows = self._minute_model_usage_history.get(selected_date, [])
             status = "recorded" if rows else "empty"
             tooltip = f"选择分时日期；当前查看 {selected_date}"
+            if read_failed:
+                status = "storage_error"
+                tooltip = "选择分时日期；分时缓存读取失败"
         try:
             interval_minutes = int(
                 config_manager.get("MINUTE_USAGE_INTERVAL_MINUTES", 5)

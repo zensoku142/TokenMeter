@@ -5,6 +5,7 @@ include = [
     "main.py",
     "config/*.py",
     "api/deepseek.py",
+    "api/http.py",
     "api/deepseek_pricing.py",
     "api/providers/base.py",
     "api/providers/deepseek.py",

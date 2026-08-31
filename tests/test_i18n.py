@@ -130,6 +130,7 @@ def test_quota_snapshot_preserves_raw_metrics_and_reads_legacy_values():
     metric = QuotaMetric("累计 Token 数", "0.3万", raw_value=2895, value_kind="tokens")
     now = datetime.now()
     data = TokenData(
+        account_key="synthetic-account",
         last_success_at=now,
         per_provider=[PerProviderData("codex", "Codex", quota_statistics=[metric])],
     )

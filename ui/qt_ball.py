@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+from functools import lru_cache
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -1078,8 +1079,10 @@ class FloatingUsageBall(QWidget):
         return fill, surface
 
     @staticmethod
+    @lru_cache(maxsize=128)
     def _circle_segment_offset(radius: float, ratio: float) -> float:
         """Return the signed surface offset whose lower segment has ``ratio`` area."""
+        # 半径和额度未变时初始面积解恒定，不必每帧重复 48 次二分。
         ratio = max(0.0, min(1.0, ratio))
         if ratio <= 0:
             return radius

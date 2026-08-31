@@ -1899,6 +1899,35 @@ def test_minute_date_selection_renders_history_and_refresh_keeps_user_choice():
     panel.close()
 
 
+def test_lazy_minute_history_reads_selected_account_day_and_bounds_cache():
+    panel = MainPanel()
+    data = sample_data()
+    data.per_provider = [PerProviderData("mimo", "MiMo")]
+    data.account_key = "account-A"
+    data.history_provider = "mimo:account-A"
+    data.minute_history_complete = False
+    data.minute_usage_date = "2026-07-14"
+    data.minute_usage_status = "recorded"
+    data.minute_usage_days = ["2026-07-12", "2026-07-13", "2026-07-14"]
+    data.minute_usage = [{"minute": 10, "token_type": "RESPONSE_TOKEN", "token_amount": 20}]
+    with patch("data.history.minute_history_for_day", return_value=(
+        [{"minute": 10, "token_type": "RESPONSE_TOKEN", "token_amount": 10}], [], []
+    )) as read:
+        panel.update_data(data)
+        read.assert_not_called()
+        panel.minute_previous_button.click()
+        read.assert_called_once_with("mimo:account-A", date(2026, 7, 13))
+        panel.minute_previous_button.click()
+        assert set(panel._minute_usage_history) == {"2026-07-12"}
+        bucket = panel.minute_chart._bucket_index_for_minute(10)
+        assert panel.minute_chart._values["RESPONSE_TOKEN"][bucket] == 10
+        data.history_provider = "mimo:account-B"
+        data.account_key = "account-B"
+        panel.update_data(data)
+        assert panel.minute_date_edit.date() == QDate(2026, 7, 14)
+    panel.close()
+
+
 def test_minute_date_selection_uses_only_dates_reported_with_data():
     panel = MainPanel()
     data = sample_data()
@@ -3412,7 +3441,7 @@ def test_ball_peak_highlight_enhances_glow_without_pricing_text():
     ball.close()
 
 
-def test_codex_water_ball_renders_quota_level_in_dark_and_light_themes():
+def test_codex_water_ball_renders_quota_level_in_dark_and_light_themes(qtbot):
     controller = configure_theme(APP, "dark")
     ball = FloatingUsageBall(88)
     ball.set_quota_state(72, "2 天 8 小时后重置", "每周额度")
@@ -3424,7 +3453,11 @@ def test_codex_water_ball_renders_quota_level_in_dark_and_light_themes():
 
     try:
         initial_phase = ball._wave_phase
-        QTest.qWait(ball._wave_timer.interval() + 10)
+        # CI 负载下定时器可能延后投递；等待实际帧推进，不能依赖固定 26ms 睡眠。
+        qtbot.waitUntil(
+            lambda: ball._wave_timer.interval() == 40 and ball._wave_phase != initial_phase,
+            timeout=1000,
+        )
         assert ball._wave_timer.isActive()
         assert ball._wave_timer.interval() == 40
         assert ball._wave_timer.timerType() == Qt.TimerType.PreciseTimer

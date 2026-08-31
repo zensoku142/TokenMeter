@@ -153,7 +153,7 @@ def _fetch_tokens_safely(
     from dying if a provider or config error is raised."""
 
     try:
-        return TokenData.fetch(lightweight=lightweight, config=config)
+        return TokenData.fetch(lightweight=lightweight, config=config, include_minute_history=False)
     except Exception:
         config_manager.logger().exception("Background refresh failed")
         provider_id = str(config.get("ACTIVE_PROVIDER", "")).strip().lower()
@@ -1148,9 +1148,12 @@ class FloatingWidget(QWidget):
             return
         self._sync_pricing_state(notify_transition=False)
         provider_cls = PROVIDERS[provider_id]
+        account_key = TokenData.account_key_for_config(config_snapshot)
         cached = self._provider_results.get(provider_id)
+        if cached is not None and cached.account_key != account_key:
+            cached = None
         if cached is None:
-            cached = TokenData.cached_snapshot(provider_id)
+            cached = TokenData.cached_snapshot(provider_id, account_key)
         self._prepare_scope_switch(
             cached
             or TokenData(
@@ -1222,6 +1225,15 @@ class FloatingWidget(QWidget):
         is_current = provider_id == str(
             config_manager.get("ACTIVE_PROVIDER", "")
         ).strip().lower()
+        account_key = TokenData.account_key_for_config(captured_config)
+        cached = self._provider_results.get(provider_id)
+        if cached is not None and cached.account_key != account_key:
+            self._provider_results.pop(provider_id, None)
+        if is_current and self._data.account_key != account_key:
+            # 同平台换号也属于范围切换；旧请求未结束时不能继续显示原账号数据。
+            self._data = TokenData(account_key=account_key, per_provider=[
+                PerProviderData(provider_id, PROVIDERS[provider_id].name)
+            ])
         with self._refresh_lock:
             if self._closed:
                 return False
@@ -1288,6 +1300,11 @@ class FloatingWidget(QWidget):
         started_at: float | None = None
         is_current = False
         provider_id = provider_id.strip().lower()
+        current_config = dict(config_manager.all_config())
+        current_config["ACTIVE_PROVIDER"] = provider_id
+        stale_account = bool(result.account_key) and (
+            result.account_key != TokenData.account_key_for_config(current_config)
+        )
         with self._refresh_lock:
             if self._closed:
                 return
@@ -1296,16 +1313,23 @@ class FloatingWidget(QWidget):
             self._in_flight_requests.pop(provider_id, None)
             started_at = self._provider_task_started.pop(provider_id, None)
             pending = self._pending_refreshes.pop(provider_id, None)
+            if stale_account:
+                # 旧请求可完成清理，但不能显示、通知或覆盖新账号的界面缓存。
+                self._provider_results.pop(provider_id, None)
+                pending = (current_config, self._uses_lightweight_mimo_refresh(provider_id), "account_change")
             # Refresh results are immutable after delivery; the current view and
             # provider switch cache can safely share them instead of retaining a
             # second copy of all daily and minute history rows.
-            self._provider_results[provider_id] = result
+            if not stale_account:
+                self._provider_results[provider_id] = result
             is_current = provider_id == str(
                 config_manager.get("ACTIVE_PROVIDER", "")
             ).strip().lower()
             if is_current:
-                self._data = result
-                self._refreshing = False
+                self._data = TokenData(per_provider=[
+                    PerProviderData(provider_id, PROVIDERS[provider_id].name)
+                ]) if stale_account else result
+                self._refreshing = stale_account
         elapsed_ms = (
             max(0, int((time.monotonic() - started_at) * 1000))
             if started_at is not None
@@ -1317,7 +1341,8 @@ class FloatingWidget(QWidget):
             result.status,
             elapsed_ms,
         )
-        self._notify_auth_expired(result, provider_id, is_current=is_current)
+        if not stale_account:
+            self._notify_auth_expired(result, provider_id, is_current=is_current)
         if is_current:
             self._apply_update()
         if pending is not None:

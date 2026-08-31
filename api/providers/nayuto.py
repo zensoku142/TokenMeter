@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping
+import time
+import hashlib
+import json
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -22,12 +25,14 @@ from api.providers.base import (
     build_session,
 )
 from config import runtime as config_manager
+from data import history
 
 _NAYUTO_BASE = "https://nayutoai.xyz"
 _NAYUTO_LOGIN_URL = f"{_NAYUTO_BASE}/console/dashboard"
 _PAGE_SIZE = 50
 _MAX_PAGES = 200
 _REQUEST_TIMEOUT_SECONDS = 20
+_SYNC_BUDGET_SECONDS = 20
 
 
 class _NayutoAPIError(RuntimeError):
@@ -291,7 +296,9 @@ class NayutoProvider(Provider):
 
     def _fetch_usage_records(
         self, earliest_date: date
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[Iterable[dict[str, Any]], int]:
+        if self.history_scope:
+            return self._sync_usage_records(earliest_date)
         records: list[dict[str, Any]] = []
         raw_count = 0
         total: int | None = None
@@ -335,9 +342,98 @@ class NayutoProvider(Provider):
             "INVALID_RESPONSE", f"NayutoAI 用量分页超过安全上限（{_MAX_PAGES} 页）"
         )
 
+    def _sync_usage_records(self, earliest_date: date) -> tuple[Iterable[dict[str, Any]], int]:
+        scope = self.history_scope
+        assert scope is not None
+        state = history.load_nayuto_sync(scope)
+        deadline = time.monotonic() + _SYNC_BUDGET_SECONDS
+        first = self._request_json("/portal/user/usage", params={"page": 1, "page_size": _PAGE_SIZE})
+        total = int(first.get("total", -1))
+        items = first.get("items")
+        if total < 0 or not isinstance(items, list):
+            raise _NayutoAPIError("INVALID_RESPONSE", "NayutoAI 用量分页结构已变化")
+
+        def key(item):
+            return hashlib.sha256(json.dumps(_record_key(item)).encode()).hexdigest()
+
+        first_key = key(items[0]) if items and isinstance(items[0], dict) else ""
+        resumed = int(state.get("page", 1)) > 1
+        if resumed:
+            # page 接口没有游标；按新增条数修正偏移，并回读一页防止边界漂移。
+            overlap = 1 if _MAX_PAGES > 2 else 0
+            page = max(1, int(state["page"]) + max(0, total - int(state.get("total", total))) // _PAGE_SIZE - overlap)
+            if state.get("anchor_seen"):
+                state["anchor_seen"] = int(state["anchor_seen"]) + page - int(state["page"])
+        else:
+            page = 1
+            covered = str(state.get("covered", ""))
+            state.update(
+                target=earliest_date.isoformat(), pending_head=first_key,
+                # 每日重新校对请求范围，补上头部重叠窗口之外的计费修订。
+                anchor=state.get("head", "") if (
+                    covered and covered <= earliest_date.isoformat()
+                    and state.get("full_day") == date.today().isoformat()
+                ) else "",
+                anchor_seen=0,
+            )
+        state["target"] = min(str(state["target"]), earliest_date.isoformat())
+        if state.get("covered") and earliest_date.isoformat() < state["covered"]:
+            state["anchor"] = ""
+        original_total = total
+        page_budget = _MAX_PAGES - (1 if page != 1 else 0)
+        for attempt in range(page_budget):
+            # 续传回读一页后至少向前处理一页，避免慢网络下永远停在同一重叠页。
+            if attempt >= (2 if resumed and page_budget > 1 else 1) and time.monotonic() >= deadline:
+                break
+            payload = first if page == 1 else self._request_json(
+                "/portal/user/usage", params={"page": page, "page_size": _PAGE_SIZE}
+            )
+            items = payload.get("items")
+            if not isinstance(items, list):
+                raise _NayutoAPIError("INVALID_RESPONSE", "NayutoAI 用量列表结构已变化")
+            total = int(payload.get("total", total))
+            rows = []
+            page_days = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                record_key = key(item)
+                if record_key == state.get("anchor"):
+                    state["anchor_seen"] = page
+                try:
+                    day = _parse_created_at(item.get("created_at")).date().isoformat()
+                except (TypeError, ValueError):
+                    continue
+                page_days.append(day)
+                # 只缓存计费归一化所需字段，不能把接口的额外账户信息写入本地明细。
+                record = {name: item[name] for name in (
+                    "request_id", "id", "created_at", "api_key_id", "model", "input_tokens",
+                    "cache_read_tokens", "output_tokens", "actual_cost", "duration_ms",
+                ) if name in item}
+                rows.append((record_key, day, record))
+            reached_end = not items or len(items) < _PAGE_SIZE or page * _PAGE_SIZE >= total
+            reached_target = bool(page_days and min(page_days) < state["target"])
+            reached_anchor = bool(state.get("anchor_seen") and page > state["anchor_seen"])
+            complete = reached_end or reached_target or reached_anchor
+            state.update(page=page + 1, total=total)
+            if complete:
+                state.update(page=1, head=state["pending_head"],
+                             covered=min(state.get("covered") or state["target"], state["target"]))
+                if not state.get("anchor"):
+                    state["full_day"] = date.today().isoformat()
+            history.save_nayuto_page(scope, rows, state)
+            if complete:
+                if (resumed and first_key != state["pending_head"]) or total != original_total:
+                    # 续传期间新增的头部记录另起一轮追平，不能把有缺口的快照当成完整账单。
+                    break
+                history.prune_nayuto_records(scope, earliest_date)
+                return history.nayuto_records(scope, earliest_date), total
+            page += 1
+        raise _NayutoAPIError("SYNC_INCOMPLETE", "NayutoAI 历史正在分批同步，已保存进度，下次刷新继续")
+
     @staticmethod
     def _normalize_records(
-        records: list[dict[str, Any]],
+        records: Iterable[dict[str, Any]],
         requested_months: set[tuple[int, int]],
     ) -> tuple[list[dict[str, Any]], ExactMinuteUsage, int]:
         seen: set[tuple[Any, ...]] = set()

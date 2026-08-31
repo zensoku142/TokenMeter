@@ -38,8 +38,22 @@ jobs:
       - name: Run Ruff
         run: python -m ruff check .
 
+      # 旧代码风格检查仍按现有范围运行；所有业务模块都必须通过基本错误检查。
+      - name: Check all Python runtime modules
+        run: python -m ruff check api config core data updater ui main.py --isolated --select E9,F63,F7,F82
+
       - name: Run Pyright
         run: python -m pyright
 
       - name: Audit Python dependencies
         run: python -m pip_audit --local --progress-spinner off
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Audit pet dependencies
+        run: dotnet restore pet_host/TokenMeter.Pet.csproj -p:NuGetAudit=true -p:NuGetAuditMode=all -warnaserror:NU1901,NU1902,NU1903,NU1904
+
+      - name: Build pet host and bundled core
+        run: dotnet build pet_host/TokenMeter.Pet.csproj --no-restore --configuration Release

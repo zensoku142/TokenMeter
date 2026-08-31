@@ -16,6 +16,7 @@ from typing import Any, ClassVar
 
 import requests
 
+from api.http import HttpsSession
 from api.providers.base import (
     FetchError,
     Provider,
@@ -54,7 +55,7 @@ class CursorProvider(Provider):
         super().__init__(config)
         self._session = build_session(retry_post=True)
         # 年度日用量是可选慢数据，不自动重试，避免弱网时拖住已成功的额度刷新。
-        self._activity_session = requests.Session()
+        self._activity_session = HttpsSession()
 
     def close(self) -> None:
         self._session.close()

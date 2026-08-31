@@ -10,6 +10,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from api.http import HttpsSession
 from config import runtime as config_manager
 
 
@@ -36,7 +37,7 @@ WEB_PROFILE = DeepSeekWebProfile()
 
 
 def _build_session() -> requests.Session:
-    session = requests.Session()
+    session = HttpsSession()
     retry = Retry(
         total=3,
         connect=2,

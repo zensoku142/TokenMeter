@@ -76,6 +76,12 @@ def pricing_widget_stub():
 
 
 class RefreshTests(unittest.TestCase):
+    def setUp(self):
+        # 调度测试不读取开发机 CLI 登录；账号切换用例显式提供模拟指纹。
+        self.identity_patch = patch.object(TokenData, "account_key_for_config", return_value="")
+        self.identity_patch.start()
+        self.addCleanup(self.identity_patch.stop)
+
     def test_pet_pricing_outline_updates_at_boundary_and_clears_when_disabled(self):
         widget = pricing_widget_stub()
         values = {"DEEPSEEK_PEAK_PRICING_ENABLED": True, "ACTIVE_PROVIDER": "deepseek"}
@@ -299,6 +305,21 @@ class RefreshTests(unittest.TestCase):
 
         self.assertEqual(task.provider_id, "mimo")
         self.assertEqual(task._config["MIMO_COOKIE"], "original")
+
+    def test_old_account_result_is_discarded_and_current_account_is_queued(self):
+        widget = widget_stub()
+        old = TokenData(account_key="A", today_tokens=999)
+        widget._data = TokenData(account_key="B", today_tokens=1)
+        with (
+            patch.object(TokenData, "account_key_for_config", return_value="B"),
+            patch("ui.qt_widget.config_manager.all_config", return_value={"ACTIVE_PROVIDER": "codex"}),
+            patch("ui.qt_widget.QTimer.singleShot") as queue,
+        ):
+            finish(widget, "codex", 1, old)
+        assert widget._data.today_tokens != 999
+        assert "codex" not in widget._provider_results
+        assert widget._refreshing
+        queue.assert_called_once()
 
     def test_repeated_refresh_runs_once_then_one_pending(self):
         widget = widget_stub()

@@ -1815,7 +1815,7 @@ class SettingsWindow(QDialog):
         for key, value in values.items():
             if (
                 key.endswith("_BASE") and value
-                and not config_manager.is_official_base_url(value)
+                and not config_manager.is_official_base_url(value, key.removesuffix("_BASE").lower())
                 and value != config_manager.get(key, "")
             ):
                 # 自动保存仅对新地址询问信任，避免修改无关开关时重复弹窗。
@@ -1895,7 +1895,9 @@ class SettingsWindow(QDialog):
             )
             return
         for key, value in candidate.items():
-            if key.endswith("_BASE") and value and not config_manager.is_official_base_url(value):
+            if key.endswith("_BASE") and value and not config_manager.is_official_base_url(
+                value, key.removesuffix("_BASE").lower()
+            ):
                 result = QMessageBox.question(
                     self,
                     tr("非官方 API 地址"),

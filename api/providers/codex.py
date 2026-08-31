@@ -17,6 +17,7 @@ from typing import Any, ClassVar
 
 import requests
 
+from api.http import HttpsSession
 from api.providers.base import (
     FetchError,
     Provider,
@@ -27,6 +28,7 @@ from api.providers.base import (
 )
 
 _TIMESTAMP = re.compile(r'^\{"timestamp":"([^"]+)"')
+_MAX_SESSION_LINE_BYTES = 1024 * 1024
 _ActivityRows = tuple[tuple[str, int], ...]
 _ActivityData = tuple[_ActivityRows, _ActivityRows, tuple[QuotaMetric, ...]]
 
@@ -41,6 +43,7 @@ class _SessionUsage:
     last_total: int = 0
     peak_total: int = 0
     daily: dict[str, int] = field(default_factory=dict)
+    file_id: tuple[int, int] | None = None
 
 
 class CodexProvider(Provider):
@@ -69,7 +72,7 @@ class CodexProvider(Provider):
         self._session = build_session()
         # 账号统计与套餐日期属于可选慢数据，禁用自动重试，避免弱网时
         # 两个辅助请求把已经成功的额度刷新拖住一分钟以上。
-        self._metadata_session = requests.Session()
+        self._metadata_session = HttpsSession()
         self._activity_data_source = ""
         self._weekly_activity_data_source = ""
         self._statistics_data_source = ""
@@ -181,9 +184,11 @@ class CodexProvider(Provider):
             stat = path.stat()
         except OSError:
             return previous
-        if previous and previous.size == stat.st_size and previous.mtime_ns == stat.st_mtime_ns:
+        file_id = (stat.st_dev, stat.st_ino)
+        if previous and previous.file_id == file_id and previous.size == stat.st_size and previous.mtime_ns == stat.st_mtime_ns:
             return previous
-        can_append = bool(previous and stat.st_size > previous.size)
+        # 同路径被原子替换时，文件大小增长也不能沿用旧偏移。
+        can_append = bool(previous and previous.file_id == file_id and stat.st_size > previous.size)
         usage = (
             _SessionUsage(
                 size=stat.st_size,
@@ -199,10 +204,26 @@ class CodexProvider(Provider):
             else _SessionUsage(stat.st_size, stat.st_mtime_ns, 0)
         )
         try:
-            with path.open("r", encoding="utf-8", errors="replace") as handle:
+            with path.open("rb") as handle:
                 if can_append:
                     handle.seek(usage.offset)
-                while line := handle.readline():
+                while True:
+                    line_start = handle.tell()
+                    raw = handle.readline(_MAX_SESSION_LINE_BYTES + 1)
+                    if not raw:
+                        break
+                    oversized = len(raw) > _MAX_SESSION_LINE_BYTES
+                    if oversized:
+                        # Prompt/工具输出可能包含巨型单行；分块跳过，不能按行无界分配内存。
+                        while raw and not raw.endswith(b"\n"):
+                            raw = handle.readline(_MAX_SESSION_LINE_BYTES + 1)
+                    if not raw.endswith(b"\n"):
+                        # 写入方尚未提交尾行；保留起点，追加后重读整条事件（含 UTF-8 分段）。
+                        handle.seek(line_start)
+                        break
+                    if oversized:
+                        continue
+                    line = raw.decode("utf-8", errors="replace")
                     match = _TIMESTAMP.match(line)
                     observed_at = cls._parse_timestamp(match.group(1)) if match else None
                     is_session_meta = '"session_meta"' in line
@@ -271,6 +292,7 @@ class CodexProvider(Provider):
             return previous
         usage.size = stat.st_size
         usage.mtime_ns = stat.st_mtime_ns
+        usage.file_id = file_id
         return usage
 
     @staticmethod
@@ -306,8 +328,14 @@ class CodexProvider(Provider):
 
     def _local_activity(self) -> tuple[tuple[tuple[str, int], ...], tuple[QuotaMetric, ...]]:
         sessions = self._home() / "sessions"
+        today_only = getattr(self, "_local_today_only", False)
+        today = datetime.now().astimezone().date()
+        day_start = datetime.combine(today, datetime.min.time()).astimezone().timestamp()
         try:
-            paths = [path for path in sessions.rglob("*.jsonl") if path.is_file()]
+            paths = [
+                path for path in sessions.rglob("*.jsonl")
+                if path.is_file() and (not today_only or path.stat().st_mtime >= day_start)
+            ]
         except OSError:
             return (), ()
         with self._session_cache_lock:
@@ -325,8 +353,13 @@ class CodexProvider(Provider):
         longest_seconds = 0
         for usage in usages:
             for usage_day, tokens in usage.daily.items():
+                if today_only and usage_day != today.isoformat():
+                    continue
                 daily[usage_day] = daily.get(usage_day, 0) + tokens
             longest_seconds = max(longest_seconds, usage.longest_task_seconds)
+        if today_only:
+            # 按最后修改时间选活跃文件，保留跨午夜续聊；当天补值不再计算被丢弃的全量统计。
+            return tuple(sorted(daily.items())), ()
         active_days = {date.fromisoformat(value) for value, tokens in daily.items() if tokens > 0}
         current_streak, longest_streak = self._streaks(active_days)
         total_tokens = sum(daily.values())
@@ -370,9 +403,16 @@ class CodexProvider(Provider):
 
         # 额度窗口仍按用户配置刷新；账号统计接口独立限频为一小时。
         # 本机会话只补近 7 天图的当天值，不能污染官方热力图和底部统计。
-        local_rows, _local_statistics = self._local_activity()
         today = datetime.now().astimezone().date().isoformat()
-        local_today_tokens = dict(local_rows).get(today, 0)
+        profile_activity = self._profile_activity(headers) if headers is not None else None
+        local_today_tokens = 0
+        if headers is None or (
+            profile_activity is not None and today not in dict(profile_activity[0])
+        ) or (profile_activity is None and cached is None):
+            # 官方已有当天数据时不访问会话树；官方失败且有缓存时同样无需本地扫描。
+            self._local_today_only = True
+            local_rows, _local_statistics = self._local_activity()
+            local_today_tokens = dict(local_rows).get(today, 0)
         if headers is None:
             weekly_activity = ((today, local_today_tokens),) if local_today_tokens else ()
             self._activity_data_source = ""
@@ -380,7 +420,6 @@ class CodexProvider(Provider):
             self._statistics_data_source = ""
             return (), weekly_activity, ()
         else:
-            profile_activity = self._profile_activity(headers)
             # 统计接口暂时不可用时优先展示最后一次官方结果；从未成功过时
             # 只允许近 7 天图显示本机当天估算，其他统计保持空白。
             if profile_activity is not None:
