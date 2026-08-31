@@ -2,4 +2,4 @@
 
 pyinstaller>=6.22.2,<7
 # PyInstaller 会收集 setuptools；最低修复版本避免把已知漏洞带入发布环境。
-setuptools>=83.0.0
+setuptools>=84.0.0
