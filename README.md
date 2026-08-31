@@ -27,8 +27,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/readme-hero-v1.12.0.webp" alt="TokenMeter 产品界面概览" width="960">
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter 当前源码真实界面：Codex 订阅额度与年度活动、DeepSeek 余额与今日分时消耗，浅色、深色和自定义主题面板，额度与金额悬浮球，以及 VPet 桌宠和额度气泡（演示数据）" width="960"></a>
 </p>
+
+上图由当前源码运行的真实组件截图排版，额度与用量为演示数据；桌宠为可选扩展。[查看原始截图与来源说明](docs/images/readme/README.md)。
 
 TokenMeter 是一款轻量级 Windows 桌面 AI 用量监控工具。它显示 Codex 与 Cursor 订阅额度、剩余比例和重置倒计时，并为 DeepSeek、Xiaomi MiMo 与 NayutoAI 展示 Token、费用、余额和历史趋势。
 
@@ -202,6 +204,12 @@ TokenMeter/
 
 当前版本：`1.13.2`。更新记录及校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
+## 第三方声明与致谢
+
+可选桌宠扩展基于 [LorisYounger/VPet（虚拟桌宠模拟器）](https://github.com/LorisYounger/VPet) 的开源核心，并使用其原版默认角色与动画，感谢上游作者及贡献者。默认角色与动画版权归虚拟主播模拟器制作组所有；产品介绍图中的桌宠也来自该项目。
+
+VPet 核心源码采用 [Apache License 2.0](third_party/VPet/LICENSE)，角色、动画与图片适用上游单独的授权声明，不属于 TokenMeter 的 MIT 授权范围。具体来源、修改与授权要求见 [桌宠来源与授权](pet_host/THIRD_PARTY_NOTICES.md) 和 [上游完整声明](third_party/VPet/README.md)。
+
 ## License
 
-本项目采用 [MIT License](LICENSE)，可在保留版权和许可声明的前提下使用、修改和分发。
+TokenMeter 自有代码采用 [MIT License](LICENSE)，可在保留版权和许可声明的前提下使用、修改和分发；第三方组件与素材遵循各自的许可和版权声明。

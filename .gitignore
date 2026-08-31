@@ -44,3 +44,5 @@ docs/*
 !docs/images/
 docs/images/*
 !docs/images/readme-hero-v1.12.0.webp
+!docs/images/readme-hero.webp
+!docs/images/readme/
