@@ -36,11 +36,11 @@ internal sealed partial class PetWindow
             using var document = JsonDocument.Parse(json);
             LoadNotificationPreferences(document.RootElement);
         }
-        void VisibilityCommand(bool value)
+        void VisibilityCommand(bool value, bool stopTimer = true)
         {
             using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { type = "visibility", visible = value }));
             Receive(document.RootElement);
-            notificationTimer.Stop();
+            if (stopTimer) notificationTimer.Stop();
         }
         void Normal()
         {
@@ -164,6 +164,40 @@ internal sealed partial class PetWindow
             checks["modeChangeClearsManualOverride"] = cloudManualChoice == null;
             Normal();
             SetCloudMode("edge");
+            drinkReminderEnabled = restReminderEnabled = true;
+            ResetNotificationSchedule(now);
+            double originalDrinkDue = nextDrinkReminder, originalRestDue = nextRestReminder;
+            double originalRandomDue = nextRandomQuota;
+            // 打开主程序用量面板会重复发送 visible=true；这不是真正的隐藏/恢复，不能重置倒计时。
+            for (int i = 0; i < 5; i++)
+            {
+                now += 300;
+                VisibilityCommand(true, stopTimer: false);
+            }
+            checks["repeatedPanelOpensPreserveReminderDeadlines"] = nextDrinkReminder == originalDrinkDue &&
+                nextRestReminder == originalRestDue && nextRandomQuota == originalRandomDue;
+            now = originalDrinkDue;
+            // 使用真实 DispatcherTimer 触发，避免手动调用 AdvanceNotifications 掩盖计时器生命周期问题。
+            notificationTimer.Start();
+            await Task.Delay(1300);
+            checks["realTimerShowsDrinkAfterRepeatedPanelOpens"] = activeNotice == Notice.Drink &&
+                pet.MsgBar.Visibility == Visibility.Visible;
+            notificationTimer.Stop();
+            FinishNotification();
+            for (int i = 0; i < 5; i++)
+            {
+                now += 300;
+                VisibilityCommand(true, stopTimer: false);
+            }
+            checks["repeatedPanelOpensStillPreserveRestDeadline"] = nextRestReminder == originalRestDue;
+            now = originalRestDue;
+            notificationTimer.Start();
+            await Task.Delay(1300);
+            checks["realTimerShowsRestAfterRepeatedPanelOpens"] = activeNotice.HasFlag(Notice.Rest) &&
+                pet.MsgBar.Visibility == Visibility.Visible;
+            notificationTimer.Stop();
+            FinishNotification();
+            drinkReminderEnabled = restReminderEnabled = false;
             nextDrinkReminder = nextRestReminder = now;
             AdvanceNotifications(now);
             checks["disabledRemindersStaySilent"] = activeNotice == Notice.None;
@@ -205,6 +239,26 @@ internal sealed partial class PetWindow
             pet.MsgBar.ForceClose();
             AdvanceNotifications(now);
             checks["closingSpeechFinishesReminder"] = activeNotice == Notice.None;
+            foreach (int testSize in new[] { 160, 220, 320 })
+            {
+                ResizePet(testSize - size);
+                StartNotification(Notice.Drink | Notice.Rest, now);
+                var readableMessage = (MessageBar)pet.MsgBar;
+                // 用最长的合并提示检查实际布局，不让逐字显示暂时缩短内容而掩盖换行或裁切问题。
+                readableMessage.ShowTimer.Stop();
+                readableMessage.TText.Text = DrinkText + "\n" + RestText;
+                UpdateLayout();
+                var textTransform = readableMessage.TText.TransformToAncestor(this);
+                double textScale = Math.Abs(textTransform.Transform(new Point(0, 1)).Y -
+                    textTransform.Transform(new Point(0, 0)).Y);
+                var textBounds = textTransform.TransformBounds(new Rect(readableMessage.TText.RenderSize));
+                checks[$"reminderTextReadable{testSize}"] = readableMessage.TText.FontSize * textScale >= 13.9;
+                checks[$"reminderTextFitsWithoutResizingPet{testSize}"] = Width == testSize && Height == testSize &&
+                    new Rect(0, 0, ActualWidth, ActualHeight).Contains(textBounds);
+                Capture(this, Path.Combine(output, $"reminder-readable-{testSize}.png"));
+                FinishNotification();
+            }
+            ResizePet(originalSize - size);
             nextDrinkReminder = now;
             AdvanceNotifications(now);
             checks["drinkDeadlineIsIndependent"] = activeNotice == Notice.Drink;

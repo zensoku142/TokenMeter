@@ -81,7 +81,7 @@ internal sealed partial class PetWindow : Window, IController
         ClampPosition();
         Loaded += async (_, _) => await LoadPet();
         LocationChanged += (_, _) => UpdateQuotaCloud();
-        SizeChanged += (_, _) => UpdateQuotaCloud();
+        SizeChanged += (_, _) => { UpdateMessageTextSize(); UpdateQuotaCloud(); };
         Closing += (_, _) => {
             if (closing) return;
             closing = true;
@@ -122,6 +122,7 @@ internal sealed partial class PetWindow : Window, IController
             // 内核仍保留角色名以兼容原版资源；提醒只显示正文，不展示称呼或预留标题空行。
             if (pet.MsgBar.This.FindName("LName") is FrameworkElement messageName)
                 messageName.Visibility = Visibility.Collapsed;
+            UpdateMessageTextSize();
             // 轻点仅用于抚摸等角色交互；所有操作统一由右键菜单提供。
             pet.DefaultClickAction = null;
             AttachPetDragging();
@@ -257,7 +258,10 @@ internal sealed partial class PetWindow : Window, IController
                 if (ready) UpdateUsage(command);
                 break;
             case "visibility":
-                visible = command.GetProperty("visible").GetBoolean();
+                bool requestedVisible = command.GetProperty("visible").GetBoolean();
+                // 打开用量面板也会发送 visible=true；只有真正切换显隐才重置提醒，避免频繁查看用量让提醒一直延期。
+                if (requestedVisible == visible) break;
+                visible = requestedVisible;
                 if (!visible) EndPetGesture(cancel: true);
                 if (!visible && petMenu != null) petMenu.IsOpen = false;
                 if (visible) ResumeNotifications();
@@ -369,6 +373,13 @@ internal sealed partial class PetWindow : Window, IController
         "商业用途需联系原作者，分发动画须保留授权信息且不得收费分发。\n" +
         "完整授权见程序目录 THIRD_PARTY_NOTICES.md 与 VPet-README.md。",
         "VPet 来源与授权", MessageBoxButton.OK, MessageBoxImage.Information);
+
+    private void UpdateMessageTextSize()
+    {
+        // 对话框随 500 单位角色画布一起缩放；补偿小桌宠的比例，保证实际提示字号至少为 14。
+        if (pet?.MsgBar is MessageBar message)
+            message.TText.FontSize = Math.Max(24, 14.0 * 500 / size);
+    }
 
     private void ResizePet(int delta)
     {
