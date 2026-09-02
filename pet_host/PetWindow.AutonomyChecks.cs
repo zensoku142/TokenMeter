@@ -18,6 +18,7 @@ internal sealed partial class PetWindow
     private async Task RunAutonomyChecks(Dictionary<string, bool> checks, string output)
     {
         bool originalMove = allowMove;
+        bool? originalManualDock = manualDockedEdge;
         int originalSize = size;
         var originalPosition = new Point(Left, Top);
         var originalMode = save.Mode;
@@ -172,9 +173,11 @@ internal sealed partial class PetWindow
             {
                 TrySnapPetToEdge(left);
                 RunAutonomousBehavior(1);
-                checks[$"autonomyCanLeaveDock{left}"] = autonomousSequence != null && DockedEdge == null &&
-                    WorkArea().Contains(new Rect(Left, Top, Width, Height));
+                checks[$"autonomyStaysDocked{left}"] = autonomousSequence == null && DockedEdge == left &&
+                    manualDockedEdge == left && !ambientTimer.IsEnabled && !pet.MoveTimer.Enabled;
                 CancelAutonomousSequence();
+                manualDockedEdge = null;
+                pet.DisplayToNomal();
             }
             foreach (int testSize in new[] { 160, 220, 320 })
             foreach (bool left in new[] { true, false })
@@ -220,6 +223,7 @@ internal sealed partial class PetWindow
             ++notificationGeneration;
             remainingAutonomousChoices.Clear();
             allowMove = originalMove;
+            manualDockedEdge = originalManualDock;
             size = originalSize;
             Width = Height = size;
             pet.DisplayToNomal();

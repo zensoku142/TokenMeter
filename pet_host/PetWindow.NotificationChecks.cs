@@ -21,6 +21,7 @@ internal sealed partial class PetWindow
         string originalPreferences = File.ReadAllText(Path.Combine(dataDirectory, "layout.json"));
         var originalClock = notificationNow;
         bool originalMove = allowMove;
+        bool? originalManualDock = manualDockedEdge;
         int originalSize = size;
         var originalPosition = new Point(Left, Top);
         double now = 1000;
@@ -50,6 +51,7 @@ internal sealed partial class PetWindow
             ++notificationGeneration;
             pet.CleanState();
             pet.DisplayToNomal();
+            manualDockedEdge = null;
             cloudManualChoice = null;
             cloudDockedState = null;
             ResetCloudHover();
@@ -286,23 +288,22 @@ internal sealed partial class PetWindow
                 Normal();
                 TrySnapPetToEdge(left);
                 await Task.Delay(200);
-                quotaMenuItem.IsChecked = false;
-                quotaMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 var dockedPosition = new Point(Left, Top);
-                var foreground = GetForegroundWindow();
-                StartNotification(Notice.Drink, now);
-                checks[$"dockedReminderMovesInside{left}"] = WorkArea().Contains(new Rect(Left, Top, Width, Height)) &&
-                    notificationOrigin?.Edge == left && cloudManualChoice == false && GetForegroundWindow() == foreground;
+                nextDrinkReminder = now;
+                nextRestReminder = now + 3600;
+                AdvanceNotifications(now);
+                checks[$"dockedReminderWaitsForManualUndock{left}"] = activeNotice == Notice.None &&
+                    manualDockedEdge == left && DockedEdge == left && new Point(Left, Top) == dockedPosition;
                 SaveState();
                 using (var layout = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "layout.json"))))
-                    checks[$"temporaryReminderPositionNotSaved{left}"] =
-                        layout.RootElement.GetProperty("x").GetDouble() == dockedPosition.X &&
-                        layout.RootElement.GetProperty("y").GetDouble() == dockedPosition.Y;
-                await Task.Delay(1000);
-                Capture(this, Path.Combine(output, $"reminder-docked-{left}.png"));
+                    checks[$"dockedStateSaved{left}"] = layout.RootElement.GetProperty("dockedEdge").GetBoolean() == left;
+                // 自检直接模拟用户拖离后的状态；真实拖动路径由 RunDragChecks 覆盖。
+                manualDockedEdge = null;
+                pet.CleanState();
+                pet.DisplayToNomal();
+                AdvanceNotifications(now);
+                checks[$"pendingReminderStartsAfterManualUndock{left}"] = activeNotice == Notice.Drink;
                 FinishNotification();
-                checks[$"dockedReminderRestoresPosition{left}"] = DockedEdge == left &&
-                    Math.Abs(Left - dockedPosition.X) < 1 && Math.Abs(Top - dockedPosition.Y) < 1 && cloudManualChoice == false;
             }
             StartNotification(Notice.Rest, now);
             int previousGeneration = notificationGeneration;
@@ -366,6 +367,7 @@ internal sealed partial class PetWindow
             allowMove = originalMove;
             cloudManualChoice = null;
             cloudDockedState = null;
+            manualDockedEdge = originalManualDock;
             ResetCloudHover();
             pet.DisplayToNomal();
             ClampPosition();

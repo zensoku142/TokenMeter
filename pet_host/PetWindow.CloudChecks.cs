@@ -22,6 +22,7 @@ internal sealed partial class PetWindow
         bool originalCloudEnabled = cloudEnabled;
         bool? originalCloudDockedState = cloudDockedState;
         bool? originalManualChoice = cloudManualChoice;
+        bool? originalManualDock = manualDockedEdge;
         double originalLeft = Left, originalTop = Top;
         var handle = new WindowInteropHelper(this).Handle;
         void Usage(string provider, string primary, string status = "", bool warning = false, bool? pricingPeak = null, object? theme = null)
@@ -35,6 +36,7 @@ internal sealed partial class PetWindow
         {
             cloudEnabled = false;
             cloudDockedState = null;
+            manualDockedEdge = null;
             pet!.CleanState();
             pet.DisplayToNomal();
             await Task.Delay(100);
@@ -165,6 +167,7 @@ internal sealed partial class PetWindow
 
             pet.CleanState();
             pet.DisplayToNomal();
+            manualDockedEdge = null;
             GetWindowRect(handle, out var floatingRect);
             SetWindowPos(handle, IntPtr.Zero, centerWork.Left + (centerWork.Width - (floatingRect.Right - floatingRect.Left)) / 2,
                 centerWork.Top + centerWork.Height / 2, 0, 0, DragPositionFlags);
@@ -317,6 +320,7 @@ internal sealed partial class PetWindow
             cloudEnabled = originalCloudEnabled;
             cloudDockedState = originalCloudDockedState;
             cloudManualChoice = originalManualChoice;
+            manualDockedEdge = originalManualDock;
             pet!.CleanState();
             pet.DisplayToNomal();
             size = originalSize;

@@ -48,6 +48,7 @@ internal sealed partial class PetWindow : Window, IController
     private bool quotaPinned = true;
     private bool cloudEnabled;
     private bool? cloudDockedState;
+    private bool? manualDockedEdge;
     private int size = 220;
     private JsonElement? pendingUsage;
     private string? lastWarning;
@@ -154,6 +155,7 @@ internal sealed partial class PetWindow : Window, IController
             pet.MouseMove += (_, e) => quotaCloud.NotifyPointerMovement(PointToScreen(e.GetPosition(this)));
             pet.MouseLeave += (_, _) => quotaCloud.NotifyActivity();
             ready = true;
+            if (manualDockedEdge is bool edge) TrySnapPetToEdge(edge);
             InitializeNotifications();
             if (pendingUsage is { } usage) UpdateUsage(usage);
             UpdateQuotaCloud();
@@ -272,7 +274,11 @@ internal sealed partial class PetWindow : Window, IController
                 if (pet != null)
                 {
                     pet.EventTimer.Stop();
-                    if (visible) pet.DisplayToNomal();
+                    if (visible)
+                    {
+                        if (manualDockedEdge is bool edge) TrySnapPetToEdge(edge);
+                        else pet.DisplayToNomal();
+                    }
                     else
                     {
                         // 完全隐藏后停止动画任务和移动；恢复时由原版状态机重新接续。
@@ -334,7 +340,7 @@ internal sealed partial class PetWindow : Window, IController
             quotaCloud.Hide();
             return;
         }
-        bool? edge = DockedEdge;
+        bool? edge = manualDockedEdge ?? DockedEdge;
         // 手动显隐只覆盖当前状态；普通动画和刷新不重置，真正进入/离开贴边时才恢复默认。
         bool docked = LogicalDockedEdge.HasValue;
         if (cloudDockedState != docked)
@@ -408,6 +414,9 @@ internal sealed partial class PetWindow : Window, IController
             Top = data.RootElement.GetProperty("y").GetDouble();
             size = Math.Clamp(data.RootElement.GetProperty("size").GetInt32(), 160, 320);
             allowMove = !data.RootElement.TryGetProperty("allowMove", out var autonomous) || autonomous.GetBoolean();
+            if (data.RootElement.TryGetProperty("dockedEdge", out var docked) &&
+                docked.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                manualDockedEdge = docked.GetBoolean();
             quotaPinned = data.RootElement.GetProperty("quotaPinned").GetBoolean();
             // 手动显隐是临时覆盖；只恢复展示模式和提醒偏好。
             if (data.RootElement.TryGetProperty("quotaX", out var qx) &&
@@ -428,7 +437,8 @@ internal sealed partial class PetWindow : Window, IController
         try
         {
             var position = notificationOrigin?.Position ?? new Point(Left, Top);
-            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, allowMove, quotaPinned,
+            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, allowMove,
+                dockedEdge = manualDockedEdge, quotaPinned,
                 cloudMode, cloudRandomMinutes, drinkReminderEnabled, drinkReminderMinutes, restReminderEnabled, restReminderMinutes,
                 quotaX = quota?.Left ?? quotaPosition?.X ?? 0, quotaY = quota?.Top ?? quotaPosition?.Y ?? 0 }));
         }
@@ -473,7 +483,7 @@ internal sealed partial class PetWindow : Window, IController
     public double GetWindowsDistanceDown() => Dispatcher.Invoke(() => WorkArea().Bottom - Top - Height);
     public void MoveWindows(double x, double y) => Dispatcher.Invoke(() => {
         if (closing || !visible || notificationsSuspended || activeNotice != Notice.None || autonomousSequence != null ||
-            petPointerDown || petMenu?.IsOpen == true) return;
+            petPointerDown || petMenu?.IsOpen == true || LogicalDockedEdge.HasValue) return;
         Left += x * ZoomRatio;
         Top += y * ZoomRatio;
     });

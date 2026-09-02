@@ -119,17 +119,9 @@ internal sealed partial class PetWindow
     private void RunAutonomousBehavior(int? selectedChoice = null)
     {
         if (!CanMoveAutonomously || autonomousSequence != null || warningSpeechPending ||
-            pet!.MsgBar.Visibility == Visibility.Visible || (!pet.IsIdel && !DockedEdge.HasValue)) return;
+            pet!.MsgBar.Visibility == Visibility.Visible || !pet.IsIdel) return;
         int choice = selectedChoice ?? Random.Shared.Next(5);
         if (choice == 4) return;
-        if (DockedEdge.HasValue)
-        {
-            // 开启自主活动时，贴边不是永久停留状态；先回到工作区再播放完整动作，避免被屏幕裁切。
-            pet.CleanState();
-            ClampPosition();
-            pet.DisplayToNomal();
-            UpdateQuotaCloud();
-        }
         if (choice == 0)
         {
             // 靠墙时优先选择满足原版边界条件的爬墙动作，不能又被随机走远而错过狭窄触发区。

@@ -93,8 +93,10 @@ internal sealed partial class PetWindow
         petDragging = true;
         quotaCloud?.Hide();
         // 从贴边开始拖动即结束当前手动选择；原地放下也算重新贴边，不能漏掉没有位置变化的情况。
-        if (DockedEdge.HasValue)
+        if (LogicalDockedEdge.HasValue)
         {
+            // 只有用户实际开始拖动才解除贴边锁；点击、提醒和自主动画都不能代替该操作。
+            manualDockedEdge = null;
             cloudDockedState = false;
             cloudManualChoice = null;
             cloudEnabled = false;
@@ -180,7 +182,10 @@ internal sealed partial class PetWindow
             : work.Right - side[(gdbe)"right"] * zoom);
         int y = Math.Clamp(rect.Top, work.Top, Math.Max(work.Top, work.Bottom - (rect.Bottom - rect.Top)));
         if (!SetWindowPos(handle, IntPtr.Zero, x, y, 0, 0, DragPositionFlags)) return false;
+        manualDockedEdge = left;
         pet!.Display(animation, AnimatType.A_Start, pet.DisplayBLoopingForce);
+        // 贴边动画建立后立即停掉内核移动计时器，避免下一次 Tick 把角色重新带回屏幕。
+        SyncAutonomy();
         return true;
     }
 
@@ -197,6 +202,7 @@ internal sealed partial class PetWindow
     private async Task RunDragChecks(Dictionary<string, bool> checks)
     {
         int originalSize = size;
+        bool? originalManualDock = manualDockedEdge;
         double originalLeft = Left, originalTop = Top;
         var handle = new WindowInteropHelper(this).Handle;
         bool positionsMatch = true, releaseClean = true, autonomousBlocked = true;
@@ -319,6 +325,7 @@ internal sealed partial class PetWindow
         {
             EndPetGesture(cancel: true);
             size = originalSize;
+            manualDockedEdge = originalManualDock;
             Width = Height = size;
             Left = originalLeft;
             Top = originalTop;

@@ -51,8 +51,9 @@ internal sealed partial class PetWindow
     private bool HasHoverCloud => cloudMode is "hover" or "hover_random";
     private bool HasRandomCloud => cloudMode is "random" or "hover_random";
     private bool CanMoveAutonomously => ready && visible && !closing && !notificationsSuspended &&
-        allowMove && !petPointerDown && petMenu?.IsOpen != true && activeNotice == Notice.None;
-    private bool? LogicalDockedEdge => notificationOrigin?.Edge ?? DockedEdge;
+        allowMove && !petPointerDown && petMenu?.IsOpen != true && activeNotice == Notice.None &&
+        !LogicalDockedEdge.HasValue;
+    private bool? LogicalDockedEdge => notificationOrigin?.Edge ?? manualDockedEdge ?? DockedEdge;
 
     private void SyncAutonomy()
     {
@@ -196,6 +197,7 @@ internal sealed partial class PetWindow
 
     private bool CanStartNotification => ready && visible && IsVisible && !closing && !notificationsSuspended &&
         !petPointerDown && petMenu?.IsOpen != true && !warningSpeechPending && activeNotice == Notice.None &&
+        !LogicalDockedEdge.HasValue &&
         pet!.MsgBar.Visibility != Visibility.Visible && pet.DisplayType.Type is
             GraphType.Default or GraphType.Idel or GraphType.StateONE or GraphType.StateTWO or
             GraphType.SideHide_Left_Main or GraphType.SideHide_Left_Rise or
@@ -281,6 +283,8 @@ internal sealed partial class PetWindow
 
     private void ShowUsageWarning(string text)
     {
+        // 贴边是用户锁定状态；自动警告不能借说话动画把角色带回屏幕内。
+        if (LogicalDockedEdge.HasValue) return;
         CancelAutonomousSequence();
         FinishNotification();
         if (!visible || notificationsSuspended) return;
@@ -329,7 +333,13 @@ internal sealed partial class PetWindow
             if (closing) return;
             notificationsSuspended = e.Mode == PowerModes.Suspend;
             if (e.Mode == PowerModes.Suspend) { PauseNotifications(); quotaCloud?.Hide(); }
-            else if (e.Mode == PowerModes.Resume) { pet?.DisplayToNomal(); ResumeNotifications(); UpdateQuotaCloud(); }
+            else if (e.Mode == PowerModes.Resume)
+            {
+                if (manualDockedEdge is bool edge) TrySnapPetToEdge(edge);
+                else pet?.DisplayToNomal();
+                ResumeNotifications();
+                UpdateQuotaCloud();
+            }
             SyncAutonomy();
         });
     }
