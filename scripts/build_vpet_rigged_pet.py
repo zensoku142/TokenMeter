@@ -485,11 +485,21 @@ def render_frame(rig: Rig, frame: MotionFrame) -> Image.Image:
         patch, destination = _transformed_layer(rig, layer, transform, frame.root)
         canvas.alpha_composite(patch, destination)
 
-    corners = (
-        canvas.getpixel((0, 0))[3],
-        canvas.getpixel((rig.width - 1, 0))[3],
-        canvas.getpixel((0, rig.height - 1))[3],
-        canvas.getpixel((rig.width - 1, rig.height - 1))[3],
+    def alpha_at(point: tuple[int, int]) -> int:
+        pixel = canvas.getpixel(point)
+        # The canvas is always RGBA, but Pillow's public typing also covers scalar image modes.
+        if not isinstance(pixel, tuple) or len(pixel) != 4:
+            raise RigError("rendered canvas unexpectedly lost RGBA mode")
+        return int(pixel[3])
+
+    corners = tuple(
+        alpha_at(point)
+        for point in (
+            (0, 0),
+            (rig.width - 1, 0),
+            (0, rig.height - 1),
+            (rig.width - 1, rig.height - 1),
+        )
     )
     if any(corners):
         raise RigError("rendered frame must keep all four canvas corners transparent")
