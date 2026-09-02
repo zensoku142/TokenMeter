@@ -110,7 +110,7 @@ Qt 测试需要可用的 Windows 桌面会话；生成安装器需要 Inno Setup
 
 ## 版本
 
-主程序 `1.15.0`，可选桌宠扩展 `0.2.0`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程序 `1.15.1`，可选桌宠扩展 `0.2.0`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 许可与致谢
 
