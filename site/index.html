@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f9fc">
+    <meta name="color-scheme" content="light dark">
+    <meta name="robots" content="index,follow,max-image-preview:large">
+    <title>TokenMeter — AI Usage Monitor for Windows</title>
+    <meta name="description" content="TokenMeter 是适用于 Windows 10/11 的 AI 用量监控工具，可统一查看订阅额度、Token 消耗、费用、余额与历史趋势。">
+    <link rel="canonical" href="https://zensoku142.github.io/TokenMeter/">
+    <link rel="icon" type="image/png" href="./assets/app-icon.png">
+    <link rel="apple-touch-icon" href="./assets/app-icon.png">
+    <script>
+      (() => {
+        document.documentElement.classList.add("js");
+        try {
+          const preference = localStorage.getItem("tokenmeter-site-theme") || "auto";
+          const dark = preference === "dark" || (preference === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch { document.documentElement.dataset.theme = "light"; }
+      })();
+    </script>
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="zh_CN">
+    <meta property="og:site_name" content="TokenMeter">
+    <meta property="og:title" content="TokenMeter — AI Usage Monitor for Windows">
+    <meta property="og:description" content="在 Windows 桌面统一查看 AI 订阅额度、Token 消耗、费用与余额。">
+    <meta property="og:url" content="https://zensoku142.github.io/TokenMeter/">
+    <meta property="og:image" content="https://zensoku142.github.io/TokenMeter/assets/social-preview.webp">
+    <meta property="og:image:width" content="1920"><meta property="og:image:height" content="1624">
+    <meta property="og:image:alt" content="TokenMeter 的额度面板、用量分析、悬浮球与可选桌宠">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="TokenMeter — AI Usage Monitor for Windows">
+    <meta name="twitter:description" content="查看 Codex、Cursor 额度及多个 AI API 的 Token、费用和余额。">
+    <meta name="twitter:image" content="https://zensoku142.github.io/TokenMeter/assets/social-preview.webp">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./script.js" defer></script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","@id":"https://zensoku142.github.io/TokenMeter/#software","name":"TokenMeter","url":"https://zensoku142.github.io/TokenMeter/","description":"适用于 Windows 10/11 的 AI Token 用量、费用、余额与订阅额度监控工具。","applicationCategory":"UtilitiesApplication","operatingSystem":["Windows 10","Windows 11"],"softwareVersion":"1.14.2","downloadUrl":"https://github.com/zensoku142/TokenMeter/releases/latest","sameAs":"https://github.com/zensoku142/TokenMeter","license":"https://github.com/zensoku142/TokenMeter/blob/master/LICENSE","isAccessibleForFree":true,"image":"https://zensoku142.github.io/TokenMeter/assets/social-preview.webp","screenshot":["https://zensoku142.github.io/TokenMeter/assets/panel-light.png","https://zensoku142.github.io/TokenMeter/assets/panel-deepseek.png"],"inLanguage":["zh-CN","zh-TW","en","ja","ko"]}</script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content" data-i18n="skip_link">跳到主要内容</a>
+    <header class="site-header" data-header>
+      <div class="container header-inner">
+        <a class="brand" href="./" aria-label="TokenMeter 首页" data-i18n-aria="home_aria"><img src="./assets/app-icon.png" alt="" width="40" height="40"><span>TokenMeter</span></a>
+        <button class="menu-button" type="button" aria-expanded="false" aria-controls="site-navigation" data-menu-button><span data-i18n="menu">菜单</span><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 8h14M5 16h14"/></svg></button>
+        <nav class="site-nav" id="site-navigation" aria-label="主要导航" data-site-nav data-i18n-aria="nav_aria">
+          <a href="#product" data-nav-link data-i18n="nav_product">产品功能</a><a href="#privacy" data-nav-link data-i18n="nav_privacy">隐私与安全</a><a href="#download" data-nav-link data-i18n="action_download_short">下载</a><a href="https://github.com/zensoku142/TokenMeter">GitHub</a>
+          <a class="nav-download" href="https://github.com/zensoku142/TokenMeter/releases/latest"><span data-i18n="action_download">下载 Windows 版</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg></a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="hero" aria-labelledby="hero-title" data-section="hero">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow hero-enter" style="--enter-order:0" data-i18n="hero_eyebrow">Windows 10 / 11 · 开源 · 本地存储</p>
+            <h1 class="hero-enter" style="--enter-order:1" id="hero-title" data-i18n-html="hero_title">一眼掌握你的<br><span class="hero-highlight">AI 用量</span></h1>
+            <p class="hero-lead hero-enter" style="--enter-order:2" data-i18n="hero_lead">统一查看订阅额度、Token 消耗、费用与账户余额，让每一次 AI 使用都清晰可见。</p>
+            <div class="hero-actions hero-enter" style="--enter-order:3">
+              <a class="button button-primary" href="https://github.com/zensoku142/TokenMeter/releases/latest"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg><span data-i18n="action_download">下载 Windows 版</span></a>
+              <a class="button button-secondary" href="https://github.com/zensoku142/TokenMeter"><span data-i18n="action_github">查看 GitHub</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
+            </div>
+            <ul class="hero-facts hero-enter" style="--enter-order:4" aria-label="产品信息" data-i18n-aria="product_info_aria">
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span data-i18n="fact_windows">Windows 10 / 11</span></li>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span data-i18n="open_label">自有代码 MIT</span></li>
+              <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span data-i18n="benefit_5_title">数据留在本机</span></li>
+            </ul>
+            <div class="provider-row hero-enter" style="--enter-order:5"><span class="provider-label" data-i18n="providers_intro">支持平台</span><ul class="hero-providers" aria-label="支持的平台" data-i18n-aria="providers_aria"><li><span class="provider-mark" aria-hidden="true">C</span>Codex</li><li><span class="provider-mark" aria-hidden="true">C</span>Cursor</li><li><span class="provider-mark" aria-hidden="true">D</span>DeepSeek</li><li><span class="provider-mark" aria-hidden="true">M</span>MiMo</li><li><span class="provider-mark" aria-hidden="true">N</span>NayutoAI</li></ul></div>
+          </div>
+          <div class="hero-visual hero-enter" style="--enter-order:5" aria-label="TokenMeter 产品界面组合展示">
+            <div class="visual-glow" aria-hidden="true"></div>
+            <figure class="hero-panel"><img src="./assets/panel-light.png" alt="TokenMeter 的 Codex 额度、近七天 Token 和年度活动面板" data-i18n-alt="quota_image_alt" width="1640" height="992" fetchpriority="high"></figure>
+            <img class="hero-ball" src="./assets/ball-light.png" alt="显示剩余 65% 额度的 TokenMeter 悬浮球" data-i18n-alt="ball_quota_alt" width="248" height="248">
+            <div class="hero-provider-stack" aria-hidden="true"><span>Codex</span><span>Cursor</span><span>DeepSeek</span><span>MiMo</span><span>NayutoAI</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section product-section" id="product" aria-labelledby="product-title" data-reveal data-section="product">
+        <div class="container">
+          <div class="section-heading product-heading"><div><h2 id="product-title" data-i18n="screenshots_title">从额度到费用，都在同一个面板。</h2></div><p data-i18n="screenshots_intro">订阅平台显示已用、剩余与重置时间；API 平台显示 Token 构成、费用、余额与趋势。</p></div>
+          <div class="product-showcase" data-product-showcase>
+            <div class="product-tabs" role="tablist" aria-label="产品演示切换" data-i18n-aria="demo_tabs_aria">
+              <button type="button" role="tab" id="tab-quota" aria-selected="true" aria-controls="panel-quota" tabindex="0" data-demo-tab="quota" data-i18n="benefit_1_title">订阅额度</button>
+              <button type="button" role="tab" id="tab-analytics" aria-selected="false" aria-controls="panel-analytics" tabindex="-1" data-demo-tab="analytics" data-i18n="demo_tab_analytics">Token 与费用</button>
+              <button type="button" role="tab" id="tab-floating" aria-selected="false" aria-controls="panel-floating" tabindex="-1" data-demo-tab="floating" data-i18n="demo_tab_floating">悬浮球</button>
+              <button type="button" role="tab" id="tab-theme" aria-selected="false" aria-controls="panel-theme" tabindex="-1" data-demo-tab="theme" data-i18n="theme_label">主题外观</button>
+            </div>
+            <div class="product-panels">
+              <article class="product-panel is-active" role="tabpanel" id="panel-quota" aria-labelledby="tab-quota" data-demo-panel="quota">
+                <div class="product-panel-copy"><p class="section-label">Codex / Cursor</p><h3 data-i18n="benefit_1_title">订阅额度一眼可见</h3><p data-i18n="benefit_1_desc">查看已用和剩余额度、重置时间，以及近期 Token 与活动趋势。</p><ul class="feature-points"><li><span></span><span data-i18n="benefit_1_desc">已用、剩余比例与重置时间</span></li><li><span></span><span data-i18n="benefit_4_desc">近七天 Token 与历史统计</span></li><li><span></span><span data-i18n="analytics_point_3">离线时恢复最后成功数据</span></li></ul><div class="inline-metrics" aria-label="演示数据" data-i18n-aria="demo_metrics_aria"><span><small data-i18n="demo_quota_label">剩余额度</small><strong><span data-counter="65">0</span>%</strong></span><span><small data-i18n="fact_version">主程序版本</small><strong>v1.14.2</strong></span></div></div>
+                <figure class="product-panel-visual surface-light"><a href="./assets/panel-light.png" aria-label="查看 Codex 额度面板原图" data-i18n-aria="quota_image_link_aria"><img src="./assets/panel-light.png" alt="TokenMeter 浅色主题下的 Codex 额度、近七天 Token 和年度活动面板" data-i18n-alt="quota_image_alt" width="1640" height="992" loading="lazy" decoding="async"></a><div class="visual-caption"><span>Codex</span><span data-i18n="screenshot_caption">真实界面 · 演示数据</span></div></figure>
+              </article>
+              <article class="product-panel" role="tabpanel" id="panel-analytics" aria-labelledby="tab-analytics" data-demo-panel="analytics" hidden>
+                <div class="product-panel-copy"><p class="section-label">DeepSeek / MiMo / NayutoAI</p><h3 data-i18n="analytics_title">看见每个时段的消耗。</h3><p data-i18n="analytics_desc">查看 Token 输入与输出、今日分时趋势、使用费用、账户余额和历史变化。</p><ul class="feature-points"><li><span></span><span data-i18n="analytics_point_1">Token 构成与分时变化</span></li><li><span></span><span data-i18n="analytics_point_2">费用、余额与历史统计</span></li><li><span></span><span data-i18n="analytics_point_3">断网时恢复最后成功数据</span></li></ul><div class="inline-metrics" aria-label="演示数据" data-i18n-aria="demo_metrics_aria"><span><small data-i18n="demo_cost_label">今日费用</small><strong>¥<span data-counter="18.42" data-decimals="2">0</span></strong></span><span><small data-i18n="demo_balance_label">账户余额</small><strong>¥<span data-counter="286.70" data-decimals="2">0</span></strong></span></div></div>
+                <figure class="product-panel-visual surface-dark"><a href="./assets/panel-deepseek.png" aria-label="查看 DeepSeek 用量面板原图" data-i18n-aria="analytics_image_link_aria"><img src="./assets/panel-deepseek.png" alt="TokenMeter 的 DeepSeek Token、费用、余额与今日分时面板" data-i18n-alt="analytics_image_alt" width="1640" height="1100" loading="lazy" decoding="async"></a><div class="visual-caption"><span>DeepSeek</span><span data-i18n="screenshot_caption">真实界面 · 演示数据</span></div></figure>
+              </article>
+              <article class="product-panel" role="tabpanel" id="panel-floating" aria-labelledby="tab-floating" data-demo-panel="floating" hidden>
+                <div class="product-panel-copy"><p class="section-label" data-i18n="floating_label">Always on your desktop</p><h3 data-i18n="floating_title">信息常驻，工作不被打断。</h3><p data-i18n="floating_desc">悬浮球始终显示剩余额度、今日费用或余额，需要详情时再展开完整面板。</p><ul class="feature-points"><li><span></span><span data-i18n="floating_point_1">额度水位或余额显示</span></li><li><span></span><span data-i18n="floating_point_2">拖动、缩放、贴边隐藏与托盘常驻</span></li><li><span></span><span data-i18n="benefit_3_desc">无需打开完整面板</span></li></ul></div>
+                <figure class="product-panel-visual floating-visual"><div class="desktop-backdrop" aria-hidden="true"><span></span><span></span><span></span><div class="desktop-window"><i></i><i></i><i></i><i></i></div></div><img class="floating-ball ball-one" src="./assets/ball-light.png" alt="显示剩余 65% 额度的浅色 TokenMeter 悬浮球" data-i18n-alt="ball_quota_alt" width="248" height="248" loading="lazy" decoding="async"><img class="floating-ball ball-two" src="./assets/ball-deepseek.png" alt="显示今日费用和余额的 TokenMeter 悬浮球" data-i18n-alt="ball_balance_alt" width="248" height="248" loading="lazy" decoding="async"><div class="floating-status"><span></span><strong>TokenMeter</strong><small data-i18n="floating_point_2">已在系统托盘运行</small></div></figure>
+              </article>
+              <article class="product-panel" role="tabpanel" id="panel-theme" aria-labelledby="tab-theme" data-demo-panel="theme" hidden>
+                <div class="product-panel-copy"><p class="section-label" data-i18n="theme_demo_label">按你的方式</p><h3 data-i18n="benefit_6_title">浅色、深色，都保持清晰。</h3><p data-i18n="benefit_6_desc">支持浅色与深色主题、品牌蓝主题色、透明度和五种界面语言。</p><ul class="feature-points"><li><span></span><span data-i18n="theme_light">浅色主题</span> / <span data-i18n="theme_dark">深色主题</span></li><li><span></span><span data-i18n="lightweight_languages">5 种界面语言</span></li><li><span></span><span data-i18n="floating_point_3">主题色、透明度与外观设置</span></li></ul></div>
+                <figure class="product-panel-visual theme-visual"><img class="theme-panel-light" src="./assets/panel-light.png" alt="TokenMeter 浅色主题面板" width="1640" height="992" loading="lazy" decoding="async"><img class="theme-panel-dark" src="./assets/panel-dark.png" alt="TokenMeter 深色主题面板" width="1640" height="992" loading="lazy" decoding="async"><div class="theme-toggle-demo" aria-hidden="true"><span></span><b></b></div></figure>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section advantages-section" id="advantages" aria-labelledby="advantages-title" data-reveal data-section="advantages">
+        <div class="container">
+          <div class="section-heading centered-heading"><p class="section-label" data-i18n="features_label">为什么使用 TokenMeter</p><h2 id="advantages-title" data-i18n="features_title">少开几个后台，多留一点专注。</h2><p data-i18n="features_intro">不用在多个 AI 平台之间反复切换。需要的数据以一致的方式留在桌面上。</p></div>
+          <div class="advantage-grid">
+            <article class="advantage-card advantage-primary" data-reveal><div class="advantage-copy"><span class="number-label">01</span><h3 data-i18n="advantage_multi_title">多平台统一监控</h3><p data-i18n="advantage_multi_desc">一个应用查看多个 AI 平台，额度与用量采用一致的阅读方式。</p><ul class="compact-tags"><li>Codex</li><li>Cursor</li><li>DeepSeek</li><li>MiMo</li><li>NayutoAI</li></ul></div><figure class="advantage-image"><img src="./assets/panel-deepseek.png" alt="TokenMeter 多平台用量面板" width="1640" height="1100" loading="lazy" decoding="async"></figure></article>
+            <article class="advantage-card security-card" id="privacy" data-reveal><div class="security-visual" aria-hidden="true"><svg viewBox="0 0 72 72"><path d="M36 7 60 17v18c0 15-10 25-24 31C22 60 12 50 12 35V17L36 7Z"/><path d="m25 36 7 7 15-16"/></svg><div><span data-i18n="privacy_2_title">Windows 凭据管理器</span><strong>API Key · Token · Cookie</strong></div></div><div class="advantage-copy"><span class="number-label">02</span><h3 data-i18n="advantage_security_title">凭据本地安全保存</h3><p data-i18n="advantage_security_desc">由 TokenMeter 管理的凭据存入 Windows 凭据管理器，不直接写入普通配置文件或应用日志。</p><span class="status-pill"><i></i><span data-i18n="privacy_1_title">历史数据本地保存</span></span></div></article>
+            <article class="advantage-card tray-card" data-reveal><div class="tray-visual"><img src="./assets/ball-light.png" alt="TokenMeter 悬浮球" width="248" height="248" loading="lazy" decoding="async"><div aria-hidden="true"><span></span><span></span><span class="tray-active"></span><span></span></div></div><div class="advantage-copy"><span class="number-label">03</span><h3 data-i18n="advantage_tray_title">悬浮球与系统托盘</h3><p data-i18n="advantage_tray_desc">不打开完整面板，也能快速查看额度或余额；贴边后尽量不打扰当前工作。</p></div></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section personalization-section" id="personalization" aria-labelledby="personalization-title" data-reveal data-section="personalization">
+        <div class="container personalization-shell"><div class="pet-stage" aria-label="TokenMeter 可选 VPet 桌宠展示" data-i18n-aria="pet_stage_aria"><div class="pet-screen" aria-hidden="true"><span></span><span></span><span></span></div><img class="pet-main" src="./assets/pet-floating-transparent.png" alt="显示额度气泡的 TokenMeter VPet 桌宠" data-i18n-alt="pet_floating_alt" width="244" height="286" loading="lazy" decoding="async"><img class="pet-docked" src="./assets/pet-docked-transparent.png" alt="贴边状态下的 TokenMeter VPet 桌宠与额度气泡" data-i18n-alt="pet_docked_alt" width="192" height="378" loading="lazy" decoding="async"><div class="pet-theme-card"><span data-i18n="theme_label">主题</span><div><i></i><i></i><i></i></div></div></div><div class="personalization-copy"><p class="section-label" data-i18n="pet_label">可选扩展与个性化</p><h2 id="personalization-title" data-i18n="pet_title">想要一点个性？换成桌宠。</h2><p data-i18n="pet_desc">VPet 是可选扩展，可以替代悬浮球显示额度气泡；关闭或卸载后恢复悬浮球，不影响账户、用量和主面板。</p><ul class="personalization-tags"><li data-i18n="theme_light">浅色主题</li><li data-i18n="theme_dark">深色主题</li><li data-i18n="theme_label">品牌蓝主题色</li><li data-i18n="lightweight_languages">5 种界面语言</li><li data-i18n="floating_point_3">透明度与外观</li></ul><p class="license-note"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.01"/></svg><span data-i18n="pet_note_before">桌宠只接收展示字段，不接收账户凭据。角色与动画来自</span> <a href="https://github.com/LorisYounger/VPet">LorisYounger/VPet</a><span data-i18n="pet_note_after">，适用单独授权。</span></p></div></div>
+      </section>
+
+      <section class="section download-section" id="download" aria-labelledby="download-title" data-reveal data-section="download">
+        <div class="container download-shell"><div class="download-copy"><img src="./assets/app-icon.png" alt="" width="68" height="68"><p class="section-label" data-i18n="install_label">开始使用</p><h2 id="download-title" data-i18n="download_title_compact">把 AI 用量放到桌面。</h2><p data-i18n="download_desc">下载 Windows x64 安装包，选择平台，然后点击悬浮球查看额度、Token、费用与余额。</p><div class="hero-actions"><a class="button button-primary button-light" href="https://github.com/zensoku142/TokenMeter/releases/latest"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg><span data-i18n="action_download">下载 Windows 版</span></a><a class="button button-ghost" href="https://github.com/zensoku142/TokenMeter/releases"><span>GitHub Releases</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a></div></div><div class="download-meta" aria-label="下载信息"><div><span data-i18n="fact_version">当前版本</span><strong>v1.14.2</strong></div><div><span data-i18n="fact_windows">系统要求</span><strong>Windows 10 / 11 x64</strong></div><div><span data-i18n="lightweight_license">开源许可</span><strong>MIT License</strong></div><div><span data-i18n="fact_sha">安装包校验</span><strong>SHA256SUMS.txt</strong></div></div></div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container footer-main"><div class="footer-brand"><a class="brand" href="./"><img src="./assets/app-icon.png" alt="" width="38" height="38"><span>TokenMeter</span></a><p data-i18n="footer_desc">Windows AI Token 用量与订阅额度监控工具。</p></div><nav aria-label="页脚导航" data-i18n-aria="footer_nav_aria"><a href="https://github.com/zensoku142/TokenMeter">GitHub</a><a href="https://github.com/zensoku142/TokenMeter/releases">Releases</a><a href="https://github.com/zensoku142/TokenMeter#readme" data-i18n="nav_docs">文档</a><a href="https://github.com/zensoku142/TokenMeter/issues">Issues</a><a href="https://github.com/zensoku142/TokenMeter/blob/master/LICENSE">License</a></nav><div class="footer-preferences"><label class="footer-select"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.7-.08-1.38-.23-2.03A7 7 0 0 1 12 3Z"/></svg><span class="visually-hidden" data-i18n="theme_label">主题</span><select data-theme-select aria-label="选择主题" data-i18n-aria="theme_aria"><option value="auto" data-i18n="theme_auto">跟随系统</option><option value="light" data-i18n="theme_light">浅色</option><option value="dark" data-i18n="theme_dark">深色</option></select></label><label class="footer-select"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18"/></svg><span class="visually-hidden" data-i18n="language_label">语言</span><select data-language-select aria-label="选择语言" data-i18n-aria="language_aria"><option value="auto" data-i18n="language_auto">跟随系统</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select></label></div></div>
+      <div class="container footer-bottom"><span data-i18n="footer_copyright">© TokenMeter contributors</span><span data-i18n="footer_demo">产品截图使用演示数据</span></div>
+    </footer>
+  </body>
+</html>

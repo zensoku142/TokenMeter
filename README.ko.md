@@ -6,7 +6,7 @@
   <a href="./README.ko.md">한국어</a>
 </p>
 
-# TokenMeter
+# TokenMeter — Windows AI Token 사용량 및 구독 한도 모니터
 
 <p align="center">
   <a href="https://github.com/zensoku142/TokenMeter/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/zensoku142/TokenMeter?style=flat-square"></a>
@@ -32,7 +32,7 @@
 
 실제 컴포넌트 화면이며 중국어 UI와 데모 데이터를 사용했습니다. [원본 이미지와 출처](docs/images/readme/README.md).
 
-TokenMeter는 Codex, Cursor, DeepSeek, Xiaomi MiMo, NayutoAI를 지원하는 가벼운 Windows 데스크톱 AI 사용량 모니터입니다.
+TokenMeter는 Windows 10/11용 경량 AI Token 사용량 및 구독 한도 모니터입니다. Codex와 Cursor의 사용·잔여 한도와 초기화 시간뿐 아니라 DeepSeek, Xiaomi MiMo, NayutoAI의 Token 사용량, API 비용, 계정 잔액과 과거 추세를 확인할 수 있습니다.
 
 ## 기능
 
