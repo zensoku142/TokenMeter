@@ -199,6 +199,7 @@ def test_pet_release_builds_only_extension_and_cannot_replace_main_latest():
     assert "--stage onedir" not in workflow and "--stage installer" not in workflow
     assert "TokenMeter-Setup" not in workflow and "make_latest: false" in workflow
     assert "pet_host/extension.json" in workflow and "release-notes/" in workflow
+    assert "dist-pet/TokenMeter-Pet-Host-v*-x64.zip" in workflow
     assert "dist-pet/extension.json" in workflow and "dist-pet/SHA256SUMS.txt" in workflow
 
 

@@ -62,5 +62,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist-pet/TokenMeter-Pet-v*-x64.zip
+            dist-pet/TokenMeter-Pet-Host-v*-x64.zip
             dist-pet/extension.json
             dist-pet/SHA256SUMS.txt

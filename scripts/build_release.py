@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 from core.identity import (
     APP_VERSION,
     MAIN_EXECUTABLE_NAME,
+    PET_HOST_RELEASE_ASSET_TEMPLATE,
     PET_RELEASE_ASSET_TEMPLATE,
     UPDATER_EXECUTABLE_NAME,
 )
@@ -37,6 +38,8 @@ INSTALLER_PATH = INSTALLER_OUTPUT_DIR / f"TokenMeter-Setup-v{APP_VERSION}-x64.ex
 # 桌宠版本只来自自己的清单，普通主程序发版不会重新编号或构建扩展。
 PET_MANIFEST = json.loads((ROOT / "pet_host" / PACK_MANIFEST).read_text(encoding="utf-8"))
 PET_PACK_PATH = ROOT / "dist-pet" / PET_RELEASE_ASSET_TEMPLATE.format(version=PET_MANIFEST["version"])
+PET_HOST_PACK_PATH = ROOT / "dist-pet" / PET_HOST_RELEASE_ASSET_TEMPLATE.format(version=PET_MANIFEST["version"])
+PET_RESOURCES_MANIFEST = "resources-manifest.json"
 SHA_FILE = INSTALLER_OUTPUT_DIR / "SHA256SUMS.txt"
 LEGACY_SHA_FILE = DIST_DIR / "SHA256SUMS.txt"
 
@@ -112,27 +115,70 @@ def build_onedir(*, with_vpet: bool = False) -> None:
         build_pet_pack()
 
 
-def package_pet_payload(source: Path) -> Path:
-    validate_payload(source)
+def _pet_manifest(source: Path) -> dict:
     manifest = validate_pet_manifest(PET_MANIFEST)
-    if not (source / "coreclr.dll").is_file():
-        raise ValueError("Release pet packs must include the .NET runtime")
-    PET_PACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = PET_PACK_PATH.with_suffix(".zip.tmp")
+    resource_manifest = json.loads((source / PET_RESOURCES_MANIFEST).read_text(encoding="utf-8"))
+    resources = source / "resources"
+    files = [path for path in resources.rglob("*") if path.is_file()]
+    resource_hash = hashlib.sha256()
+    for path in sorted(files, key=lambda item: item.relative_to(resources).as_posix()):
+        # 路径参与摘要，避免同样内容被移动到另一动画槽位后仍误判为可复用资源。
+        resource_hash.update(path.relative_to(resources).as_posix().encode("utf-8"))
+        resource_hash.update(b"\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                resource_hash.update(chunk)
+    expected = {
+        "revision": resource_manifest.get("revision"),
+        "files": resource_manifest.get("resource_files"),
+        "bytes": resource_manifest.get("resource_bytes"),
+        "sha256": resource_hash.hexdigest(),
+    }
+    actual = {
+        "revision": expected["revision"],
+        "files": len(files),
+        "bytes": sum(path.stat().st_size for path in files),
+        "sha256": expected["sha256"],
+    }
+    if (not isinstance(expected["revision"], str)
+            or len(expected["revision"]) != 40
+            or any(character not in "0123456789abcdef" for character in expected["revision"])
+            or type(expected["files"]) is not int or type(expected["bytes"]) is not int
+            or actual != expected):
+        raise ValueError("Pet resources manifest does not match the packaged resources")
+    return {**manifest, "resources": expected}
+
+
+def _write_pet_archive(source: Path, destination: Path, manifest: dict, *, include_resources: bool) -> None:
+    temporary = destination.with_suffix(".zip.tmp")
     try:
         with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as pack:
             for path in sorted(source.rglob("*")):
-                if path.is_file() and path.name != PACK_MANIFEST:
-                    pack.write(path, path.relative_to(source).as_posix())
+                relative = path.relative_to(source)
+                if (path.is_file() and path.name != PACK_MANIFEST
+                        and (include_resources or relative.parts[0] != "resources")):
+                    pack.write(path, relative.as_posix())
             pack.writestr(PACK_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
-        temporary.replace(PET_PACK_PATH)
+        temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def package_pet_payload(source: Path) -> Path:
+    validate_payload(source)
+    manifest = _pet_manifest(source)
+    if not (source / "coreclr.dll").is_file():
+        raise ValueError("Release pet packs must include the .NET runtime")
+    PET_PACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _write_pet_archive(source, PET_PACK_PATH, manifest, include_resources=True)
+    # 旧客户端继续下载完整包；新版客户端确认本地资源版本一致后只下载宿主小包。
+    _write_pet_archive(source, PET_HOST_PACK_PATH, manifest, include_resources=False)
     manifest_path = PET_PACK_PATH.parent / PACK_MANIFEST
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     # 桌宠发布不依赖主安装器，清单也参与校验以支持小流量检查兼容版本。
     (PET_PACK_PATH.parent / "SHA256SUMS.txt").write_text(
-        "".join(f"{_sha256(path)} *{path.name}\n" for path in (PET_PACK_PATH, manifest_path)),
+        "".join(f"{_sha256(path)} *{path.name}\n"
+                for path in (PET_PACK_PATH, PET_HOST_PACK_PATH, manifest_path)),
         encoding="utf-8",
     )
     return PET_PACK_PATH

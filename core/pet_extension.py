@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import stat
@@ -21,6 +22,7 @@ from updater.client import (
 PET_EXECUTABLE = "TokenMeter.Pet.exe"
 PACK_MANIFEST = PET_MANIFEST_ASSET_NAME
 PACK_PROTOCOL = PET_PROTOCOL
+RESOURCES_MANIFEST = "resources-manifest.json"
 REQUIRED_FILES = (
     PET_EXECUTABLE, "TokenMeter.Pet.dll", "TokenMeter.Pet.deps.json",
     "TokenMeter.Pet.runtimeconfig.json", "VPet-Simulator.Core.dll",
@@ -107,9 +109,43 @@ def _check_cancel(cancel_requested: Callable[[], bool]) -> None:
         raise DownloadCancelled("已取消下载")
 
 
+def reusable_resources(directory: Path, manifest: dict) -> bool:
+    expected = manifest.get("resources")
+    if not isinstance(expected, dict):
+        return False
+    try:
+        report = json.loads((directory / RESOURCES_MANIFEST).read_text(encoding="utf-8"))
+        resources = directory / "resources"
+        if not resources.is_dir() or resources.is_symlink() or resources.is_junction():
+            return False
+        files = []
+        for path in resources.rglob("*"):
+            if path.is_symlink() or path.is_junction():
+                return False
+            if path.is_file():
+                files.append(path)
+        resource_hash = hashlib.sha256()
+        for path in sorted(files, key=lambda item: item.relative_to(resources).as_posix()):
+            resource_hash.update(path.relative_to(resources).as_posix().encode("utf-8"))
+            resource_hash.update(b"\0")
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    resource_hash.update(chunk)
+        return (
+            report.get("revision") == expected.get("revision")
+            and report.get("resource_files") == expected.get("files") == len(files)
+            and report.get("resource_bytes") == expected.get("bytes")
+            == sum(path.stat().st_size for path in files)
+            and resource_hash.hexdigest() == expected.get("sha256")
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def install_pack(
     archive: Path, destination: Path, cancel_requested: Callable[[], bool] = lambda: False,
     *, replace_existing: bool = False, expected_manifest: dict | None = None,
+    reuse_resources_from: Path | None = None,
 ) -> None:
     destination = _checked_directory(destination)
     _recover_interrupted_update(destination)
@@ -153,6 +189,15 @@ def install_pack(
         validate_pet_manifest(manifest, APP_VERSION)
         if expected_manifest is not None and manifest != expected_manifest:
             raise ValueError("桌宠扩展包与已校验的版本清单不一致")
+        if reuse_resources_from is not None:
+            # 宿主小包绝不能夹带资源覆盖本地副本；资源身份和实际文件总量一致后才复用。
+            if (stage / "resources").exists() or not reusable_resources(reuse_resources_from, manifest):
+                raise ValueError("本地桌宠动画资源与宿主更新包不兼容")
+            def copy_resource(source: str, target: str) -> str:
+                _check_cancel(cancel_requested)
+                return shutil.copy2(source, target)
+            shutil.copytree(reuse_resources_from / "resources", stage / "resources",
+                            copy_function=copy_resource)
         validate_payload(stage)
         _check_cancel(cancel_requested)
         if not destination.exists():
@@ -195,11 +240,17 @@ def download_and_install(
         client = GitHubReleaseClient()
         try:
             release = release or client.latest_pet_release(cancel_requested=cancel_requested)
+            reuse_resources = (
+                replace_existing and release.host_asset is not None
+                and reusable_resources(destination, release.manifest)
+            )
             archive = client.download_pet_pack(
-                Path(temporary), release=release, progress=progress, cancel_requested=cancel_requested,
+                Path(temporary), release=release, progress=progress,
+                cancel_requested=cancel_requested, host_only=reuse_resources,
             )
             install_pack(archive, destination, cancel_requested,
-                         replace_existing=replace_existing, expected_manifest=release.manifest)
+                         replace_existing=replace_existing, expected_manifest=release.manifest,
+                         reuse_resources_from=destination if reuse_resources else None)
         finally:
             client._session.close()
 

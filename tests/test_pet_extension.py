@@ -11,13 +11,21 @@ import pytest
 
 from core import pet_extension as pet
 from core.identity import (
-    APP_VERSION, GITHUB_RELEASES_API_URL, PET_RELEASE_ASSET_TEMPLATE, PET_RELEASE_TAG_PREFIX,
+    APP_VERSION, GITHUB_RELEASES_API_URL, PET_HOST_RELEASE_ASSET_TEMPLATE,
+    PET_RELEASE_ASSET_TEMPLATE, PET_RELEASE_TAG_PREFIX,
 )
 from scripts import build_release
 from updater.client import (
     DownloadCancelled, GitHubReleaseClient, PetReleaseInfo, ReleaseAsset, UpdateError,
     validate_pet_manifest,
 )
+
+_resource_digest = hashlib.sha256()
+for _resource_name in sorted(("pet/vup.lps", "pet/vup/Default/1.png")):
+    _resource_digest.update(_resource_name.encode())
+    _resource_digest.update(b"\0")
+    _resource_digest.update(b"test payload")
+TEST_RESOURCE_SHA = _resource_digest.hexdigest()
 
 
 def payload(directory):
@@ -27,6 +35,12 @@ def payload(directory):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"test payload")
     (directory / pet.PACK_MANIFEST).write_text(json.dumps(build_release.PET_MANIFEST))
+    resources = [path for path in (directory / "resources").rglob("*") if path.is_file()]
+    (directory / pet.RESOURCES_MANIFEST).write_text(json.dumps({
+        "revision": "a" * 40,
+        "resource_files": len(resources),
+        "resource_bytes": sum(path.stat().st_size for path in resources),
+    }))
     return directory
 
 
@@ -34,6 +48,7 @@ def payload(directory):
 def pack(tmp_path, monkeypatch):
     source = payload(tmp_path / "source")
     monkeypatch.setattr(build_release, "PET_PACK_PATH", tmp_path / "pet.zip")
+    monkeypatch.setattr(build_release, "PET_HOST_PACK_PATH", tmp_path / "pet-host.zip")
     return build_release.package_pet_payload(source)
 
 
@@ -66,6 +81,7 @@ def test_release_pack_requires_bundled_runtime(tmp_path, monkeypatch):
     source = payload(tmp_path / "source")
     (source / "coreclr.dll").unlink()
     monkeypatch.setattr(build_release, "PET_PACK_PATH", tmp_path / "pet.zip")
+    monkeypatch.setattr(build_release, "PET_HOST_PACK_PATH", tmp_path / "pet-host.zip")
     with pytest.raises(ValueError, match="runtime"):
         build_release.package_pet_payload(source)
 
@@ -170,19 +186,24 @@ def test_uninstall_refuses_redirected_directory(tmp_path, monkeypatch):
     assert (target / pet.PET_EXECUTABLE).exists()
 
 
-def release_payload(version=build_release.PET_MANIFEST["version"]):
+def release_payload(version=build_release.PET_MANIFEST["version"], *, with_host=False):
     name = PET_RELEASE_ASSET_TEMPLATE.format(version=version)
+    host_name = PET_HOST_RELEASE_ASSET_TEMPLATE.format(version=version)
     tag = PET_RELEASE_TAG_PREFIX + version
     return {"tag_name": tag, "assets": [
         {"name": filename, "size": 50, "browser_download_url":
          f"https://github.com/zensoku142/TokenMeter/releases/download/{tag}/{filename}"}
-        for filename in (name, pet.PACK_MANIFEST, "SHA256SUMS.txt")
+        for filename in ((name, host_name, pet.PACK_MANIFEST, "SHA256SUMS.txt")
+                         if with_host else (name, pet.PACK_MANIFEST, "SHA256SUMS.txt"))
     ]}
 
 
 def release_info(version=build_release.PET_MANIFEST["version"], **manifest):
     asset = release_payload(version)["assets"][0]
-    return PetReleaseInfo(version, dict(build_release.PET_MANIFEST, version=version, **manifest),
+    resources = {"revision": "a" * 40, "files": 2, "bytes": 24,
+                 "sha256": TEST_RESOURCE_SHA}
+    return PetReleaseInfo(version, dict(build_release.PET_MANIFEST, version=version,
+                                        resources=resources, **manifest),
                           ReleaseAsset(asset["name"], asset["browser_download_url"], asset["size"]),
                           "a" * 64)
 
@@ -201,6 +222,57 @@ def test_pet_download_uses_independent_release_and_verified_asset(tmp_path):
     metadata.assert_called_once_with(f"{GITHUB_RELEASES_API_URL}?per_page=100&page=1")
     assert download.call_args.kwargs["expected_sha"] == "a" * 64
     assert download.call_args.args[0].name == name
+
+
+def test_pet_release_exposes_verified_host_pack_when_resources_are_identified():
+    client = GitHubReleaseClient()
+    data = release_payload(with_host=True)
+    full_name, host_name = (asset["name"] for asset in data["assets"][:2])
+    manifest = {**build_release.PET_MANIFEST, "resources": {
+        "revision": "a" * 40, "files": 2, "bytes": 24, "sha256": TEST_RESOURCE_SHA,
+    }}
+    with (
+        patch.object(client, "_request_json", return_value=[data]),
+        patch.object(client, "_load_checksums", return_value={
+            full_name.lower(): "a" * 64, host_name.lower(): "b" * 64,
+            pet.PACK_MANIFEST: "c" * 64,
+        }),
+        patch.object(client, "_load_pet_manifest", return_value=manifest),
+    ):
+        release = client.latest_pet_release()
+    assert release.host_asset is not None and release.host_asset.name == host_name
+    assert release.host_sha256 == "b" * 64
+
+
+def test_pet_download_selects_host_asset_when_requested(tmp_path):
+    client = GitHubReleaseClient()
+    full = ReleaseAsset("full.zip", "https://example.com/full.zip", 500)
+    host = ReleaseAsset("host.zip", "https://example.com/host.zip", 80)
+    release = PetReleaseInfo("1.0.0", {}, full, "a" * 64, host, "b" * 64)
+    with patch.object(client, "_download_asset") as download:
+        result = client.download_pet_pack(tmp_path, release=release, host_only=True)
+    assert result == tmp_path / "host.zip"
+    assert download.call_args.args[:2] == (host, result)
+    assert download.call_args.kwargs["expected_sha"] == "b" * 64
+    assert download.call_args.kwargs["bytes_total"] == 80
+
+
+def test_unverified_host_pack_falls_back_to_full_release():
+    client = GitHubReleaseClient()
+    data = release_payload(with_host=True)
+    full_name = data["assets"][0]["name"]
+    manifest = {**build_release.PET_MANIFEST, "resources": {
+        "revision": "a" * 40, "files": 2, "bytes": 24, "sha256": TEST_RESOURCE_SHA,
+    }}
+    with (
+        patch.object(client, "_request_json", return_value=[data]),
+        patch.object(client, "_load_checksums", return_value={
+            full_name.lower(): "a" * 64, pet.PACK_MANIFEST: "c" * 64,
+        }),
+        patch.object(client, "_load_pet_manifest", return_value=manifest),
+    ):
+        release = client.latest_pet_release()
+    assert release.host_asset is None and release.host_sha256 is None
 
 
 @pytest.mark.parametrize("bad_hash", [False, True])
@@ -329,12 +401,26 @@ def test_invalid_manifest_cannot_be_installed(manifest):
 def test_pack_has_separate_version_and_verified_manifest_without_main_installer(pack):
     with zipfile.ZipFile(pack) as archive:
         manifest = json.loads(archive.read(pet.PACK_MANIFEST))
-    assert manifest == build_release.PET_MANIFEST
+    assert {key: manifest[key] for key in build_release.PET_MANIFEST} == build_release.PET_MANIFEST
+    assert manifest["resources"] == {
+        "revision": "a" * 40, "files": 2, "bytes": 24, "sha256": TEST_RESOURCE_SHA,
+    }
     assert "app_version" not in manifest
     assert json.loads((pack.parent / pet.PACK_MANIFEST).read_text()) == manifest
     checksums = (pack.parent / "SHA256SUMS.txt").read_text()
-    for path in (pack, pack.parent / pet.PACK_MANIFEST):
+    for path in (pack, pack.parent / "pet-host.zip", pack.parent / pet.PACK_MANIFEST):
         assert f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}" in checksums
+
+
+def test_host_pack_excludes_reusable_resources(pack):
+    host = pack.parent / "pet-host.zip"
+    with zipfile.ZipFile(host) as archive:
+        names = archive.namelist()
+        manifest = json.loads(archive.read(pet.PACK_MANIFEST))
+    assert not any(name.startswith("resources/") for name in names)
+    assert pet.RESOURCES_MANIFEST in names
+    assert manifest["resources"]["revision"] == "a" * 40
+    assert host.stat().st_size < pack.stat().st_size
 
 
 def test_update_replaces_only_extension_and_preserves_user_preferences(pack, tmp_path, monkeypatch):
@@ -346,11 +432,75 @@ def test_update_replaces_only_extension_and_preserves_user_preferences(pack, tmp
     preferences = tmp_path / "data/vpet/layout.json"
     preferences.parent.mkdir()
     preferences.write_text("unchanged")
-    pet.install_pack(pack, destination, replace_existing=True,
-                     expected_manifest=build_release.PET_MANIFEST)
+    expected = json.loads((pack.parent / pet.PACK_MANIFEST).read_text())
+    pet.install_pack(pack, destination, replace_existing=True, expected_manifest=expected)
     assert pet.installed_manifest()["version"] == build_release.PET_MANIFEST["version"]
     assert not marker.exists()
     assert preferences.read_text() == "unchanged"
+    assert not list(destination.parent.glob(".vpet-*"))
+
+
+def test_update_downloads_host_pack_and_reuses_matching_resources(pack, tmp_path, monkeypatch):
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path / "data")
+    destination = payload(pet.extension_directory())
+    resource = destination / "resources/pet/vup/Default/1.png"
+    original_resource = resource.read_bytes()
+    obsolete = destination / "obsolete-host.dll"
+    obsolete.write_bytes(b"remove")
+    manifest = json.loads((pack.parent / pet.PACK_MANIFEST).read_text())
+    host = pack.parent / "pet-host.zip"
+    release = PetReleaseInfo(
+        manifest["version"], manifest,
+        ReleaseAsset("full.zip", "https://example.com/full.zip", pack.stat().st_size), "a" * 64,
+        ReleaseAsset("host.zip", "https://example.com/host.zip", host.stat().st_size), "b" * 64,
+    )
+    with patch.object(GitHubReleaseClient, "download_pet_pack", return_value=host) as download:
+        pet.download_and_install(Mock(), lambda: False, release=release, replace_existing=True)
+    assert download.call_args.kwargs["host_only"] is True
+    assert resource.read_bytes() == original_resource
+    assert not obsolete.exists()
+    assert pet.installed_manifest()["version"] == manifest["version"]
+
+
+def test_update_falls_back_to_full_pack_when_local_resources_changed(pack, tmp_path, monkeypatch):
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path / "data")
+    destination = payload(pet.extension_directory())
+    (destination / "resources/pet/vup/Default/1.png").write_bytes(b"changed")
+    manifest = json.loads((pack.parent / pet.PACK_MANIFEST).read_text())
+    release = PetReleaseInfo(
+        manifest["version"], manifest,
+        ReleaseAsset("full.zip", "https://example.com/full.zip", pack.stat().st_size), "a" * 64,
+        ReleaseAsset("host.zip", "https://example.com/host.zip", 1), "b" * 64,
+    )
+    with patch.object(GitHubReleaseClient, "download_pet_pack", return_value=pack) as download:
+        pet.download_and_install(Mock(), lambda: False, release=release, replace_existing=True)
+    assert download.call_args.kwargs["host_only"] is False
+    assert pet.installed_manifest()["version"] == manifest["version"]
+
+
+@pytest.mark.parametrize("failure", ["copy", "embedded-resources"])
+def test_failed_host_update_keeps_complete_previous_payload(pack, tmp_path, failure):
+    destination = payload(tmp_path / "extensions/vpet")
+    executable = destination / pet.PET_EXECUTABLE
+    executable.write_bytes(b"old executable")
+    host = pack.parent / "pet-host.zip"
+    manifest = json.loads((pack.parent / pet.PACK_MANIFEST).read_text())
+    if failure == "embedded-resources":
+        with zipfile.ZipFile(host, "a") as archive:
+            archive.writestr("resources/unexpected.png", b"unexpected")
+        with pytest.raises(ValueError, match="夹带|不兼容"):
+            pet.install_pack(
+                host, destination, replace_existing=True, expected_manifest=manifest,
+                reuse_resources_from=destination,
+            )
+    else:
+        with (patch.object(pet.shutil, "copy2", side_effect=OSError("copy failed")),
+              pytest.raises(OSError, match="copy failed")):
+            pet.install_pack(
+                host, destination, replace_existing=True, expected_manifest=manifest,
+                reuse_resources_from=destination,
+            )
+    assert executable.read_bytes() == b"old executable"
     assert not list(destination.parent.glob(".vpet-*"))
 
 

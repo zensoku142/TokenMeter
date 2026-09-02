@@ -25,6 +25,7 @@ from core.identity import (
     GITHUB_RELEASES_API_URL,
     GITHUB_REPOSITORY,
     MAIN_EXECUTABLE_NAME,
+    PET_HOST_RELEASE_ASSET_TEMPLATE,
     PET_MANIFEST_ASSET_NAME,
     PET_PROTOCOL,
     PET_RELEASE_ASSET_TEMPLATE,
@@ -182,6 +183,8 @@ class PetReleaseInfo:
     manifest: dict
     asset: ReleaseAsset
     sha256: str
+    host_asset: ReleaseAsset | None = None
+    host_sha256: str | None = None
 
 
 def validate_pet_manifest(manifest: object, app_version: str = APP_VERSION) -> dict:
@@ -203,6 +206,17 @@ def validate_pet_manifest(manifest: object, app_version: str = APP_VERSION) -> d
     if maximum is not None and (not isinstance(maximum, str)
                                or compare_versions(app_version, maximum) >= 0):
         raise ValueError("桌宠扩展包与当前版本不兼容")
+    resources = manifest.get("resources")
+    if resources is not None and (
+        not isinstance(resources, dict)
+        or not isinstance(resources.get("revision"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", resources["revision"])
+        or type(resources.get("files")) is not int or resources["files"] <= 0
+        or type(resources.get("bytes")) is not int or resources["bytes"] <= 0
+        or not isinstance(resources.get("sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", resources["sha256"])
+    ):
+        raise ValueError("桌宠扩展资源清单无效")
     return dict(manifest)
 
 
@@ -445,14 +459,19 @@ class GitHubReleaseClient:
         release: PetReleaseInfo | None = None,
         progress: Callable[[dict[str, object]], None] | None = None,
         cancel_requested: Callable[[], bool] | None = None,
+        host_only: bool = False,
     ) -> Path:
         release = release or self.latest_pet_release(cancel_requested=cancel_requested)
         if cancel_requested and cancel_requested():
             raise DownloadCancelled("已取消下载")
-        destination = directory / release.asset.name
+        asset = release.host_asset if host_only else release.asset
+        expected_sha = release.host_sha256 if host_only else release.sha256
+        if asset is None or expected_sha is None:
+            raise UpdateError("当前桌宠版本未提供可复用资源的宿主更新包")
+        destination = directory / asset.name
         self._download_asset(
-            release.asset, destination, expected_sha=release.sha256,
-            bytes_before=0, bytes_total=release.asset.size,
+            asset, destination, expected_sha=expected_sha,
+            bytes_before=0, bytes_total=asset.size,
             progress=progress, cancel_requested=cancel_requested,
         )
         return destination
@@ -516,7 +535,17 @@ class GitHubReleaseClient:
                 continue
             if manifest["version"] != version.normalized():
                 raise UpdateError("桌宠版本清单与发布标签不一致")
-            return PetReleaseInfo(version.normalized(), manifest, by_name[name], checksums[name.lower()])
+            host_name = PET_HOST_RELEASE_ASSET_TEMPLATE.format(version=version.normalized())
+            host_asset = by_name.get(host_name)
+            host_sha = checksums.get(host_name.lower()) if host_asset is not None else None
+            # 宿主小包是可选优化；缺失、未校验或没有资源身份时继续兼容完整包。
+            if host_sha is None or not isinstance(manifest.get("resources"), dict):
+                host_asset = None
+                host_sha = None
+            return PetReleaseInfo(
+                version.normalized(), manifest, by_name[name], checksums[name.lower()],
+                host_asset, host_sha,
+            )
         raise UpdateError("尚未发布与当前主程序兼容的桌宠扩展包")
 
     def _load_pet_manifest(

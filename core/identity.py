@@ -15,6 +15,7 @@ UPDATER_EXECUTABLE_NAME = "TokenMeterUpdater.exe"
 SETUP_RELEASE_ASSET_TEMPLATE = "TokenMeter-Setup-v{version}-x64.exe"
 SHA256_RELEASE_ASSET_NAME = "SHA256SUMS.txt"
 PET_RELEASE_ASSET_TEMPLATE = "TokenMeter-Pet-v{version}-x64.zip"
+PET_HOST_RELEASE_ASSET_TEMPLATE = "TokenMeter-Pet-Host-v{version}-x64.zip"
 PET_RELEASE_TAG_PREFIX = "pet-v"
 PET_MANIFEST_ASSET_NAME = "extension.json"
 PET_PROTOCOL = 1
