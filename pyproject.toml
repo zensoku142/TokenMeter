@@ -10,7 +10,10 @@ include = [
     "api/providers/base.py",
     "api/providers/deepseek.py",
     "core/identity.py",
+    "core/pet_characters.py",
     "data/directory.py",
+    "scripts/build_vpet_character.py",
+    "scripts/build_vpet_rigged_pet.py",
     "updater/*.py",
 ]
 

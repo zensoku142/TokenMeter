@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "characters": [
+    {
+      "id": "blue-whale-maid",
+      "name": "蓝鲸女仆",
+      "version": "0.0.1",
+      "description": "蓝发鲸鱼女仆形象，覆盖当前桌宠的完整动作体系。",
+      "download_url": "https://github.com/zensoku142/TokenMeter/releases/download/pet-character-blue-whale-maid-v0.0.1/TokenMeter-Pet-Character-blue-whale-maid-v0.0.1.zip",
+      "sha256": "b2ffb3b544d01202e2da639270808320a69b3fdcbe97576aa9114a57f9d55947",
+      "size": 346417717
+    }
+  ]
+}

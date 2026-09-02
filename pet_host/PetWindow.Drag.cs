@@ -69,6 +69,7 @@ internal sealed partial class PetWindow
         petPointerDown = true;
         petDragging = false;
         CancelAutonomousSequence();
+        StopActionPanelPlayback(returnToDefault: false);
         FinishNotification(restorePosition: false);
         ResetCloudHover();
         petPressScreen = screenPoint;

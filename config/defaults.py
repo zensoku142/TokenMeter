@@ -47,6 +47,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "BACKGROUND_PROVIDER_IDS": [],
     "EDGE_HIDE_ENABLED": True,
     "VPET_ENABLED": False,
+    "VPET_CHARACTER": "builtin",
     "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": True,
     "AUTO_START_ENABLED": False,
     "UI_THEME": "dark",
@@ -79,6 +80,7 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "TEXT_COLOR": {"kind": "color"},
     "EDGE_HIDE_ENABLED": {"kind": "bool"},
     "VPET_ENABLED": {"kind": "bool"},
+    "VPET_CHARACTER": {"kind": "text"},
     "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": {"kind": "bool"},
     "AUTO_START_ENABLED": {"kind": "bool"},
     "BACKGROUND_PROVIDER_IDS": {

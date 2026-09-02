@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
+from core import pet_characters
 from core.pet_extension import installed_executable
 from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown
 
@@ -111,10 +112,16 @@ class VPetHost(QObject):
         self._reported_failure = False
         self._buffer = bytearray()
         self._latest_usage: dict | None = None
+        self._resources_directory: Path | None = None
 
     def start(self, data_directory: Path) -> None:
+        resources = pet_characters.selected_resources_directory()
+        resources = resources.resolve() if resources is not None else None
         if self.process.state() != QProcess.ProcessState.NotRunning:
-            return
+            if resources == self._resources_directory:
+                return
+            # 角色切换只重启本实例创建的宿主；窗口布局和其它桌宠偏好仍在原数据目录。
+            self.stop()
         self._reported_failure = self._stopping = False
         self._buffer.clear()
         executable = host_executable()
@@ -123,10 +130,12 @@ class VPetHost(QObject):
             return
         data_directory.mkdir(parents=True, exist_ok=True)
         self.process.setProgram(str(executable))
-        self.process.setArguments(
-            ["--data-dir", str(data_directory), "--parent-pid", str(os.getpid())]
-        )
+        arguments = ["--data-dir", str(data_directory), "--parent-pid", str(os.getpid())]
+        if resources is not None:
+            arguments.extend(["--resources-dir", str(resources)])
+        self.process.setArguments(arguments)
         self.process.setWorkingDirectory(str(executable.parent))
+        self._resources_directory = resources
         self._startup_timer.start()
         self.process.start()
 

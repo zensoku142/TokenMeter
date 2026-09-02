@@ -6,9 +6,12 @@
   "include": [
     "main.py",
     "config",
+    "core/pet_characters.py",
     "api/providers/base.py",
     "api/providers/deepseek.py",
     "api/deepseek.py",
-    "updater/client.py"
+    "updater/client.py",
+    "scripts/build_vpet_character.py",
+    "scripts/build_vpet_rigged_pet.py"
   ]
 }

@@ -15,11 +15,11 @@ VSVersionInfo(
         '040904B0',
         [
           StringStruct('FileDescription', 'TokenMeter standalone updater'),
-          StringStruct('FileVersion', '1.14.2'),
+          StringStruct('FileVersion', '1.15.0'),
           StringStruct('InternalName', 'TokenMeterUpdater'),
           StringStruct('OriginalFilename', 'TokenMeterUpdater.exe'),
           StringStruct('ProductName', 'TokenMeterUpdater'),
-          StringStruct('ProductVersion', '1.14.2')
+          StringStruct('ProductVersion', '1.15.0')
         ]
       )
     ]),

@@ -2,6 +2,8 @@
 
 本模块复用 VPet-Simulator.Core 和原版默认角色的鼠标互动、自主移动与待机动画。
 
+可选的 `blue-whale-maid` 人物包使用用户提供的角色形象；其中泡泡、爱心和球类动作道具由上述 VPet 默认动画提取，继续适用上游图片与动画授权。
+
 - 上游项目：https://github.com/LorisYounger/VPet
 - 核心源码导入版本与动画固定版本：`b6f7b00363529bafe3e7fc14bf51e17640941691`
 - 核心源码维护目录：`third_party/VPet/VPet-Simulator.Core/`，修改随 TokenMeter 仓库提交；下载缓存中的核心副本不参与编译。

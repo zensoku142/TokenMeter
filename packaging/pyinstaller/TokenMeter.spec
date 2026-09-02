@@ -8,7 +8,10 @@ a = Analysis(
     pathex=["../.."],
     binaries=[],
     # Qt loads the same ICO at runtime for the window, tray, and panel branding.
-    datas=[("../../assets/TokenMeter.ico", "assets")],
+    datas=[
+        ("../../assets/TokenMeter.ico", "assets"),
+        ("../../pet_host/characters/catalog.json", "assets/pet-characters.json"),
+    ],
     # pyqtgraph 0.14 启动时会动态导入这两个模块；显式保留可以避免
     # PyInstaller 静态分析遗漏后，发布版在冷启动阶段报缺模块。
     hiddenimports=["PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets"],

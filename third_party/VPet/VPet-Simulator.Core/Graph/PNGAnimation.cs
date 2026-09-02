@@ -4,6 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -94,7 +97,11 @@ namespace VPet_Simulator.Core
                 Picture.LoadGraph(graph, path, info);
                 return;
             }
-            var paths = p.GetFiles("*.png");
+            // DirectoryInfo 的枚举顺序未定义；固定按文件名排序，避免同一动画在不同启动中重排帧。
+            var paths = p.GetFiles("*.png")
+                .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(file => file.Name, StringComparer.Ordinal)
+                .ToArray();
             if (paths.Length == 0)
             {
                 return;
@@ -127,7 +134,7 @@ namespace VPet_Simulator.Core
             {
                 //新方法:加载大图片
                 //生成大文件加载非常慢,先看看有没有缓存能用
-                Path = System.IO.Path.Combine(GraphCore.CachePath, $"{GraphCore!.Resolution}_{Math.Abs(Sub.GetHashCode(path))}_{paths.Length}.png");
+                Path = System.IO.Path.Combine(GraphCore.CachePath, $"{GraphCore!.Resolution}_{GetSourceFingerprint(path, paths)}_{paths.Length}.png");
                 var sem = GraphCore.SpriteSheetBuildLocks.GetOrAdd(Path, _ => new SemaphoreSlim(1, 1));
                 await sem.WaitAsync();
                 try
@@ -234,6 +241,23 @@ namespace VPet_Simulator.Core
                 IsFail = true;
                 FailMessage = $"--PNGAnimation--{GraphInfo}--\nPath: {path}\n{e.Message}";
             }
+        }
+
+        private static string GetSourceFingerprint(string path, FileInfo[] paths)
+        {
+            var sourceIdentity = new StringBuilder(path);
+            foreach (var frame in paths)
+            {
+                // 不读取整套 PNG 内容，以免缓存命中时仍承担完整 I/O；名称、大小和高精度写入时间共同标识帧替换。
+                frame.Refresh();
+                sourceIdentity.Append('\n')
+                    .Append(frame.Name)
+                    .Append('\0')
+                    .Append(frame.Length)
+                    .Append('\0')
+                    .Append(frame.LastWriteTimeUtc.Ticks);
+            }
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sourceIdentity.ToString())));
         }
 
         /// <summary>

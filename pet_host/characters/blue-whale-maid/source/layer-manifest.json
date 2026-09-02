@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "canvas": {
+    "width": 500,
+    "height": 500
+  },
+  "neutral": {
+    "anchor_x": 250,
+    "baseline_y": 460,
+    "scale": 1
+  },
+  "layers": [
+    {
+      "id": "back_hair",
+      "path": "layers/back_hair.png",
+      "z": 0,
+      "placement": {
+        "x": -106,
+        "y": -360
+      },
+      "pivot": {
+        "x": 97.5,
+        "y": 55.68
+      }
+    },
+    {
+      "id": "tail",
+      "path": "layers/tail.png",
+      "z": 1,
+      "placement": {
+        "x": 20,
+        "y": -186
+      },
+      "pivot": {
+        "x": 21.24,
+        "y": 98.60000000000001
+      }
+    },
+    {
+      "id": "anatomical_right_leg",
+      "path": "layers/anatomical_right_leg.png",
+      "z": 2,
+      "placement": {
+        "x": -40,
+        "y": -149
+      },
+      "pivot": {
+        "x": 20.0,
+        "y": 7.6000000000000005
+      }
+    },
+    {
+      "id": "anatomical_left_leg",
+      "path": "layers/anatomical_left_leg.png",
+      "z": 3,
+      "placement": {
+        "x": -2,
+        "y": -149
+      },
+      "pivot": {
+        "x": 19.5,
+        "y": 7.5
+      }
+    },
+    {
+      "id": "anatomical_right_arm",
+      "path": "layers/anatomical_right_arm.png",
+      "z": 4,
+      "placement": {
+        "x": -77,
+        "y": -253
+      },
+      "pivot": {
+        "x": 37.72,
+        "y": 8.96
+      }
+    },
+    {
+      "id": "anatomical_left_arm",
+      "path": "layers/anatomical_left_arm.png",
+      "z": 5,
+      "placement": {
+        "x": 30,
+        "y": -253
+      },
+      "pivot": {
+        "x": 7.739999999999999,
+        "y": 9.120000000000001
+      }
+    },
+    {
+      "id": "torso",
+      "path": "layers/torso.png",
+      "z": 6,
+      "placement": {
+        "x": -94,
+        "y": -269
+      },
+      "pivot": {
+        "x": 93.5,
+        "y": 146.88000000000002
+      }
+    },
+    {
+      "id": "head",
+      "path": "layers/head.png",
+      "z": 7,
+      "placement": {
+        "x": -73,
+        "y": -375
+      },
+      "pivot": {
+        "x": 71.5,
+        "y": 105.6
+      }
+    },
+    {
+      "id": "bubbles",
+      "path": "layers/bubbles.png",
+      "z": 8,
+      "visible": false,
+      "placement": {
+        "x": -225,
+        "y": -435
+      },
+      "pivot": {
+        "x": 225,
+        "y": 225
+      }
+    },
+    {
+      "id": "heart",
+      "path": "layers/heart.png",
+      "z": 9,
+      "visible": false,
+      "placement": {
+        "x": -29,
+        "y": -225
+      },
+      "pivot": {
+        "x": 29,
+        "y": 27
+      }
+    },
+    {
+      "id": "tennis_disc",
+      "path": "layers/tennis_disc.png",
+      "z": 10,
+      "visible": false,
+      "placement": {
+        "x": -170,
+        "y": -400
+      },
+      "pivot": {
+        "x": 43,
+        "y": 23.5
+      }
+    }
+  ]
+}

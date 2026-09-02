@@ -27,7 +27,7 @@ internal sealed partial class PetWindow : Window, IController
     private readonly bool demo;
     private readonly bool smoke;
     private readonly string? captureDirectory;
-    private readonly string resources = Path.Combine(AppContext.BaseDirectory, "resources");
+    private readonly string resources;
     private readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromSeconds(30) };
     private readonly DispatcherTimer ambientTimer = new() { Interval = TimeSpan.FromSeconds(15) };
     private readonly TextBlock loading = new() { Text = "正在加载 VPet…", Foreground = Brushes.White,
@@ -54,12 +54,20 @@ internal sealed partial class PetWindow : Window, IController
     private string? lastWarning;
     private Point? quotaPosition;
 
-    public PetWindow(string dataDirectory, bool demo, bool smoke, string? captureDirectory)
+    public PetWindow(string dataDirectory, bool demo, bool smoke, string? captureDirectory,
+        bool actionPanel = false, string? resourcesDirectory = null)
     {
         this.dataDirectory = dataDirectory;
         this.demo = demo;
         this.smoke = smoke;
         this.captureDirectory = captureDirectory;
+        string builtInResources = Path.Combine(AppContext.BaseDirectory, "resources");
+        string candidate = string.IsNullOrWhiteSpace(resourcesDirectory)
+            ? builtInResources : Path.GetFullPath(resourcesDirectory);
+        // 外部角色包缺失或卸载到一半时回退内置角色，不能让宿主启动失败并拖垮主界面。
+        resources = File.Exists(Path.Combine(candidate, "pet", "vup.lps"))
+            ? candidate : builtInResources;
+        actionPanelEnabled = actionPanel;
         Title = "TokenMeter · VPet 精简版";
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -87,6 +95,7 @@ internal sealed partial class PetWindow : Window, IController
             if (closing) return;
             closing = true;
             if (petMenu != null) petMenu.IsOpen = false;
+            CloseActionPanel();
             EndPetGesture(cancel: true);
             DisposeNotifications();
             SaveState();
@@ -164,6 +173,7 @@ internal sealed partial class PetWindow : Window, IController
             // 冒烟检查会主动调用真实动作；后台随机不能干扰其坐标和生命周期断言。
             ambientTimer.Tick += (_, _) => { if (!smoke) RunAutonomousBehavior(); };
             SyncAutonomy();
+            if (actionPanelEnabled) ShowActionPanel();
             Program.Send(new { @event = "ready", animations = graph.GraphsALL.Count });
             if (captureDirectory != null || smoke)
                 await RunVisualCheck();
@@ -223,6 +233,7 @@ internal sealed partial class PetWindow : Window, IController
         Add("退出 TokenMeter", () => Request("quit"));
         petMenu.Opened += (_, _) => {
             CancelAutonomousSequence();
+            StopActionPanelPlayback();
             UpdateQuotaCloud();
             quotaMenuItem.IsChecked = cloudEnabled;
             quotaCloud?.NotifyActivity();
@@ -322,6 +333,7 @@ internal sealed partial class PetWindow : Window, IController
             // 挥手等内核互动也会切换动画；保留新动作，同时取消未走完的自主序列。
             if (autonomousSequence != null && pet?.DisplayType != autonomousFrame?.GraphInfo)
                 CancelAutonomousSequence(returnToNormal: false);
+            CancelActionPanelIfInterrupted();
             // 用户互动可能中断警告的开场动作；不能让等待标记永久阻止后续生活提醒。
             if (warningSpeechPending && pet?.DisplayType.Name != pendingWarningAnimation)
             {
@@ -364,7 +376,7 @@ internal sealed partial class PetWindow : Window, IController
     private void Request(string name)
     {
         if (petMenu != null) petMenu.IsOpen = false;
-        if (demo || smoke)
+        if (demo || smoke || actionPanelEnabled)
         {
             if (name == "quit" || name == "disable_pet") Application.Current.Shutdown();
             else { quota?.Show(); quota?.Activate(); }
@@ -511,6 +523,7 @@ internal sealed partial class PetWindow : Window, IController
         foreach (var kind in new[] { GraphType.Default, GraphType.Touch_Head, GraphType.Touch_Body })
             checks[kind.ToString()] = graph!.FindName(kind) != null;
         checks["raised"] = graph!.FindName(GraphType.Raised_Static) != null;
+        RunActionPanelChecks(checks);
         checks["autonomyWithoutGrowth"] = !pet!.EventTimer.Enabled && graph.FindName(GraphType.Sleep) == null &&
             graph.FindName(GraphType.Work) == null && graph.FindName(GraphType.Move) != null;
         checks["noFeedingResources"] = !Directory.Exists(Path.Combine(resources, "food")) &&
