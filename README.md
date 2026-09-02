@@ -60,7 +60,6 @@ TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI Token 用量与订�
 - 支持轻触互动、拖动缩放、自主活动和贴边额度气泡；双击气泡打开用量面板。
 - 右键菜单可设置额度气泡展示方式，以及默认关闭的喝水、休息提醒；桌宠菜单目前为中文。
 - 精简版不含投喂、工作、养成、Steam 或联机功能。扩展可单独更新，主程序退出时桌宠一同退出。
-- 人物形象与桌宠宿主独立管理；可保留内置角色，并在设置页下载、切换或卸载其他完整动作角色包。
 
 实现细节和独立构建见 [桌宠开发说明](pet_host/README.md)，使用素材前请阅读 [来源与授权](pet_host/THIRD_PARTY_NOTICES.md)。
 
@@ -110,7 +109,7 @@ Qt 测试需要可用的 Windows 桌面会话；生成安装器需要 Inno Setup
 
 ## 版本
 
-主程序 `1.15.1`，可选桌宠扩展 `0.2.0`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程序 `1.14.2`，可选桌宠扩展 `0.1.1`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 许可与致谢
 

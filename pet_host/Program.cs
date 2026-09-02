@@ -22,8 +22,6 @@ internal static class Program
         Directory.CreateDirectory(dataDirectory);
         bool demo = Array.IndexOf(args, "--demo") >= 0;
         bool smoke = Array.IndexOf(args, "--smoke-test") >= 0;
-        bool actionPanel = Array.IndexOf(args, "--action-panel") >= 0;
-        string? resourcesDirectory = Value(args, "--resources-dir");
         string? captureDirectory = Value(args, "--capture-dir");
         int.TryParse(Value(args, "--parent-pid"), out int parentId);
         // 原版内核会写 Console；协议使用独立输出句柄，防止调试文本被当成命令。
@@ -42,11 +40,9 @@ internal static class Program
             e.Handled = true;
             app.Shutdown(1);
         };
-        var window = new PetWindow(
-            dataDirectory, demo, smoke, captureDirectory, actionPanel, resourcesDirectory);
+        var window = new PetWindow(dataDirectory, demo, smoke, captureDirectory);
         app.MainWindow = window;
-        // 开发者动作面板是可独立启动的显式模式；没有父进程管道时不能因 stdin EOF 自动退出。
-        if (!demo && !smoke && !actionPanel)
+        if (!demo && !smoke)
         {
             _ = Task.Run(async () => {
                 try

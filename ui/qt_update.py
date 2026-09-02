@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import threading
+from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -22,8 +23,8 @@ from PySide6.QtWidgets import (
 )
 
 from config import runtime as config_manager
-from core import pet_characters, pet_extension
-from core.identity import APP_VERSION, GITHUB_RELEASES_URL, MAIN_EXECUTABLE_NAME
+from core import pet_extension
+from core.identity import APP_VERSION, GITHUB_RELEASES_URL
 from ui.i18n import bind_text, tr
 from updater.client import (
     CheckResult,
@@ -42,6 +43,7 @@ from updater.client import (
     skipped_version,
     status_summary,
 )
+from core.identity import MAIN_EXECUTABLE_NAME
 
 
 class PetExtensionWorker(QThread):
@@ -68,36 +70,6 @@ class PetExtensionWorker(QThread):
                 )
             else:
                 pet_extension.uninstall()
-        except Exception as exc:
-            self.error = exc
-
-
-class PetCharacterWorker(QThread):
-    progress_changed = Signal(object)
-
-    def __init__(
-        self, operation: str, parent=None, *, entry: dict[str, object] | None = None,
-        character_id: str = "",
-    ):
-        super().__init__(parent)
-        self.operation = operation
-        self.entry = entry
-        self.character_id = character_id
-        self.error: Exception | None = None
-        self.manifest: dict[str, object] | None = None
-
-    def run(self) -> None:
-        try:
-            if self.operation == "download":
-                if self.entry is None:
-                    raise ValueError("缺少待下载的角色")
-                self.manifest = pet_characters.download_and_install(
-                    self.entry, self.progress_changed.emit, self.isInterruptionRequested,
-                )
-            elif self.operation == "uninstall":
-                pet_characters.uninstall(self.character_id)
-            else:
-                raise ValueError("未知角色操作")
         except Exception as exc:
             self.error = exc
 
@@ -322,9 +294,7 @@ class AppUpdateController(QObject):
         version = str(state.get("latest_version") or "").strip()
         self._latest_release = None
         if version:
-            from updater.client import (
-                _release_from_state,  # local import to avoid a cycle during init
-            )
+            from updater.client import _release_from_state  # local import to avoid a cycle during init
 
             self._latest_release = _release_from_state(state)
         self.latest_release_changed.emit(self._latest_release)

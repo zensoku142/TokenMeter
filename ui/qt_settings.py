@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 from api.providers import PROVIDERS, list_providers
 from api.providers.base import FetchError
 from config import runtime as config_manager
-from core import pet_characters, pet_extension
+from core import pet_extension
 from core.autostart import AutostartError, sync_autostart
 from core.identity import APP_DISPLAY_NAME, GITHUB_REPOSITORY_URL
 from data.store import TokenData
@@ -59,12 +59,9 @@ from ui.i18n import (
     tr,
 )
 from ui.qt_theme import DARK_THEME, LIGHT_THEME, current_theme, fluent_icon, theme_controller
-from ui.qt_update import AppUpdateController, PetCharacterWorker, PetExtensionWorker
+from ui.qt_update import AppUpdateController, PetExtensionWorker
 from updater.client import (
-    DownloadCancelled,
-    PetReleaseInfo,
-    compare_versions,
-    format_bytes,
+    DownloadCancelled, PetReleaseInfo, compare_versions, format_bytes,
 )
 
 _CARD_PADDING = 18
@@ -253,7 +250,6 @@ class SettingsWindow(QDialog):
         self.on_saved = on_saved
         self.update_controller = update_controller
         self._pet_worker: PetExtensionWorker | None = None
-        self._pet_character_worker: PetCharacterWorker | None = None
         self._pet_release: PetReleaseInfo | None = None
         QApplication.instance().aboutToQuit.connect(self.stop_pet_task)
         self._worker: ConnectionWorker | None = None
@@ -506,23 +502,6 @@ class SettingsWindow(QDialog):
             pet_layout, "启用 VPet 精简桌宠",
             "启用后替代悬浮球，面板和主题保持不变。", self.vpet_check
         )
-        character_form = QFormLayout()
-        character_form.setHorizontalSpacing(16)
-        character_form.setVerticalSpacing(8)
-        self.pet_character_combo = _SettingsComboBox()
-        self.pet_character_combo.currentIndexChanged.connect(self._refresh_character_buttons)
-        character_form.addRow(bind_text(QLabel(), "人物形象"), self.pet_character_combo)
-        character_actions = QHBoxLayout()
-        character_actions.setSpacing(6)
-        self.pet_character_download_button = bind_text(QPushButton(), "下载所选形象")
-        self.pet_character_uninstall_button = bind_text(QPushButton(), "卸载所选形象")
-        self.pet_character_download_button.clicked.connect(self._download_pet_character)
-        self.pet_character_uninstall_button.clicked.connect(self._uninstall_pet_character)
-        character_actions.addWidget(self.pet_character_download_button)
-        character_actions.addWidget(self.pet_character_uninstall_button)
-        character_actions.addStretch(1)
-        character_form.addRow(bind_text(QLabel(), ""), character_actions)
-        pet_layout.addLayout(character_form)
         self.pet_version_label = QLabel()
         self.pet_version_label.setWordWrap(True)
         self.pet_version_label.setProperty("tone", "muted")
@@ -705,140 +684,8 @@ class SettingsWindow(QDialog):
         if controller is not None:
             controller.changed.connect(self._on_language_state_changed)
 
-    def _refresh_character_controls(self) -> None:
-        installed = {str(item["id"]): item for item in pet_characters.installed_characters()}
-        catalog = {str(item["id"]): item for item in pet_characters.available_characters()}
-        selected = pet_characters.selected_character_id()
-        current = str(self.pet_character_combo.currentData() or selected)
-        blocker = QSignalBlocker(self.pet_character_combo)
-        self.pet_character_combo.clear()
-        for character_id, item in installed.items():
-            version = str(item.get("version") or "")
-            label = (
-                tr("内置默认角色") if character_id == pet_characters.BUILTIN_ID
-                else str(item["name"]) + (f" · v{version}" if version else "")
-            )
-            self.pet_character_combo.addItem(label, character_id)
-        for character_id, item in catalog.items():
-            if character_id in installed:
-                continue
-            self.pet_character_combo.addItem(tr(
-                "{name} · v{version}（可下载）", name=item["name"], version=item["version"]
-            ), character_id)
-        target = current if self.pet_character_combo.findData(current) >= 0 else selected
-        index = self.pet_character_combo.findData(target)
-        self.pet_character_combo.setCurrentIndex(max(0, index))
-        del blocker
-        self._refresh_character_buttons()
-
-    def _refresh_character_buttons(self, *_args) -> None:
-        character_id = str(self.pet_character_combo.currentData() or pet_characters.BUILTIN_ID)
-        installed = {str(item["id"]) for item in pet_characters.installed_characters()}
-        catalog = {str(item["id"]): item for item in pet_characters.available_characters()}
-        busy = self._pet_worker is not None or self._pet_character_worker is not None
-        entry = catalog.get(character_id)
-        published = entry is not None and entry.get("sha256") != "PENDING"
-        self.pet_character_download_button.setEnabled(
-            not busy and character_id not in installed and published
-        )
-        self.pet_character_uninstall_button.setEnabled(
-            not busy and character_id in installed and character_id != pet_characters.BUILTIN_ID
-        )
-        self.pet_character_combo.setEnabled(not busy)
-
-    def _download_pet_character(self) -> None:
-        character_id = str(self.pet_character_combo.currentData() or "")
-        entry = next(
-            (item for item in pet_characters.available_characters() if item["id"] == character_id),
-            None,
-        )
-        if entry is None or entry.get("sha256") == "PENDING":
-            return
-        answer = QMessageBox.question(
-            self, tr("下载人物形象"),
-            tr("将下载“{name}”v{version}；安装后会切换到该形象。是否继续？",
-               name=entry["name"], version=entry["version"]),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._start_pet_character_task("download", entry=entry)
-
-    def _uninstall_pet_character(self) -> None:
-        character_id = str(self.pet_character_combo.currentData() or "")
-        installed = {
-            str(item["id"]): item for item in pet_characters.installed_characters()
-            if not item.get("builtin")
-        }
-        item = installed.get(character_id)
-        if item is None:
-            return
-        answer = QMessageBox.question(
-            self, tr("卸载人物形象"),
-            tr("将卸载“{name}”；若正在使用会先切回内置角色。是否继续？", name=item["name"]),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._start_pet_character_task("uninstall", character_id=character_id)
-
-    def _start_pet_character_task(
-        self, operation: str, *, entry: dict[str, object] | None = None,
-        character_id: str = "",
-    ) -> None:
-        if self._pet_worker is not None or self._pet_character_worker is not None:
-            return
-        if self.update_controller is not None:
-            if self.update_controller.is_downloading():
-                QMessageBox.information(self, tr("软件更新"), tr("当前已有下载任务正在进行。"))
-                return
-            self.update_controller.pet_task_active = True
-        worker = PetCharacterWorker(
-            operation, self, entry=entry, character_id=character_id,
-        )
-        self._pet_character_worker = worker
-        worker.progress_changed.connect(self._pet_character_progress)
-        worker.finished.connect(self._pet_character_task_finished)
-        if operation == "uninstall":
-            self.pet_update_started.emit()
-        self._refresh_pet_controls(
-            "正在下载人物形象…" if operation == "download" else "正在卸载人物形象…"
-        )
-        worker.start()
-
-    def _pet_character_progress(self, payload: dict) -> None:
-        bind_text(
-            self.pet_status_label,
-            f"正在下载人物形象：{format_bytes(int(payload.get('downloaded') or 0))} / "
-            f"{format_bytes(int(payload.get('total') or 0))}",
-        )
-
-    def _pet_character_task_finished(self) -> None:
-        worker = self._pet_character_worker
-        if worker is None:
-            return
-        self._pet_character_worker = None
-        if isinstance(worker.error, DownloadCancelled):
-            message = "已取消人物形象下载。"
-        elif worker.error is not None:
-            message = f"人物形象操作失败：{worker.error}"
-        elif worker.operation == "download" and worker.manifest is not None:
-            character_id = str(worker.manifest["id"])
-            config_manager.save_config({pet_characters.CONFIG_KEY: character_id})
-            message = f"已安装并切换到“{worker.manifest['name']}”v{worker.manifest['version']}。"
-            if self.on_saved:
-                self.on_saved()
-        else:
-            message = "人物形象已卸载，当前使用内置默认角色。"
-        if worker.operation == "uninstall":
-            self.pet_update_finished.emit()
-        worker.deleteLater()
-        self._refresh_pet_controls(message)
-        if self.update_controller is not None:
-            self.update_controller.pet_task_active = False
-
     def _refresh_pet_controls(self, message: str = "") -> None:
-        busy = self._pet_worker is not None or self._pet_character_worker is not None
+        busy = self._pet_worker is not None
         manifest = pet_extension.installed_manifest()
         removable = any(path.exists() for path in pet_extension.removable_directories())
         # 只有校验完整的已安装扩展包才允许启用，不能把开发构建或旧安装目录当成下载完成。
@@ -850,12 +697,7 @@ class SettingsWindow(QDialog):
                 self.vpet_check.setChecked(False)
         self.pet_install_button.setEnabled(not busy and not removable)
         self.pet_uninstall_button.setEnabled(not busy and removable)
-        cancellable = (
-            self._pet_worker is not None and self._pet_worker.operation != "uninstall"
-        ) or (
-            self._pet_character_worker is not None
-            and self._pet_character_worker.operation == "download"
-        )
+        cancellable = busy and self._pet_worker.operation != "uninstall"
         self.pet_cancel_button.setVisible(cancellable)
         self.pet_cancel_button.setEnabled(True)
         self.pet_check_button.setVisible(not cancellable)
@@ -879,7 +721,6 @@ class SettingsWindow(QDialog):
                 "未安装桌宠扩展包；默认使用原有悬浮球和面板，按需下载。"
             )
         bind_text(self.pet_status_label, message)
-        self._refresh_character_controls()
 
     def _update_pet(self) -> None:
         if self._pet_worker is not None or self._pet_release is None:
@@ -977,13 +818,6 @@ class SettingsWindow(QDialog):
             self._pet_worker.requestInterruption()
             self.pet_cancel_button.setEnabled(False)
             bind_text(self.pet_status_label, "正在取消下载…")
-        elif (
-            self._pet_character_worker is not None
-            and self._pet_character_worker.operation == "download"
-        ):
-            self._pet_character_worker.requestInterruption()
-            self.pet_cancel_button.setEnabled(False)
-            bind_text(self.pet_status_label, "正在取消人物形象下载…")
 
     def _pet_task_finished(self) -> None:
         worker = self._pet_worker
@@ -1025,9 +859,6 @@ class SettingsWindow(QDialog):
             # 网络有超时，解压逐块响应取消；退出前等临时文件清理完，防止留下半安装目录。
             self._pet_worker.requestInterruption()
             self._pet_worker.wait()
-        if self._pet_character_worker is not None:
-            self._pet_character_worker.requestInterruption()
-            self._pet_character_worker.wait()
 
     def _add_settings_page(self, title: str, description: str) -> QVBoxLayout:
         page = QWidget()
@@ -1824,10 +1655,6 @@ class SettingsWindow(QDialog):
         self.sync_accent_check.setChecked(bool(values.get("UI_SYNC_ACCENT_COLOR", True)))
         self.edge_hide_check.setChecked(bool(values.get("EDGE_HIDE_ENABLED", True)))
         self.vpet_check.setChecked(bool(values.get("VPET_ENABLED", False)))
-        self._refresh_character_controls()
-        character_id = str(values.get("VPET_CHARACTER", pet_characters.BUILTIN_ID))
-        character_index = self.pet_character_combo.findData(character_id)
-        self.pet_character_combo.setCurrentIndex(max(0, character_index))
         self.panel_auto_collapse_check.setChecked(
             bool(values.get("PANEL_AUTO_COLLAPSE_ON_DEACTIVATE", True))
         )
@@ -1897,14 +1724,6 @@ class SettingsWindow(QDialog):
 
     def _values(self) -> dict[str, Any]:
         self._remember_visible_credentials()
-        installed_character_ids = {
-            str(item["id"]) for item in pet_characters.installed_characters()
-        }
-        character_id = str(
-            self.pet_character_combo.currentData() or pet_characters.BUILTIN_ID
-        )
-        if character_id not in installed_character_ids:
-            character_id = pet_characters.selected_character_id()
         values: dict[str, Any] = {
             "REFRESH_INTERVAL": self.refresh_seconds.value() * 1000,
             "MINUTE_USAGE_CHART_TYPE": str(
@@ -1921,7 +1740,6 @@ class SettingsWindow(QDialog):
             "UI_THEME": str(self.theme_combo.currentData() or "dark"),
             "EDGE_HIDE_ENABLED": self.edge_hide_check.isChecked(),
             "VPET_ENABLED": self.vpet_check.isChecked(),
-            "VPET_CHARACTER": character_id,
             "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": self.panel_auto_collapse_check.isChecked(),
             "AUTO_START_ENABLED": self.autostart_check.isChecked(),
             "UPDATE_AUTO_CHECK_ENABLED": self.auto_check_updates.isChecked(),

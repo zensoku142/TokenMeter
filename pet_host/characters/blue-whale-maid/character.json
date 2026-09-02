@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "id": "blue-whale-maid",
-  "name": "蓝鲸女仆",
-  "version": "0.0.1",
-  "pet_protocol": 1,
-  "description": "蓝发鲸鱼女仆形象，覆盖当前桌宠的完整动作体系。",
-  "author": "用户提供形象 / TokenMeter 动作适配"
-}

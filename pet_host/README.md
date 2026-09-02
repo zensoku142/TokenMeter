@@ -41,7 +41,7 @@
 
 ## 独立版本清单
 
-`pet_host/extension.json` 是桌宠版本的唯一来源，当前正式版为 `0.2.0`，最低兼容主程序 `1.14.0-beta.1`，建议配合正式主程序 `1.15.0` 使用，协议版本为 `1`。体验版主程序可发现兼容的预发布扩展，正式版仍只选择稳定包：
+`pet_host/extension.json` 是桌宠版本的唯一来源，当前正式版为 `0.1.2`，最低兼容主程序 `1.14.0-beta.1`，建议配合正式主程序 `1.14.2` 使用，协议版本为 `1`。体验版主程序可发现兼容的预发布扩展，正式版仍只选择稳定包：
 
 - `version`：桌宠自己的语义化版本，不与 `APP_VERSION` 同步递增。
 - `protocol`：桌宠与主程序的通信协议版本。改变协议时应同步评估主程序桥接兼容性。
@@ -61,26 +61,6 @@ python examples/vpet_preview.py --verify
 python -m pytest tests/test_pet_extension.py tests/test_packaging.py tests/test_update.py -q
 python scripts/build_release.py --stage pet
 ```
-
-需要人工逐项验证当前高层动作路由时，先完成桌宠构建，再用隔离的数据目录显式启动开发者面板：
-
-```powershell
-.\build\vpet\TokenMeter.Pet.exe --data-dir E:\temp\tokenmeter-pet-action-panel --action-panel
-```
-
-`--action-panel` 只在命令行显式传入时生效；面板按高层动作分组，播放有限的开始/循环/结束序列，并提供停止及恢复默认姿态按钮。正常主程序启动、进程通信和右键菜单不启用该入口。
-
-## 人物形象资源包
-
-桌宠宿主与人物图片分开管理。内置默认角色始终保留；“设置 → 桌宠 → 人物形象”可切换已安装角色、下载目录中的角色，或卸载非内置角色。外部角色安装在应用数据目录的 `extensions/vpet-characters/<角色 ID>`，卸载当前角色前会先回退内置角色，不删除桌宠布局和提醒偏好。
-
-角色包根目录包含 `character.json` 与 `resources/pet/vup.lps`，并完整提供当前动作合同要求的 13 类目录。蓝鲸女仆暂存版本为 `0.0.1`：
-
-```powershell
-python scripts/build_vpet_character.py blue-whale-maid
-```
-
-输出位于 `build/pet-characters/`。发布 Tag 使用 `pet-character-blue-whale-maid-v0.0.1`，独立工作流只上传角色 ZIP 与构建报告，不改桌宠扩展版本。
 
 输出目录 `dist-pet/` 同时包含兼容旧客户端的完整 ZIP、供新版客户端复用本地动画的 Host ZIP、用于小流量检查更新的 `extension.json`，以及覆盖全部附件的 `SHA256SUMS.txt`。首次安装或资源身份不一致时下载完整包；普通宿主更新只下载 Host ZIP。这些文件不进入主安装器；主程序构建也不编译桌宠。
 

@@ -15,11 +15,11 @@ VSVersionInfo(
         '040904B0',
         [
           StringStruct('FileDescription', 'TokenMeter API usage monitor'),
-          StringStruct('FileVersion', '1.15.1'),
+          StringStruct('FileVersion', '1.14.2'),
           StringStruct('InternalName', 'TokenMeter'),
           StringStruct('OriginalFilename', 'TokenMeter.exe'),
           StringStruct('ProductName', 'TokenMeter'),
-          StringStruct('ProductVersion', '1.15.1')
+          StringStruct('ProductVersion', '1.14.2')
         ]
       )
     ]),

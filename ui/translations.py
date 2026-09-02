@@ -28,64 +28,6 @@ MESSAGES = {
         "ボールを置き換えます。パネルとテーマは変わりません。", "플로팅 볼만 대체하며 패널과 테마는 유지됩니다.",
     ),
     "桌宠": ("Pet", "桌寵", "ペット", "펫"),
-    "人物形象": ("Character", "人物形象", "キャラクター", "캐릭터"),
-    "内置默认角色": ("Built-in default", "內建預設角色", "内蔵デフォルト", "기본 내장 캐릭터"),
-    "{name} · v{version}（可下载）": (
-        "{name} · v{version} (available)", "{name} · v{version}（可下載）",
-        "{name} · v{version}（ダウンロード可）", "{name} · v{version} (다운로드 가능)",
-    ),
-    "下载所选形象": (
-        "Download selected", "下載所選形象", "選択したキャラクターをダウンロード", "선택 캐릭터 다운로드",
-    ),
-    "卸载所选形象": (
-        "Uninstall selected", "解除安裝所選形象", "選択したキャラクターを削除", "선택 캐릭터 제거",
-    ),
-    "下载人物形象": ("Download character", "下載人物形象", "キャラクターをダウンロード", "캐릭터 다운로드"),
-    "卸载人物形象": ("Uninstall character", "解除安裝人物形象", "キャラクターを削除", "캐릭터 제거"),
-    "将下载“{name}”v{version}；安装后会切换到该形象。是否继续？": (
-        "Download {name} v{version}? It will become the selected character after installation.",
-        "將下載「{name}」v{version}；安裝後會切換到該形象。是否繼續？",
-        "{name} v{version} をダウンロードしますか？インストール後にこのキャラクターへ切り替えます。",
-        "{name} v{version}을 다운로드할까요? 설치 후 이 캐릭터로 전환됩니다.",
-    ),
-    "将卸载“{name}”；若正在使用会先切回内置角色。是否继续？": (
-        "Uninstall {name}? If selected, the pet will switch to the built-in character first.",
-        "將解除安裝「{name}」；若正在使用會先切回內建角色。是否繼續？",
-        "{name} を削除しますか？使用中の場合は先に内蔵キャラクターへ戻します。",
-        "{name}을 제거할까요? 사용 중이면 먼저 기본 내장 캐릭터로 전환합니다.",
-    ),
-    "正在下载人物形象…": (
-        "Downloading character…", "正在下載人物形象…", "キャラクターをダウンロード中…", "캐릭터 다운로드 중…",
-    ),
-    "正在卸载人物形象…": (
-        "Uninstalling character…", "正在解除安裝人物形象…", "キャラクターを削除中…", "캐릭터 제거 중…",
-    ),
-    "正在下载人物形象：{downloaded} / {total}": (
-        "Downloading character: {downloaded} / {total}", "正在下載人物形象：{downloaded} / {total}",
-        "キャラクターをダウンロード中：{downloaded} / {total}", "캐릭터 다운로드 중: {downloaded} / {total}",
-    ),
-    "正在取消人物形象下载…": (
-        "Cancelling character download…", "正在取消人物形象下載…",
-        "キャラクターのダウンロードをキャンセル中…", "캐릭터 다운로드 취소 중…",
-    ),
-    "已取消人物形象下载。": (
-        "Character download cancelled.", "已取消人物形象下載。",
-        "キャラクターのダウンロードをキャンセルしました。", "캐릭터 다운로드가 취소되었습니다.",
-    ),
-    "人物形象操作失败：{error}": (
-        "Character operation failed: {error}", "人物形象操作失敗：{error}",
-        "キャラクター操作に失敗しました：{error}", "캐릭터 작업 실패: {error}",
-    ),
-    "已安装并切换到“{name}”v{version}。": (
-        "Installed and switched to {name} v{version}.", "已安裝並切換到「{name}」v{version}。",
-        "{name} v{version} をインストールして切り替えました。", "{name} v{version}을 설치하고 전환했습니다.",
-    ),
-    "人物形象已卸载，当前使用内置默认角色。": (
-        "Character uninstalled. The built-in default is now selected.",
-        "人物形象已解除安裝，目前使用內建預設角色。",
-        "キャラクターを削除しました。内蔵デフォルトを使用しています。",
-        "캐릭터를 제거했습니다. 현재 기본 내장 캐릭터를 사용합니다.",
-    ),
     "桌宠源码来源：{link}": (
         "Pet source code: {link}", "桌寵原始碼來源：{link}",
         "ペットのソースコード：{link}", "펫 소스 코드: {link}",

@@ -52,7 +52,7 @@ internal sealed partial class PetWindow
     private bool HasRandomCloud => cloudMode is "random" or "hover_random";
     private bool CanMoveAutonomously => ready && visible && !closing && !notificationsSuspended &&
         allowMove && !petPointerDown && petMenu?.IsOpen != true && activeNotice == Notice.None &&
-        actionPanelSequence == null && (actionPanelWindow == null || smoke) && !LogicalDockedEdge.HasValue;
+        !LogicalDockedEdge.HasValue;
     private bool? LogicalDockedEdge => notificationOrigin?.Edge ?? manualDockedEdge ?? DockedEdge;
 
     private void SyncAutonomy()
@@ -197,7 +197,7 @@ internal sealed partial class PetWindow
 
     private bool CanStartNotification => ready && visible && IsVisible && !closing && !notificationsSuspended &&
         !petPointerDown && petMenu?.IsOpen != true && !warningSpeechPending && activeNotice == Notice.None &&
-        actionPanelSequence == null && (actionPanelWindow == null || smoke) && !LogicalDockedEdge.HasValue &&
+        !LogicalDockedEdge.HasValue &&
         pet!.MsgBar.Visibility != Visibility.Visible && pet.DisplayType.Type is
             GraphType.Default or GraphType.Idel or GraphType.StateONE or GraphType.StateTWO or
             GraphType.SideHide_Left_Main or GraphType.SideHide_Left_Rise or
