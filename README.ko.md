@@ -109,7 +109,7 @@ Qt 테스트에는 사용 가능한 Windows 데스크톱 세션이, 설치 파�
 
 ## 버전
 
-메인 앱 `1.14.2`, 선택적 펫 확장 `0.1.1`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
+메인 앱 `1.14.2`, 선택적 펫 확장 `0.1.3`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
 
 ## 라이선스 및 감사의 말
 

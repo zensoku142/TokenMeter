@@ -155,7 +155,12 @@ internal sealed partial class PetWindow : Window, IController
             pet.MouseMove += (_, e) => quotaCloud.NotifyPointerMovement(PointToScreen(e.GetPosition(this)));
             pet.MouseLeave += (_, _) => quotaCloud.NotifyActivity();
             ready = true;
-            if (manualDockedEdge is bool edge) TrySnapPetToEdge(edge);
+            if (manualDockedEdge is bool edge)
+            {
+                // LoadALL 会异步播放启动动画；两个画布都取得首帧后再恢复贴边，避免内核停止空画布。
+                while (!closing && !PetAnimationSlotsReady) await Task.Delay(50);
+                if (!closing) TrySnapPetToEdge(edge);
+            }
             InitializeNotifications();
             if (pendingUsage is { } usage) UpdateUsage(usage);
             UpdateQuotaCloud();

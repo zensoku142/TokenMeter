@@ -166,6 +166,8 @@ internal sealed partial class PetWindow
 
     private bool TrySnapPetToEdge(bool? leftEdge = null)
     {
+        // 内核切换动画时会停止另一画布；首帧初始化完成前调用会解引用空的画布动画。
+        if (!PetAnimationSlotsReady) return false;
         var handle = new WindowInteropHelper(this).Handle;
         if (!GetWindowRect(handle, out var rect)) return false;
         var work = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
@@ -188,6 +190,9 @@ internal sealed partial class PetWindow
         SyncAutonomy();
         return true;
     }
+
+    private bool PetAnimationSlotsReady =>
+        pet?.PetGrid.Tag is IGraph && pet.PetGrid2.Tag is IGraph;
 
     private void ClampDraggedWindow()
     {

@@ -109,7 +109,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.14.2`; optional pet extension: `0.1.1`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.14.2`; optional pet extension: `0.1.3`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

@@ -109,7 +109,7 @@ Qt テストには利用可能な Windows デスクトップセッション、�
 
 ## バージョン
 
-本体 `1.14.2`、任意のペット拡張 `0.1.1`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
+本体 `1.14.2`、任意のペット拡張 `0.1.3`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
 
 ## ライセンスと謝辞
 
