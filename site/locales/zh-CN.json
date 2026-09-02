@@ -143,5 +143,9 @@
   "advantage_security_title": "凭据本地安全保存",
   "advantage_security_desc": "由 TokenMeter 管理的 API Key、Token 和 Cookie 存入 Windows 凭据管理器，不直接写入普通配置文件或应用日志。",
   "advantage_tray_title": "悬浮球与系统托盘",
-  "advantage_tray_desc": "不打开完整面板，也能快速查看额度或余额；贴边后尽量不打扰当前工作。"
+  "advantage_tray_desc": "不打开完整面板，也能快速查看额度或余额；贴边后尽量不打扰当前工作。",
+  "theme_dark_image_alt": "TokenMeter 深色主题下的 Codex 额度与 Token 活动面板",
+  "panel_light_src": "./assets/panel-light.png",
+  "panel_dark_src": "./assets/panel-dark.png",
+  "panel_deepseek_src": "./assets/panel-deepseek.png"
 }

@@ -143,5 +143,9 @@
   "advantage_security_title": "認証情報をローカルに保存",
   "advantage_security_desc": "TokenMeterが管理するAPIキー、トークン、CookieはWindows資格情報マネージャーに保存され、通常の設定ファイルやログには直接書き込みません。",
   "advantage_tray_title": "フローティング表示とシステムトレイ",
-  "advantage_tray_desc": "フルパネルを開かずに利用枠や残高を確認でき、画面端に寄せれば作業を邪魔しません。"
+  "advantage_tray_desc": "フルパネルを開かずに利用枠や残高を確認でき、画面端に寄せれば作業を邪魔しません。",
+  "theme_dark_image_alt": "ダークテーマの TokenMeter Codex 利用枠・Token アクティビティパネル",
+  "panel_light_src": "./assets/panel-light-ja.png",
+  "panel_dark_src": "./assets/panel-dark-ja.png",
+  "panel_deepseek_src": "./assets/panel-deepseek-ja.png"
 }

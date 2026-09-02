@@ -59,12 +59,28 @@
     });
   };
 
+  const preloadLocalizedImages = (translations) => {
+    const sources = new Set(
+      [...document.querySelectorAll("[data-i18n-src]")]
+        .map((image) => translations[image.dataset.i18nSrc])
+        .filter((source) => typeof source === "string" && source),
+    );
+    return Promise.all([...sources].map((source) => new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = resolve;
+      image.onerror = reject;
+      image.src = new URL(source, document.baseURI).href;
+    })));
+  };
+
   const applyLanguage = async (preference) => {
     const request = ++languageRequest;
     const locale = resolveLocale(preference);
     const response = await fetch(new URL(`./locales/${locale}.json`, document.baseURI));
     if (!response.ok) throw new Error(`Unable to load locale ${locale}: ${response.status}`);
     const translations = await response.json();
+    // Load the matching product captures first so copy and screenshots switch atomically.
+    await preloadLocalizedImages(translations);
     if (request !== languageRequest) return;
 
     document.querySelectorAll("[data-i18n]").forEach((element) => {
@@ -77,6 +93,12 @@
     });
     setTranslatedAttribute("[data-i18n-aria]", "aria-label", translations);
     setTranslatedAttribute("[data-i18n-alt]", "alt", translations);
+    document.querySelectorAll("[data-i18n-src]").forEach((image) => {
+      const source = translations[image.dataset.i18nSrc];
+      if (typeof source !== "string" || !source) return;
+      image.setAttribute("src", source);
+      image.closest("a")?.setAttribute("href", source);
+    });
 
     root.lang = locale;
     if (languageSelect) languageSelect.value = preference;

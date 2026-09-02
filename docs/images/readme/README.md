@@ -28,6 +28,16 @@ DeepSeek 示例重点展示“今日分时”：按 5 分钟显示缓存命中�
 - [产品介绍图](../readme-hero.webp)：将原图等比排版为 1920 × 1624 的 WebP，添加标题、说明和来源，不更改截图中的界面文字或控件。额外保留 Codex 深色原图供对照。
 - 本次仅进行图片与文档验收；隔离桌面下的宿主检查不能替代真实桌面的鼠标捕获、拖拽和焦点验证。
 
+## 官网多语言面板
+
+GitHub Pages 会随界面语言切换对应的 Codex 浅色、Codex 深色和 DeepSeek 深色面板。英文、繁体中文、日文和韩文截图位于 `site/assets/panel-*-<locale>.png`，通过 `scripts/render_site_localized_panels.py` 使用生产 Qt 组件、固定演示数据和对应语言资源导出；不读取账户凭据、用户配置或私人用量。
+
+在 Windows 桌面会话中运行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\render_site_localized_panels.py
+```
+
 ## 桌宠素材声明
 
 桌宠核心、默认角色和动画来源：[LorisYounger/VPet](https://github.com/LorisYounger/VPet)。默认角色与动画版权归虚拟主播模拟器制作组所有。核心代码使用 Apache License 2.0，角色、动画及图片另有授权，详见 [来源与授权](../../../pet_host/THIRD_PARTY_NOTICES.md) 及 [上游完整声明](../../../third_party/VPet/README.md)。这些素材不属于 TokenMeter 自有代码的 MIT 授权范围。

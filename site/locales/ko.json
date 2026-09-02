@@ -143,5 +143,9 @@
   "advantage_security_title": "자격 증명을 로컬에 안전하게 저장",
   "advantage_security_desc": "TokenMeter가 관리하는 API 키, 토큰 및 쿠키는 일반 설정 파일이나 앱 로그가 아닌 Windows 자격 증명 관리자에 저장됩니다.",
   "advantage_tray_title": "플로팅 위젯과 시스템 트레이",
-  "advantage_tray_desc": "전체 패널을 열지 않고도 한도나 잔액을 빠르게 확인하고, 화면 가장자리에 붙여 작업 방해를 줄일 수 있습니다."
+  "advantage_tray_desc": "전체 패널을 열지 않고도 한도나 잔액을 빠르게 확인하고, 화면 가장자리에 붙여 작업 방해를 줄일 수 있습니다.",
+  "theme_dark_image_alt": "TokenMeter 다크 테마의 Codex 한도 및 Token 활동 패널",
+  "panel_light_src": "./assets/panel-light-ko.png",
+  "panel_dark_src": "./assets/panel-dark-ko.png",
+  "panel_deepseek_src": "./assets/panel-deepseek-ko.png"
 }

@@ -20,7 +20,7 @@ class PageParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name: value or "" for name, value in attrs}
-        for attribute in ("data-i18n", "data-i18n-html", "data-i18n-aria", "data-i18n-alt"):
+        for attribute in ("data-i18n", "data-i18n-html", "data-i18n-aria", "data-i18n-alt", "data-i18n-src"):
             if values.get(attribute):
                 self.i18n_keys.add(values[attribute])
         if values.get("id"):
@@ -105,6 +105,10 @@ def validate_locales(site_dir: Path, index: PageParser, errors: list[str]) -> No
         missing = sorted(key for key in required_keys if not isinstance(values.get(key), str) or not values[key])
         if missing:
             errors.append(f"{path}: missing translations: {', '.join(missing)}")
+        # Screenshot paths live in locale JSON but resolve against the page, not the locale directory.
+        for key, value in values.items():
+            if key.endswith("_src") and isinstance(value, str):
+                validate_reference(site_dir, site_dir / "index.html", value, errors)
 
 
 def main() -> int:

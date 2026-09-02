@@ -143,5 +143,9 @@
   "advantage_security_title": "憑證安全儲存在本機",
   "advantage_security_desc": "TokenMeter 管理的 API Key、Token 與 Cookie 會存入 Windows 認證管理員，不直接寫入一般設定檔或應用程式日誌。",
   "advantage_tray_title": "懸浮球與系統匣",
-  "advantage_tray_desc": "不必開啟完整面板，也能快速查看額度或餘額；貼邊後盡量不打擾目前工作。"
+  "advantage_tray_desc": "不必開啟完整面板，也能快速查看額度或餘額；貼邊後盡量不打擾目前工作。",
+  "theme_dark_image_alt": "TokenMeter 深色主題下的 Codex 額度與 Token 活動面板",
+  "panel_light_src": "./assets/panel-light-zh-tw.png",
+  "panel_dark_src": "./assets/panel-dark-zh-tw.png",
+  "panel_deepseek_src": "./assets/panel-deepseek-zh-tw.png"
 }

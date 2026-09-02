@@ -143,5 +143,9 @@
   "advantage_security_title": "Credentials stored locally",
   "advantage_security_desc": "API keys, tokens, and cookies managed by TokenMeter are stored in Windows Credential Manager—not plain configuration files or application logs.",
   "advantage_tray_title": "Floating widget and system tray",
-  "advantage_tray_desc": "Check quota or balance without opening the full panel; edge docking keeps it out of the way while you work."
+  "advantage_tray_desc": "Check quota or balance without opening the full panel; edge docking keeps it out of the way while you work.",
+  "theme_dark_image_alt": "TokenMeter Codex quota and token activity panel in dark theme",
+  "panel_light_src": "./assets/panel-light-en.png",
+  "panel_dark_src": "./assets/panel-dark-en.png",
+  "panel_deepseek_src": "./assets/panel-deepseek-en.png"
 }
