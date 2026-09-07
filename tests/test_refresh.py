@@ -1,6 +1,7 @@
 import os
 import unittest
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,12 +12,16 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from data.store import FetchError, PerProviderData, TokenData
 from api.deepseek_pricing import BEIJING_TIMEZONE, PricingState
+from api.providers.base import QuotaMetric, QuotaWindow
+from config.defaults import DEFAULT_CONFIG
+from config.store import validate_value
 from ui.qt_panel import MainPanel
 from ui.qt_widget import (
     BACKGROUND_PROVIDER_INTERVAL_MS,
     FetchTask,
     FloatingWidget,
     MiMoRenewalTask,
+    _fetch_tokens_safely,
 )
 
 APP = QApplication.instance() or QApplication([])
@@ -306,6 +311,50 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(task.provider_id, "mimo")
         self.assertEqual(task._config["MIMO_COOKIE"], "original")
 
+    def test_unexpected_refresh_failure_preserves_only_same_account_cache(self):
+        saved_at = datetime(2026, 7, 3, 10, 0)
+        cached = TokenData(
+            account_key="A", status="ok", today_tokens=7, balance_cny=12.3,
+            last_success_at=saved_at,
+            per_provider=[PerProviderData("deepseek", "DeepSeek", status="ok")],
+        )
+        for account_key in ("A", "B"):
+            with (
+                self.subTest(account_key=account_key),
+                patch.object(TokenData, "_provider_snapshots", {"deepseek": cached}),
+                patch.object(TokenData, "account_key_for_config", return_value=account_key),
+                patch.object(TokenData, "fetch", side_effect=RuntimeError("synthetic failure")),
+            ):
+                result = _fetch_tokens_safely({"ACTIVE_PROVIDER": "deepseek"})
+                self.assertEqual(result.account_key, account_key)
+                self.assertEqual(result.status, "error")
+                self.assertEqual(result.errors[0].code, "UNKNOWN_ERROR")
+                self.assertEqual(result.per_provider[0].errors, result.errors)
+                if account_key == "A":
+                    self.assertEqual(result.today_tokens, 7)
+                    self.assertEqual(result.balance_cny, 12.3)
+                    self.assertEqual(result.last_success_at, saved_at)
+                    self.assertTrue(result.is_stale)
+                    self.assertTrue(result.per_provider[0].is_stale)
+                else:
+                    self.assertIsNone(result.balance_cny)
+                    self.assertIsNone(result.last_success_at)
+                    self.assertFalse(result.is_stale)
+        self.assertEqual(cached.status, "ok")
+        self.assertEqual(cached.errors, [])
+
+    def test_identity_failure_does_not_restore_unscoped_cache(self):
+        with (
+            patch.object(TokenData, "account_key_for_config", side_effect=RuntimeError("identity failed")),
+            patch.object(TokenData, "fetch", return_value=TokenData(status="ok")),
+            patch.object(TokenData, "cached_snapshot") as cached,
+        ):
+            result = _fetch_tokens_safely({"ACTIVE_PROVIDER": "deepseek"})
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.account_key, "")
+        self.assertEqual(result.errors[0].code, "UNKNOWN_ERROR")
+        cached.assert_not_called()
+
     def test_old_account_result_is_discarded_and_current_account_is_queued(self):
         widget = widget_stub()
         old = TokenData(account_key="A", today_tokens=999)
@@ -320,6 +369,7 @@ class RefreshTests(unittest.TestCase):
         assert "codex" not in widget._provider_results
         assert widget._refreshing
         queue.assert_called_once()
+
 
     def test_repeated_refresh_runs_once_then_one_pending(self):
         widget = widget_stub()
@@ -712,6 +762,11 @@ class RefreshTests(unittest.TestCase):
     def test_status_summary_treats_successful_zero_usage_as_normal(self):
         data = TokenData(status="ok", daily_usage=[])
         self.assertIn("暂无 Token 活动", MainPanel.status_summary(data)[0])
+
+
+
+
+
 
 
 if __name__ == "__main__":

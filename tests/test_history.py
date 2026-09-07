@@ -75,6 +75,21 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(history.total_cost("deepseek"), Decimal(".125"))
                 self.assertEqual(history.total_cost("mimo"), Decimal(".5"))
 
+    def test_non_finite_usage_cannot_poison_valid_history(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                for amount in ("NaN", "sNaN", "Infinity", "-Infinity"):
+                    with self.subTest(amount=amount):
+                        history.save_usage(
+                            [payload("2099-01-01", amount), payload("2099-01-01", 7)],
+                            [payload("2099-01-01", amount), payload("2099-01-01", ".25")],
+                            provider="synthetic",
+                        )
+                        rows = history.recent_daily(30_000, "synthetic")
+                        self.assertEqual(rows[0]["tokens"], 7)
+                        self.assertEqual(rows[0]["cost_cny"], Decimal(".25"))
+                        self.assertEqual(history.total_cost("synthetic"), Decimal(".25"))
+
     def test_legacy_database_is_migrated_without_deleting_history(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
             db_path = Path(directory) / "usage.db"

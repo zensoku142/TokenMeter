@@ -52,7 +52,11 @@ def _decimal(value: Any) -> Decimal:
     if value in (None, ""):
         return Decimal("0")
     try:
-        return Decimal(str(value))
+        amount = Decimal(str(value))
+        # Decimal 接受 NaN/Infinity；它们会使 Token 转换抛错或污染整批费用合计。
+        if not amount.is_finite():
+            raise ValueError
+        return amount
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError(f"无效数值：{value!r}") from None
 
@@ -174,12 +178,19 @@ def _monthly_totals_from_payloads(
                 continue
             if (usage_date.year, usage_date.month) != (today.year, today.month):
                 continue
-            for item in day.get("data", []) or []:
+            items = day.get("data", [])
+            # 与日统计采用同一边界，单条畸形响应不能中断其余有效用量的刷新。
+            if not isinstance(items, list):
+                continue
+            for item in items:
                 if not isinstance(item, dict):
                     continue
                 model = str(item.get("model", "unknown")).strip() or "unknown"
                 slot = models.setdefault(model, {"model": model, "usage": []})
-                for usage in item.get("usage", []) or []:
+                usages = item.get("usage", [])
+                if not isinstance(usages, list):
+                    continue
+                for usage in usages:
                     if not isinstance(usage, dict):
                         continue
                     try:
@@ -219,14 +230,23 @@ def token_breakdown_for_day(
     totals = {token_type: 0 for token_type in TOKEN_TYPES}
     found_day = False
     for payload in payloads:
-        for day in payload.get("days", []) or []:
+        days = payload.get("days", [])
+        if not isinstance(days, list):
+            continue
+        for day in days:
             if not isinstance(day, dict) or str(day.get("date", "")) != usage_day.isoformat():
                 continue
             found_day = True
-            for item in day.get("data", []) or []:
+            items = day.get("data", [])
+            if not isinstance(items, list):
+                continue
+            for item in items:
                 if not isinstance(item, dict):
                     continue
-                for usage in item.get("usage", []) or []:
+                usages = item.get("usage", [])
+                if not isinstance(usages, list):
+                    continue
+                for usage in usages:
                     if not isinstance(usage, dict):
                         continue
                     token_type = str(usage.get("type", ""))
@@ -243,22 +263,28 @@ def cost_breakdown_for_day(
     total = Decimal("0")
     found_cost = False
     for payload in payloads:
-        for day in payload.get("days", []) or []:
+        days = payload.get("days", [])
+        if not isinstance(days, list):
+            continue
+        for day in days:
             if not isinstance(day, dict) or str(day.get("date", "")) != usage_day.isoformat():
                 continue
-            for item in day.get("data", []) or []:
+            items = day.get("data", [])
+            if not isinstance(items, list):
+                continue
+            for item in items:
                 if not isinstance(item, dict):
                     continue
-                for usage in item.get("usage", []) or []:
+                usages = item.get("usage", [])
+                if not isinstance(usages, list):
+                    continue
+                for usage in usages:
                     if not isinstance(usage, dict) or usage.get("type") != "cost_cny":
                         continue
                     try:
                         amount = _decimal(usage.get("amount"))
                     except ValueError:
                         config_manager.logger().warning("Skipped malformed minute cost amount")
-                        continue
-                    if not amount.is_finite():
-                        config_manager.logger().warning("Skipped non-finite minute cost amount")
                         continue
                     total += amount
                     found_cost = True
@@ -537,6 +563,9 @@ class TokenData:
 
     @classmethod
     def _base_snapshot(cls, provider_id: str = "", account_key: str | None = None) -> "TokenData":
+        # Claude statusline 不包含账号身份；未指定 scope 时不能假定两次快照来自同一账号。
+        if provider_id == "claude" and not account_key:
+            return cls()
         with cls._cache_lock:
             snapshot = cls._provider_snapshots.get(provider_id) if provider_id else cls._last_snapshot
             if snapshot is not None and account_key is not None and snapshot.account_key != account_key:
@@ -546,6 +575,8 @@ class TokenData:
     @classmethod
     def cached_snapshot(cls, provider_id: str, account_key: str | None = None) -> "TokenData | None":
         """Return an isolated successful snapshot for one provider, if available."""
+        if provider_id == "claude" and not account_key:
+            return None
         with cls._cache_lock:
             snapshot = cls._provider_snapshots.get(provider_id)
             if snapshot is not None and account_key is not None and snapshot.account_key != account_key:
@@ -904,7 +935,9 @@ class TokenData:
         )
         per.provider_id = provider.id
         per.provider_name = provider.name
-        per.currency = str(getattr(provider, "default_currency", "CNY") or "CNY").upper()
+        # 请求失败时保留缓存金额的币种；国际站余额不能被默认人民币重新标注。
+        if previous_per is None:
+            per.currency = str(getattr(provider, "default_currency", "CNY") or "CNY").upper()
         per.quota_windows = []
         per.quota_metrics = []
         per.quota_statistics = []
@@ -1021,7 +1054,8 @@ class TokenData:
                     per.account_label = quota.account_label
                     per.account_plan = quota.plan
                     per.account_plan_active_until = quota.account_plan_active_until
-                    per.quota_source = "interface" if quota_error is None else ""
+                    # 接口与本机状态栏均可提供额度，但必须保留本轮实际的数据来源。
+                    per.quota_source = quota.source if quota_error is None else ""
 
                     if quota.activity_source or quota.activity:
                         data.daily_usage = [
@@ -1121,7 +1155,10 @@ class TokenData:
                 per.monthly_cost_cny = (
                     float(summary.month_cost) if summary.month_cost is not None else None
                 )
-                per.monthly_usage_tokens = int(summary.month_tokens)
+                # 仅提供费用的接口没有 Token 总数，不能把缺失值显示成已确认的 0。
+                per.monthly_usage_tokens = (
+                    int(summary.month_tokens) if summary.month_tokens is not None else None
+                )
                 if summary.remaining_tokens and not per.balance_tokens:
                     per.balance_tokens = int(summary.remaining_tokens)
                 if summary.today_cost is not None:
@@ -1314,7 +1351,10 @@ class TokenData:
                     data.daily_model_usage = []
                 if provider.supports_cost and (summary is None or summary.total_cost is None):
                     # 本地累计值在历史更新后重算；上一轮非空值不能永久屏蔽新账单。
-                    per.total_cost_cny = float(history.total_cost(history_provider))
+                    cached_total = float(history.total_cost(history_provider))
+                    # 只读费用摘要的平台没有本地账单；空缓存不能伪装成真实的累计零费用。
+                    if provider.supports_daily_usage or cached_total:
+                        per.total_cost_cny = cached_total
             except Exception:
                 config_manager.logger().exception("History read failed for %s", provider.id)
                 per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史读取失败"))
@@ -1404,7 +1444,10 @@ class TokenData:
             data.status = "partial" if per.errors else "ok"
             data.is_stale = per.is_stale
             with cls._cache_lock:
-                cls._provider_snapshots[provider.id] = cls._copy_for_cache(data)
+                if provider.id != "claude" or account_key:
+                    cls._provider_snapshots[provider.id] = cls._copy_for_cache(data)
+                else:
+                    cls._provider_snapshots.pop(provider.id, None)
             if quota_refresh_succeeded:
                 try:
                     cls._save_persisted_quota_snapshot(provider, data)

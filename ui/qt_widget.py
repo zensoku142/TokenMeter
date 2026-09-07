@@ -152,31 +152,46 @@ def _fetch_tokens_safely(
     """Fetch token data from a captured provider and keep the worker thread
     from dying if a provider or config error is raised."""
 
+    provider_id = str(config.get("ACTIVE_PROVIDER", "")).strip().lower()
+    account_key = None
     try:
+        # 异常回退也必须绑定请求开始时的账号；请求期间换号时由完成回调丢弃旧结果。
+        account_key = TokenData.account_key_for_config(config)
         return TokenData.fetch(lightweight=lightweight, config=config, include_minute_history=False)
-    except Exception:
-        config_manager.logger().exception("Background refresh failed")
-        provider_id = str(config.get("ACTIVE_PROVIDER", "")).strip().lower()
+    except Exception as exc:
+        # 第三方异常可能包含请求凭据，只记录异常类型并向用户展示固定的安全消息。
+        config_manager.logger().error("Background refresh failed: %s", type(exc).__name__)
         provider_cls = PROVIDERS.get(provider_id)
-        per_provider = []
-        if provider_cls is not None:
-            per_provider.append(
-                PerProviderData(
-                    provider_id,
-                    provider_cls.name,
-                    currency=provider_cls.default_currency,
-                    status="error",
+        data = (
+            TokenData.cached_snapshot(provider_id, account_key)
+            if account_key is not None else None
+        )
+        if data is None:
+            per_provider = []
+            if provider_cls is not None:
+                per_provider.append(
+                    PerProviderData(
+                        provider_id,
+                        provider_cls.name,
+                        currency=provider_cls.default_currency,
+                    )
                 )
+            data = TokenData(
+                account_key=account_key or "",
+                currency=provider_cls.default_currency if provider_cls is not None else "CNY",
+                per_provider=per_provider,
             )
-        data = TokenData(
-            currency=provider_cls.default_currency if provider_cls is not None else "CNY",
-            per_provider=per_provider,
-            status="error",
-        )
-        data.last_attempt_at = __import__("datetime").datetime.now()
-        data.errors.append(
+        else:
+            data.is_stale = True
+        data.status = "error"
+        data.last_attempt_at = datetime.now()
+        data.errors = [
             FetchError("UNKNOWN_ERROR", "后台刷新", "刷新数据时发生未知错误")
-        )
+        ]
+        for per in data.per_provider:
+            per.status = data.status
+            per.is_stale = data.is_stale
+            per.errors = list(data.errors)
         return data
 
 

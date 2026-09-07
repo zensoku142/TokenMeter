@@ -377,6 +377,9 @@ def _rows(payloads: list[dict[str, Any]]):
                         amount = Decimal(str(usage.get("amount", "0")))
                     except (InvalidOperation, ValueError):
                         continue
+                    # 非有限值会污染同模型合计，甚至使正常 Token 行一起回滚；聚合前跳过。
+                    if not amount.is_finite():
+                        continue
                     if token_type:
                         yield usage_date, model, token_type, amount
 

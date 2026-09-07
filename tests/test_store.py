@@ -201,6 +201,57 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.monthly_usage_tokens, 50)
         self.assertAlmostEqual(data.monthly_cost_cny, .43)
 
+    def test_cost_only_summary_keeps_unknown_token_count(self):
+        class CostOnlyProvider(FakeProvider):
+            def fetch_summary(self):
+                return ProviderSummary(Decimal("1.25"), None), None
+
+        data = self.fetch_with(CostOnlyProvider())
+        self.assertEqual(data.status, "ok")
+        self.assertEqual(data.monthly_cost_cny, 1.25)
+        self.assertIsNone(data.monthly_usage_tokens)
+
+    def test_claude_quota_cache_requires_account_scope_and_does_not_hide_stale_data(self):
+        class ClaudeQuotaProvider(FakeProvider):
+            id = "claude"
+            name = "Claude"
+            supports_daily_usage = False
+            supports_cost = False
+            supports_subscription_quota = True
+
+            def snapshot_identity(self):
+                return self.config_get("scope", "")
+
+            def fetch_balance(self):
+                return None, None
+
+            def fetch_summary(self):
+                return None, None
+
+            def fetch_quota(self):
+                if self.errors:
+                    return None, self.errors[0]
+                return ProviderQuota(windows=(QuotaWindow("weekly", "Weekly", 25),)), None
+
+        for scope in ("", "synthetic-account"):
+            with (
+                self.subTest(scope=scope),
+                patch("data.store.history.load_provider_quota_snapshot", return_value=None),
+                patch("data.store.history.save_provider_quota_snapshot"),
+            ):
+                provider = ClaudeQuotaProvider(config={"scope": scope})
+                first = self.fetch_with(provider)
+                self.assertEqual(first.quota_windows[0].used_percent, 25)
+                self.assertEqual(TokenData.cached_snapshot("claude", scope) is not None, bool(scope))
+                provider.errors = [FetchError("NETWORK_ERROR", "quota", "offline")]
+                offline = self.fetch_with(provider)
+                self.assertEqual(bool(offline.quota_windows), bool(scope))
+                provider.errors = [FetchError("STALE_DATA", "quota", "expired")]
+                stale = self.fetch_with(provider)
+                self.assertEqual(stale.status, "error")
+                self.assertEqual(stale.quota_windows, [])
+                self.assertIn("STALE_DATA", [error.code for error in stale.errors])
+
     def test_subscription_quota_is_propagated_without_billing_data(self):
         class QuotaProvider(FakeProvider):
             id = "codex"
@@ -742,6 +793,36 @@ class StoreTests(unittest.TestCase):
         })
         data = self.fetch_with(FakeProvider(payloads=[bad]))
         self.assertEqual(data.today_tokens, 4)
+
+    def test_non_finite_usage_does_not_discard_valid_rows(self):
+        for amount in ("NaN", "sNaN", "Infinity", "-Infinity"):
+            with self.subTest(amount=amount):
+                rows = [payload("2026-07-03", amount, amount), payload("2026-07-03", 7, ".25")]
+                data = self.fetch_with(FakeProvider(payloads=rows))
+                self.assertEqual(data.today_tokens, 7)
+                self.assertEqual(data.monthly_usage_tokens, 7)
+                self.assertEqual(data.today_cost_cny, .25)
+                self.assertEqual(data.monthly_cost_cny, .25)
+                self.assertEqual(data.status, "ok")
+                self.assertEqual(token_breakdown_for_day(rows, date(2026, 7, 3))["RESPONSE_TOKEN"], 7)
+
+    def test_malformed_usage_containers_do_not_discard_valid_rows(self):
+        for field in ("days", "data", "usage"):
+            with self.subTest(field=field):
+                malformed = payload("2026-07-03", 100, "100")
+                container = malformed
+                if field != "days":
+                    container = malformed["days"][0]
+                if field == "usage":
+                    container = container["data"][0]
+                container[field] = 123
+                rows = [malformed, payload("2026-07-03", 7, ".25")]
+                data = self.fetch_with(FakeProvider(payloads=rows))
+                self.assertEqual(data.today_tokens, 7)
+                self.assertEqual(data.monthly_usage_tokens, 7)
+                self.assertEqual(data.monthly_cost_cny, .25)
+                self.assertEqual(token_breakdown_for_day(rows, date(2026, 7, 3))["RESPONSE_TOKEN"], 7)
+                self.assertEqual(cost_breakdown_for_day(rows, date(2026, 7, 3)), Decimal(".25"))
 
     def test_today_token_breakdown_keeps_all_three_real_token_types(self):
         raw = payload("2026-07-03", 0)
