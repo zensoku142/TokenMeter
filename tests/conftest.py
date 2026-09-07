@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
@@ -5,7 +7,21 @@ from shiboken6 import ownedByPython
 
 
 @pytest.fixture(autouse=True)
-def cleanup_qt_widgets():
+def isolate_native_credentials(monkeypatch, tmp_path):
+    from config import credentials
+
+    # 项目直接调用 Win32 凭据 API，不受 PYTHON_KEYRING_BACKEND 控制；测试默认断开真实后端。
+    # 凭据单元测试可显式注入假的 Win32 实现，普通测试遗漏 mock 时写入应失败而非改动用户密钥。
+    monkeypatch.setattr(credentials, "_advapi32", None)
+    # CLI 自动发现也只能看到临时目录；各账号用例再显式注入自己的登录文件。
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qt_widgets(isolate_native_credentials):
     app = QApplication.instance()
     existing = set(app.topLevelWidgets()) if app is not None else set()
     yield
