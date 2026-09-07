@@ -4624,6 +4624,46 @@ def custom_color_settings(tmp_path):
                 QColorDialog.setCustomColor(index, color)
 
 
+@pytest.mark.parametrize("finish", ["release", "close"])
+def test_opacity_drag_previews_without_saving_until_release(autosave_settings, finish):
+    window, _values, _saved, _refreshed = autosave_settings
+    previews = Mock()
+    saves = Mock()
+    window.appearance_preview_requested.connect(previews)
+    window.appearance_requested.connect(saves)
+    window.panel_opacity_slider.setSliderDown(True)
+    window.panel_opacity_slider.setValue(75)
+    QTest.qWait(250)
+    previews.assert_called_once()
+    saves.assert_not_called()
+    if finish == "release":
+        window.panel_opacity_slider.setSliderDown(False)
+    else:
+        window.reject()
+    saves.assert_called_once()
+    assert saves.call_args.args[-1] == 75
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_panel_background_renders_opacity_preview(mode):
+    controller = configure_theme(APP, mode)
+    panel = MainPanel()
+    panel.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    panel.show()
+    APP.processEvents()
+    try:
+        before = panel.grab().toImage().pixelColor(10, panel.height() // 2)
+        controller.preview_appearance(mode, controller.tokens.accent, 70)
+        APP.processEvents()
+        after = panel.grab().toImage().pixelColor(10, panel.height() // 2)
+        assert before.alpha() == 255
+        assert after.alpha() == round(255 * 0.70)
+    finally:
+        controller.set_appearance(mode, controller.tokens.accent, 100)
+        panel.close()
+        controller.set_mode("dark")
+
+
 @pytest.mark.parametrize("accepted", [True, False])
 def test_settings_custom_colors_survive_restart_even_when_dialog_is_cancelled(
     custom_color_settings, accepted

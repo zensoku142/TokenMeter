@@ -79,6 +79,7 @@ from ui.qt_theme import (
     current_theme,
     fluent_icon,
     model_usage_color,
+    panel_background,
     theme_controller,
 )
 
@@ -2612,6 +2613,7 @@ class MainPanel(QFrame):
         self.set_theme_mode(configured_mode, current_theme().name)
         try:
             theme_controller().changed.connect(self._on_theme_changed)
+            theme_controller().opacity_preview_changed.connect(self.update)
         except RuntimeError:
             # Preserve standalone construction compatibility for callers that do
             # not own application startup; the desktop app configures this first.
@@ -3119,6 +3121,17 @@ class MainPanel(QFrame):
             bind_text(self.theme_segment, self._theme_feedback_message, method='setToolTip')
             bind_text(self.light_theme_button, self._theme_feedback_message, method='setToolTip')
             bind_text(self.dark_theme_button, self._theme_feedback_message, method='setToolTip')
+
+    def paintEvent(self, event) -> None:
+        # 背景独立绘制，透明度预览只需 update，文字和控件保持不透明。
+        tokens = current_theme()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(tokens.border), 1))
+        painter.setBrush(panel_background(tokens.window, tokens))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 18, 18)
+        painter.end()
+        super().paintEvent(event)
 
     def _on_theme_changed(self, mode: str, resolved: str) -> None:
         self.set_theme_mode(mode, resolved)

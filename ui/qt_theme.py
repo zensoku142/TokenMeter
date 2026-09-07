@@ -266,7 +266,6 @@ def _theme_tokens(theme: ThemeTokens | str | None) -> ThemeTokens:
 def build_app_style(theme: ThemeTokens | str | None = None) -> str:
     """Build the complete application QSS for one resolved theme."""
     tokens = _theme_tokens(theme)
-    panel_window = _panel_css(tokens.window, tokens)
     panel_surface = _panel_css(tokens.surface, tokens)
     panel_elevated = _panel_css(tokens.elevated, tokens)
     divider = QColor(tokens.border)
@@ -284,8 +283,8 @@ QDialog {{
     background: {tokens.window};
 }}
 QFrame#panelFrame {{
-    background: {panel_window};
-    border: 1px solid {tokens.border};
+    background: transparent;
+    border: 1px solid transparent;
     border-radius: 18px;
 }}
 QWidget#panelHeader, QWidget#topSection {{
@@ -782,6 +781,7 @@ class ThemeController(QObject):
     """Resolve theme preference and apply it to a running QApplication."""
 
     changed = Signal(str, str)
+    opacity_preview_changed = Signal()
 
     def __init__(
         self,
@@ -845,6 +845,16 @@ class ThemeController(QObject):
             )
         self.changed.emit(self._mode, self._resolved)
 
+    def preview_appearance(self, theme_name: str, accent_color: str, panel_opacity: int) -> None:
+        normalized = str(theme_name).strip().lower()
+        if normalized == self._resolved and accent_color.upper() == self._tokens.accent.upper():
+            # 透明度只影响背景；拖动期间不重设全局 QSS，也不广播图表和控件主题刷新。
+            base = LIGHT_THEME if normalized == "light" else DARK_THEME
+            self._tokens = derive_theme_tokens(base, accent_color, panel_opacity)
+            self.opacity_preview_changed.emit()
+            return
+        self.set_appearance(theme_name, accent_color, panel_opacity)
+
     def set_appearance(
         self,
         theme_name: str,
@@ -863,9 +873,11 @@ class ThemeController(QObject):
             (tokens.accent, self._appearances[other][1])
             if self._sync_accent else self._appearances[other]
         )
+        # 保存失败时配置可能未变，但仍需撤销仅存在于绘制令牌中的透明度预览。
         if (
             self._appearances[normalized] == appearance
             and self._appearances[other] == other_appearance
+            and (normalized != self._resolved or self._tokens == tokens)
         ):
             return
         self._appearances[normalized] = appearance

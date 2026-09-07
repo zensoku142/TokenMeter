@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -74,6 +75,26 @@ def test_default_appearance_preserves_existing_tokens_and_custom_accent_derives_
     assert custom.selection == custom.accent
     assert custom.panel_opacity == 82
     assert panel_background(custom.window, custom).alpha() == round(255 * 0.82)
+
+
+def test_opacity_preview_skips_global_style_and_can_restore_saved_appearance():
+    app = _FakeApplication(Qt.ColorScheme.Dark)
+    controller = ThemeController(app, "dark")
+    changes = []
+    previews = []
+    controller.changed.connect(lambda *args: changes.append(args))
+    controller.opacity_preview_changed.connect(lambda: previews.append(controller.tokens.panel_opacity))
+    with patch.object(app, "setStyleSheet", wraps=app.setStyleSheet) as style:
+        for opacity in (95, 85, 70):
+            controller.preview_appearance("dark", DARK_THEME.accent, opacity)
+        style.assert_not_called()
+        assert previews == [95, 85, 70]
+        assert changes == []
+        assert controller.appearance("dark")[1] == 100
+        # 保存失败回退到原值时，即便已存配置相等，也必须撤销最后一次预览。
+        controller.set_appearance("dark", DARK_THEME.accent, 100)
+        assert controller.tokens.panel_opacity == 100
+        style.assert_called_once()
 
 
 def test_custom_appearance_reapplies_same_mode_and_keeps_light_dark_independent():

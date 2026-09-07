@@ -482,7 +482,7 @@ class FloatingWidget(QWidget):
         self, theme_name: str, accent_color: str, panel_opacity: int
     ) -> None:
         try:
-            theme_controller().set_appearance(
+            theme_controller().preview_appearance(
                 theme_name, accent_color, panel_opacity
             )
         except (TypeError, ValueError) as exc:

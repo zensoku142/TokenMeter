@@ -335,6 +335,8 @@ class SettingsWindow(QDialog):
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.content = QWidget()
         self.scroll_area.setWidget(self.content)
+        # QScrollArea.setWidget 默认开启背景填充，会遮住主面板的透明度预览。
+        self.content.setAutoFillBackground(False)
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(0, 20, 0, 8)
         content_layout.setSpacing(14)
@@ -751,6 +753,7 @@ class SettingsWindow(QDialog):
         self.accent_color_edit.editingFinished.connect(self._finish_accent_edit)
         self.accent_color_button.clicked.connect(self._choose_accent_color)
         self.panel_opacity_slider.valueChanged.connect(self._on_appearance_edited)
+        self.panel_opacity_slider.sliderReleased.connect(self._commit_appearance)
         self.reset_appearance_button.clicked.connect(self._reset_appearance)
         theme_controller().changed.connect(self._on_theme_state_changed)
         self._bind_update_controller()
@@ -970,6 +973,7 @@ class SettingsWindow(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(page)
+        page.setAutoFillBackground(False)
         add_tab(self.tabs, scroll, title)
         return layout
 
@@ -1059,7 +1063,7 @@ class SettingsWindow(QDialog):
             # 先完成输入框的失焦提交，避免关闭后才排入新的保存定时器。
             focused.clearFocus()
         if self._appearance_save_timer.isActive():
-            self._commit_appearance()
+            self._commit_appearance(force=True)
         if self._save_pending:
             self._auto_save()
 
@@ -1297,7 +1301,11 @@ class SettingsWindow(QDialog):
             return
         self._commit_appearance()
 
-    def _commit_appearance(self) -> None:
+    def _commit_appearance(self, *, force: bool = False) -> None:
+        # 拖动中的停顿也不写盘；保留计时器状态，让关闭设置时仍能提交最后的值。
+        if self.panel_opacity_slider.isSliderDown() and not force:
+            self._appearance_save_timer.start()
+            return
         self._appearance_save_timer.stop()
         color = self.accent_color_edit.text().strip().upper()
         if not self._valid_accent_color(color):
