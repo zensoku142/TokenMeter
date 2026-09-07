@@ -217,7 +217,9 @@ def filter_usage(rows: list[LocalUsage], days: int, project: str = "", *, today=
 
 
 def daily_model_series(rows: list[LocalUsage], start: date, end: date):
-    days = [(start + timedelta(days=index)).isoformat() for index in range(max(0, (end - start).days + 1))]
+    # 与分时的稀疏数据展示一致：空日期不占横轴位置，单个模型缺失仍保留其他模型的该日数据。
+    rows = [row for row in rows if start.isoformat() <= row.day <= end.isoformat() and row.total > 0]
+    days = sorted({row.day for row in rows})
     totals: dict[tuple[str, str], int] = {}
     for row in rows:
         key = (row.provider, row.model)

@@ -708,9 +708,13 @@ class LocalAnalyticsDialog(QDialog):
         else:
             start = date.fromisoformat(min((row.day for row in rows), default=end.isoformat()))
         days, series = daily_model_series(rows, start, end)
-        self._daily_days, self._daily_series = days, series
         self._update_legend(series)
-        self._visible_daily_series = {key: values for key, values in series.items() if key not in self._hidden_models}
+        visible = {key: values for key, values in series.items() if key not in self._hidden_models}
+        active = [index for index in range(len(days)) if any(values[index] > 0 for values in visible.values())]
+        days = [days[index] for index in active]
+        self._daily_days = days
+        self._daily_series = {key: [values[index] for index in active] for key, values in series.items()}
+        self._visible_daily_series = {key: [values[index] for index in active] for key, values in visible.items()}
         visible_series = self._visible_daily_series
         self._visible_daily_items = list(visible_series.items())
         slot = 0.8 / max(1, len(visible_series))

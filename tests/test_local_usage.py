@@ -1,6 +1,6 @@
 import csv
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from data.local_usage import LocalUsage, LocalUsageScanner, export_usage, filter_usage
@@ -208,16 +208,16 @@ def test_chart_and_table_share_filters_and_switch_without_scanning(monkeypatch):
     dialog.scan.assert_not_called()
 
 
-def test_daily_models_fill_missing_days_and_keep_other_models_total():
+def test_daily_models_hide_empty_days_and_keep_other_models_total():
     from data.local_usage import daily_model_series
 
     rows = [LocalUsage("codex", "s", "project", "2026-09-01", f"model-{index}", index + 1, 0, 0, 0, index + 1)
             for index in range(10)]
     rows.append(LocalUsage("codex", "s", "project", "2026-09-03", "model-9", 3, 0, 0, 0, 3))
     days, series = daily_model_series(rows, date(2026, 9, 1), date(2026, 9, 3))
-    assert days == ["2026-09-01", "2026-09-02", "2026-09-03"]
+    assert days == ["2026-09-01", "2026-09-03"]
     assert ("", "其他") in series
-    assert all(values[1] == 0 for values in series.values())
+    assert series["codex", "model-9"][1] == 3
     assert sum(sum(values) for values in series.values()) == 58
 
 
@@ -239,12 +239,15 @@ def test_daily_chart_custom_dates_match_table_and_export_scope():
     dialog._finished(rows, 0, False)
     dialog.chart_mode.setCurrentIndex(1)
     assert not dialog.group.isEnabled()
-    assert dialog._daily_days == ["2026-09-01", "2026-09-02", "2026-09-03"]
-    assert dialog._daily_series["codex", "a"] == [100, 0, 300]
-    assert dialog._daily_series["codex", "b"] == [200, 0, 0]
+    assert dialog._daily_days == ["2026-09-01", "2026-09-03"]
+    assert dialog._daily_series["codex", "a"] == [100, 300]
+    assert dialog._daily_series["codex", "b"] == [200, 0]
     dialog.table_button.click()
     assert dialog.table.rowCount() == 3
     assert sum(row.total for row in dialog.filtered_rows()) == 600
+    dialog.chart_button.click()
+    dialog._solo_model(("codex", "b"))
+    assert dialog._daily_days == ["2026-09-01"]
 
 
 def test_interactive_legend_solo_reset_and_zoom_preservation():
@@ -255,8 +258,8 @@ def test_interactive_legend_solo_reset_and_zoom_preservation():
     app = QApplication.instance() or QApplication([])
     dialog = LocalAnalyticsDialog()
     dialog.period.setCurrentIndex(1)
-    dialog._finished([LocalUsage("codex", "s", "p", date.today().isoformat(), model, count, 0, 0, 0, count)
-                      for model, count in (("a", 100), ("b", 200))], 0, False)
+    dialog._finished([LocalUsage("codex", "s", "p", (date.today() - timedelta(days=offset)).isoformat(), model, count, 0, 0, 0, count)
+                      for offset in (0, 1) for model, count in (("a", 100), ("b", 200))], 0, False)
     dialog.chart_mode.setCurrentIndex(1)
     dialog.legend_buttons["codex", "a"].click()
     assert ("codex", "a") not in dialog._visible_daily_series
