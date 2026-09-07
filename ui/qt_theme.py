@@ -392,6 +392,18 @@ QLabel#cardTitle, QLabel#metricLabel, QLabel#statLabel {{
     font-size: 12px;
     font-weight: 500;
 }}
+QToolButton#quotaDetailsButton {{
+    color: {tokens.accent_text};
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 0 6px;
+    min-height: 0;
+    font-size: 12px;
+    font-weight: 500;
+}}
+QToolButton#quotaDetailsButton:hover {{ background: {tokens.accent_soft}; }}
+QToolButton#quotaDetailsButton:focus {{ border: 1px solid {tokens.accent}; }}
 QLabel#metricIcon {{
     background: {tokens.accent_soft};
     border: 1px solid {tokens.border};

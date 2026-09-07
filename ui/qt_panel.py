@@ -69,6 +69,7 @@ from ui.formatting import (
 )
 from ui.i18n import add_item, bind_text, current_language, tr, ui_locale
 from ui.qt_heatmap import TokenActivityHeatmap
+from ui.quota_details import QuotaDetailsDialog
 from ui.provider_picker import ProviderManagerButton, ProviderPicker as ProviderQuickCombo, ProviderShortcuts
 from ui.qt_theme import (
     app_icon,
@@ -2224,6 +2225,8 @@ class MainPanel(QFrame):
         self._theme_feedback_message = ""
         self._button_specs: list[tuple[QToolButton, str, QStyle.StandardPixmap, str]] = []
         self._minute_provider_id = ""
+        self._quota_data: TokenData | None = None
+        self._quota_details_dialog: QuotaDetailsDialog | None = None
         self._minute_current_date = ""
         self._minute_current_rows: list[dict] = []
         self._minute_current_cost_rows: list[dict] = []
@@ -2468,6 +2471,14 @@ class MainPanel(QFrame):
         self._activity_view = "annual"
         activity_header.addWidget(activity_title)
         activity_header.addWidget(self.activity_mode_segment)
+        self.quota_details_button = bind_text(QToolButton(), "额度明细")
+        self.quota_details_button.setObjectName("quotaDetailsButton")
+        self.quota_details_button.setFixedHeight(24)
+        self.quota_details_button.setAutoRaise(True)
+        self.quota_details_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        bind_text(self.quota_details_button, "查看全部额度窗口和账户指标", method="setToolTip")
+        self.quota_details_button.clicked.connect(self._open_quota_details)
+        self.quota_details_button.hide()
         for control in self.minute_controls:
             activity_header.addWidget(control)
             control.hide()
@@ -2505,6 +2516,7 @@ class MainPanel(QFrame):
             activity_header.addWidget(button)
             button.hide()
         activity_header.addWidget(self.activity_summary)
+        activity_header.addWidget(self.quota_details_button)
         activity_layout.addLayout(activity_header)
 
         self.activity_scroll = QScrollArea()
@@ -2607,6 +2619,15 @@ class MainPanel(QFrame):
         self.pricing_badge.setVisible(bool(self.pricing_badge.text()))
         self.settings_button.show()
 
+    def _open_quota_details(self) -> None:
+        if self._quota_data is None:
+            return
+        if self._quota_details_dialog is None:
+            self._quota_details_dialog = QuotaDetailsDialog(self)
+        self._quota_details_dialog.set_data(self._quota_data)
+        available = self.screen().availableGeometry()
+        self._quota_details_dialog.resize(min(560, available.width() - 32), min(590, available.height() - 64))
+        self._quota_details_dialog.show()
 
     def set_settings_save_status(self, message: str, tone: str) -> None:
         # 详细错误留在提示中，不能把共用标题栏撑宽并挤掉收起入口。
@@ -3107,6 +3128,17 @@ class MainPanel(QFrame):
             or data.quota_metrics
             or (provider_cls and provider_cls.supports_subscription_quota)
         )
+        self._quota_data = data if quota_mode else None
+        self.quota_details_button.setVisible(quota_mode)
+        if self._quota_details_dialog is not None and self._quota_details_dialog.isVisible():
+            # 外部设置变更可能在明细窗口打开时换平台或账号，关闭旧明细防止误认来源。
+            if (
+                not quota_mode or self._quota_details_dialog.provider_id != provider_id
+                or self._quota_details_dialog.account_key != data.account_key
+            ):
+                self._quota_details_dialog.reject()
+            else:
+                self._quota_details_dialog.set_data(data)
         self.trend.show()
         self.main_divider.show()
         self.activity_card.show()
