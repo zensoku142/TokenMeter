@@ -323,6 +323,28 @@ def test_daily_navigator_uses_minute_chart_density_and_synchronizes_range():
     assert dialog.navigator.isHidden()
 
 
+def test_legend_stays_on_one_row_and_scrolls_to_keyboard_focus():
+    from PySide6.QtWidgets import QApplication
+
+    from ui.local_analytics import LocalAnalyticsDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = LocalAnalyticsDialog()
+    dialog.resize(640, 550)
+    dialog._finished([LocalUsage("codex", "s", "p", date.today().isoformat(), f"long-model-name-number-{index}", 100, 0, 0, 0, 100)
+                      for index in range(8)], 0, False)
+    dialog.chart_mode.setCurrentIndex(1)
+    dialog.show()
+    app.processEvents()
+    assert dialog.legend_scroll.height() == 26
+    assert len({button.y() for button in dialog.legend_buttons.values()}) == 1
+    assert dialog.legend_scroll.horizontalScrollBar().maximum() > 0
+    last = list(dialog.legend_buttons.values())[-1]
+    last.setFocus()
+    app.processEvents()
+    assert dialog.legend_scroll.horizontalScrollBar().value() > 0
+
+
 def test_chart_hover_has_exact_counts_and_plain_text_labels(monkeypatch):
     from PySide6.QtCore import QPointF, Qt
     from PySide6.QtWidgets import QApplication

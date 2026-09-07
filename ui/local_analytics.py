@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QStyle,
     QTableWidget,
@@ -281,11 +281,19 @@ class LocalAnalyticsDialog(QDialog):
         layout.addWidget(self.date_controls)
         self.status = bind_text(QLabel(), "点击扫描后读取日志；不会连接平台或启动 WSL")
         self.status.setWordWrap(True)
-        self.legend_scroll = QWidget()
-        self.legend_layout = QGridLayout(self.legend_scroll)
+        self.legend_scroll = QScrollArea()
+        self.legend_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.legend_scroll.setWidgetResizable(True)
+        self.legend_scroll.setFixedHeight(26)
+        self.legend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.legend_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.legend_content = QWidget()
+        self.legend_layout = QHBoxLayout(self.legend_content)
         self.legend_layout.setContentsMargins(0, 0, 0, 0)
-        self.legend_layout.setHorizontalSpacing(6)
-        self.legend_layout.setVerticalSpacing(2)
+        self.legend_layout.setSpacing(8)
+        self.legend_layout.addStretch()
+        self.legend_scroll.setWidget(self.legend_content)
+        self.legend_scroll.viewport().installEventFilter(self)
         self.legend_scroll.hide()
         layout.addWidget(self.legend_scroll)
         self.table = QTableWidget(0, 7)
@@ -436,9 +444,9 @@ class LocalAnalyticsDialog(QDialog):
                 button.clicked.connect(lambda checked, current=key: self._set_model_visible(current, checked))
                 button.customContextMenuRequested.connect(lambda _point, current=key: self._solo_model(current))
                 self.legend_buttons[key] = button
+                button.installEventFilter(self)
             button = self.legend_buttons[key]
-            self.legend_layout.addWidget(button, index // 3, index % 3, Qt.AlignmentFlag.AlignLeft)
-            self.legend_layout.setColumnStretch(index % 3, 1)
+            self.legend_layout.insertWidget(index, button)
             visible = key not in self._hidden_models
             title = key[1] or "--"
             button.setText(tr(title) if len(title) <= 24 else title[:21] + "…")
@@ -466,7 +474,16 @@ class LocalAnalyticsDialog(QDialog):
         super().hideEvent(event)
 
     def eventFilter(self, watched, event):
-        if watched is self.chart.viewport() and event.type() == QEvent.Type.Leave:
+        if watched is self.legend_scroll.viewport() and event.type() == QEvent.Type.Wheel:
+            # 单行图例不挤占主图；滚轮/触控板横向浏览溢出的模型，键盘焦点也会自动滚入视口。
+            delta = event.angleDelta().x() or event.angleDelta().y()
+            bar = self.legend_scroll.horizontalScrollBar()
+            bar.setValue(bar.value() - delta)
+            event.accept()
+            return True
+        if event.type() == QEvent.Type.FocusIn and watched in self.legend_buttons.values():
+            self.legend_scroll.ensureWidgetVisible(watched, 12, 0)
+        if hasattr(self, "chart") and watched is self.chart.viewport() and event.type() == QEvent.Type.Leave:
             self.hover_tooltip.hide()
             self._hover_key = None
         return super().eventFilter(watched, event)
