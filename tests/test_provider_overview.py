@@ -146,6 +146,16 @@ def test_provider_with_unlimited_metric_is_not_shown_as_unavailable():
     assert "不限量" in texts(page.cards["copilot"])
 
 
+def test_data_refresh_does_not_reapply_whole_overview_styles(monkeypatch):
+    page = ProviderOverview()
+    styles = Mock(wraps=page.setStyleSheet)
+    monkeypatch.setattr(page, "setStyleSheet", styles)
+    page.set_data({"codex": snapshot(quota_windows=[QuotaWindow("weekly", "周额度", 20)])})
+    page.set_data({"codex": snapshot(quota_windows=[QuotaWindow("weekly", "周额度", 95)])})
+    assert styles.call_count == 0
+    assert page.cards["codex"]._gauges[0][3].property("tone") == "low"
+
+
 def test_refresh_preserves_cards_scroll_and_language_bindings():
     page = ProviderOverview()
     page.resize(640, 430)

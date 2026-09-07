@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -88,6 +89,7 @@ class ProviderOverview(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content = QWidget()
         self.cards_layout = QVBoxLayout(self.content)
+        self.cards_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         self.cards_layout.setContentsMargins(0, 0, 6, 0)
         self.cards_layout.setSpacing(8)
         self.empty = bind_text(QLabel(), "尚未配置平台，请打开账户连接")
@@ -98,6 +100,8 @@ class ProviderOverview(QWidget):
         layout.addWidget(self.scroll, 1)
         self.cards: dict[str, QFrame] = {}
         self._entry_providers: dict[str, str] = {}
+        self._style_key = None
+        self._icons_dirty = True
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(60_000)
         self._auto_timer.timeout.connect(self.auto_refresh_requested)
@@ -124,7 +128,9 @@ class ProviderOverview(QWidget):
         bind_text(self.refresh_button, "正在刷新" if refreshing else "刷新总览")
 
     def set_data(self, snapshots: dict[str, TokenData | None], *, providers: dict[str, str] | None = None, labels: dict[str, str] | None = None) -> None:
-        self._entry_providers = {key: (providers or {}).get(key, key) for key in snapshots}
+        entries = {key: (providers or {}).get(key, key) for key in snapshots}
+        self._icons_dirty = self._icons_dirty or entries != self._entry_providers
+        self._entry_providers = entries
         snapshots = {key: value for key, value in snapshots.items() if self._entry_providers[key] in PROVIDERS}
         # 保留已有卡片和滚动位置；刷新不得让用户正在阅读的行跳到顶部。
         for provider_id in set(self.cards) - snapshots.keys():
@@ -213,7 +219,12 @@ class ProviderOverview(QWidget):
                     bind_text(value, lambda amount=remaining: tr("剩余 {remaining}%", remaining=f"{amount:g}") if amount is not None else "--")
                     bar.setVisible(remaining is not None)
                     bar.setValue(round(remaining * 10) if remaining is not None else 0)
-                    bar.setProperty("tone", "stale" if stale else "low" if remaining is not None and remaining <= 10 else "normal")
+                    tone = "stale" if stale else "low" if remaining is not None and remaining <= 10 else "normal"
+                    if bar.property("tone") != tone:
+                        bar.setProperty("tone", tone)
+                        bar.style().unpolish(bar)
+                        bar.style().polish(bar)
+                        bar.update()
                     bind_text(bar, window.title, method="setAccessibleName")
                     bind_text(bar, lambda amount=remaining: tr("剩余 {remaining}%", remaining=f"{amount:g}") if amount is not None else "--", method="setAccessibleDescription")
                     bind_text(reset, lambda current=window: tr(format_reset_countdown(current.resets_at)) if current.resets_at else tr("平台未提供重置时间"))
@@ -236,6 +247,9 @@ class ProviderOverview(QWidget):
                 tr("最后成功更新：{timestamp}", timestamp=value) + " · " + tr(origin) if value else tr("等待首次更新")
             ))
         self.refresh_theme()
+
+        # 新卡片不再靠重设 QSS 隐式触发布局；显式更新滚动范围，保留当前阅读位置。
+        self.cards_layout.activate()
 
     @staticmethod
     def _label() -> QLabel:
@@ -272,9 +286,17 @@ class ProviderOverview(QWidget):
 
     def refresh_theme(self, *_args) -> None:
         tokens = current_theme()
+        key = (tokens.name, tokens.surface, tokens.elevated, tokens.border, tokens.text,
+               tokens.subtext, tokens.accent, tokens.danger, tokens.muted)
+        changed = key != self._style_key
+        if not changed and not self._icons_dirty:
+            return
         border = QColor(tokens.border)
         divider = f"rgba({border.red()}, {border.green()}, {border.blue()}, 82)"
-        self.setStyleSheet(f"""
+        # 数据更新不应重新 polish 整个看板；仅主题变化时设置 QSS，新增卡片只补图标。
+        if changed:
+            self._style_key = key
+            self.setStyleSheet(f"""
             QWidget#providerOverview {{ background: transparent; color: {tokens.text}; }}
             QFrame#overviewCard {{ background: {tokens.surface}; border: 1px solid {divider}; border-radius: 12px; }}
             QFrame#overviewCard QLabel {{ background: transparent; color: {tokens.text}; border: none; }}
@@ -289,3 +311,4 @@ class ProviderOverview(QWidget):
         for entry_id, card in self.cards.items():
             provider_id = self._entry_providers[entry_id]
             card.layout().itemAt(0).layout().itemAt(0).widget().setPixmap(provider_icon(provider_id, 24).pixmap(24, 24))
+        self._icons_dirty = False
