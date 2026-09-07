@@ -116,7 +116,7 @@ def test_empty_first_refresh_has_clear_status_and_no_stale_rows_or_brand(dialog)
     assert dialog.rows == []
     assert dialog.progress_bars == []
     assert "等待首次更新" in dialog.updated.text()
-    assert "暂无可用额度" in dialog.notice.text()
+    assert "请检查账户连接配置" in dialog.notice.text()
     assert dialog.dashboard_button.isHidden()
     assert dialog.brand.pixmap().isNull()
     assert "Codex" not in dialog.windowTitle()

@@ -2213,6 +2213,7 @@ class MainPanel(QFrame):
     close_requested = Signal()
     theme_requested = Signal(str)
     provider_selected = Signal(str)
+    overview_requested = Signal()
     provider_configuration_changed = Signal(str, bool)
     activity_height_changed = Signal(int)
 
@@ -2566,10 +2567,14 @@ class MainPanel(QFrame):
         footer.addWidget(self.status_text)
         footer.addStretch(1)
         footer.addWidget(self.updated_text)
+        self.overview_button = bind_text(QToolButton(), "平台总览")
+        self.overview_button.clicked.connect(self.overview_requested)
+        footer.addWidget(self.overview_button)
         content.addWidget(footer_widget)
         # 概览和设置共用面板主体，保留顶部拖动、主题切换和收起入口。
         self.content_stack = QStackedWidget()
         self.content_stack.addWidget(body)
+        self.provider_overview = None
         root.addWidget(self.content_stack, 1)
 
         configured_mode = str(config_manager.get("UI_THEME", "dark"))
@@ -2621,6 +2626,19 @@ class MainPanel(QFrame):
         self._update_provider_shortcuts_visibility()
         self.pricing_badge.setVisible(bool(self.pricing_badge.text()))
         self.settings_button.show()
+
+    def show_provider_overview(self):
+        # 保留 show_overview 的旧语义（返回单平台面板）；总览按需创建以免拖慢启动。
+        if self.provider_overview is None:
+            from ui.provider_overview import ProviderOverview
+
+            self.provider_overview = ProviderOverview(self)
+            self.content_stack.addWidget(self.provider_overview)
+            self.provider_overview.back_requested.connect(self.show_overview)
+        self.show_overview()
+        self.content_stack.setCurrentWidget(self.provider_overview)
+        self._update_provider_shortcuts_visibility()
+        return self.provider_overview
 
     def _open_quota_details(self) -> None:
         if self._quota_data is None:

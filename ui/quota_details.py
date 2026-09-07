@@ -25,6 +25,7 @@ from data.store import TokenData
 from ui.formatting import format_quota_metric, format_reset_countdown, quota_used_percent
 from ui.i18n import bind_text, tr
 from ui.provider_branding import provider_icon
+from ui.provider_overview import provider_status_message
 from ui.qt_theme import ThemeTokens, current_theme, theme_controller
 
 _SOURCE_NAMES = {
@@ -168,6 +169,9 @@ class QuotaDetailsDialog(QDialog):
             else "暂无可用额度，请检查账户配置或查看官方页面" if not has_quota
             else ""
         )
+        # 与总览共用恢复文案；错误码优先，避免失效凭据只提示用户不断刷新。
+        if data.errors or data.refresh_error_codes:
+            message = provider_status_message(data)
         bind_text(self.notice, message)
         self.notice.setVisible(bool(message))
         # TokenData/列表会原地更新；复制冻结窗口和指标的元组，才能准确识别行内容与账号变化。

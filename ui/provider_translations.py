@@ -1,6 +1,20 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "平台总览": ("Overview", "平台總覽", "全体表示", "전체 현황"),
+    "刷新总览": ("Refresh overview", "重新整理總覽", "全体を更新", "전체 새로고침"),
+    "正在刷新": ("Refreshing", "正在重新整理", "更新中", "새로고침 중"),
+    "详情": ("Details", "詳情", "詳細", "상세"),
+    "尚未采集，点击刷新总览": ("Not collected yet. Refresh the overview.", "尚未採集，點擊重新整理總覽", "未取得です。全体を更新してください。", "아직 수집되지 않았습니다. 전체를 새로고침하세요."),
+    "登录已失效，请重新连接；下方仅为上次记录": ("Sign-in expired. Reconnect; values below are previous records.", "登入已失效，請重新連線；下方僅為上次紀錄", "認証が失効しました。再接続してください。下記は前回の記録です。", "로그인이 만료되었습니다. 다시 연결하세요. 아래는 이전 기록입니다."),
+    "请检查账户连接配置": ("Check the account connection settings.", "請檢查帳戶連線設定", "アカウント接続設定を確認してください。", "계정 연결 설정을 확인하세요."),
+    "接口限流，自动采集将在退避结束后重试": ("Rate limited. Automatic collection will retry after cooldown.", "介面限流，自動採集將在退避結束後重試", "レート制限中です。待機後に自動取得を再試行します。", "요청이 제한되었습니다. 대기 후 자동 수집을 재시도합니다."),
+    "当前显示上次记录，请留意成功更新时间": ("Showing previous records. Check the last successful update time.", "目前顯示上次紀錄，請留意成功更新時間", "前回の記録です。最終更新成功時刻を確認してください。", "이전 기록입니다. 마지막 업데이트 성공 시간을 확인하세요."),
+    "仅展示本机已配置平台；各平台额度和币种分别计算": ("Configured providers on this device; quotas and currencies stay separate.", "僅顯示本機已設定平台；各平台額度和幣別分別計算", "この端末で設定済みのプロバイダーです。利用枠と通貨は別々に表示します。", "이 기기에 설정된 공급자입니다. 한도와 통화는 각각 표시합니다."),
+    "尚未配置平台，请打开账户连接": ("No providers configured. Open account connections.", "尚未設定平台，請開啟帳戶連線", "プロバイダー未設定です。アカウント接続を開いてください。", "설정된 공급자가 없습니다. 계정 연결을 여세요."),
+    "剩余 {remaining}%": ("{remaining}% remaining", "剩餘 {remaining}%", "残り {remaining}%", "{remaining}% 남음"),
+    "还有 {count} 个额度窗口，请查看详情": ("{count} more quota windows. See details.", "還有 {count} 個額度視窗，請查看詳情", "他に {count} 個の利用枠があります。詳細を確認してください。", "한도 기간이 {count}개 더 있습니다. 상세를 확인하세요."),
+    "暂无可用额度，请查看详情": ("Quota unavailable. See details.", "暫無可用額度，請查看詳情", "利用枠を取得できません。詳細を確認してください。", "한도를 확인할 수 없습니다. 상세를 확인하세요."),
     "连接测试已取消。": ("Connection test cancelled.", "連線測試已取消。", "接続テストをキャンセルしました。", "연결 테스트가 취소되었습니다."),
     "请先在全部平台中重新启用此平台。": ("Re-enable this provider under All providers first.", "請先在全部平台中重新啟用此平台。", "先に「すべてのプロバイダー」でこのプロバイダーを有効にしてください。", "먼저 모든 공급자에서 이 공급자를 다시 활성화하세요."),
     "配置已变化，请重新测试连接。": ("Configuration changed. Please test the connection again.", "設定已變更，請重新測試連線。", "設定が変更されました。接続を再テストしてください。", "설정이 변경되었습니다. 연결을 다시 테스트하세요."),

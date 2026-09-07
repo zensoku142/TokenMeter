@@ -220,6 +220,9 @@ class FloatingWidget(QWidget):
             str, tuple[dict[str, object], bool, str]
         ] = {}
         self._provider_results: dict[str, TokenData] = {}
+        self._overview_ids: list[str] = []
+        self._overview_refresh_queue: list[str] = []
+        self._overview_refresh_active: str | None = None
         self._provider_last_started: dict[str, float] = {}
         self._provider_task_started: dict[str, float] = {}
         self._provider_refresh_backoff: dict[tuple[str, str], tuple[int, float]] = {}
@@ -412,7 +415,8 @@ class FloatingWidget(QWidget):
         panel.header.dragged.connect(self._move_drag)
         panel.header.released.connect(self._end_drag)
         panel.settings_requested.connect(self.open_settings)
-        panel.refresh_requested.connect(self.refresh)
+        panel.refresh_requested.connect(self._refresh_from_panel)
+        panel.overview_requested.connect(self._open_provider_overview)
         panel.provider_selected.connect(self._switch_provider)
         panel.provider_configuration_changed.connect(self._on_provider_configuration_changed)
         panel.close_requested.connect(self.collapse_panel)
@@ -804,6 +808,8 @@ class FloatingWidget(QWidget):
             elif self._expanded:
                 if self._has_settings_child():
                     self._settings_window.reject()
+                elif self.panel is not None and self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
+                    self.panel.show_overview()
                 else:
                     self.collapse_panel()
             event.accept()
@@ -1166,6 +1172,9 @@ class FloatingWidget(QWidget):
             self._apply_update()
         if self.panel is not None:
             self.panel.provider_shortcuts.refresh()
+        if self.__dict__.get("_overview_opened", False):
+            self._overview_ids = configured_provider_ids()
+            self._update_provider_overview()
         self._sync_vpet()
         # 设置保存后允许所有失效 Provider 各验证一次；验证成功后恢复定时采集，
         # 仍然失效则只重新进入一次通知周期。
@@ -1242,6 +1251,74 @@ class FloatingWidget(QWidget):
         # 旧 Provider 继续后台完成；回调按最新 ACTIVE_PROVIDER 决定是否更新界面。
         self.refresh(force=True, config_snapshot=config_snapshot)
 
+    def _open_provider_overview(self) -> None:
+        panel = self._ensure_panel()
+        created = panel.provider_overview is None
+        overview = panel.show_provider_overview()
+        if created:
+            overview.refresh_requested.connect(self._refresh_overview)
+            overview.provider_selected.connect(self._overview_select_provider)
+            overview.connection_requested.connect(self.open_settings)
+        self._overview_ids = configured_provider_ids()
+        self._overview_opened = True
+        self._update_provider_overview()
+
+    def _overview_select_provider(self, provider_id: str) -> None:
+        self.panel.show_overview()
+        self._switch_provider(provider_id)
+
+    def _refresh_from_panel(self) -> None:
+        if self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
+            self._refresh_overview()
+        else:
+            self.refresh()
+
+    def _update_provider_overview(self) -> None:
+        if not self.__dict__.get("_overview_opened", False):
+            return
+        if self.panel is None or self.panel.provider_overview is None:
+            return
+        captured = dict(config_manager.all_config())
+        snapshots = {}
+        for provider_id in self._overview_ids:
+            if provider_id in captured.get("DISABLED_PROVIDER_IDS", []):
+                continue
+            captured["ACTIVE_PROVIDER"] = provider_id
+            account_key = TokenData.account_key_for_config(captured)
+            data = self._provider_results.get(provider_id)
+            if self._data.per_provider and self._data.per_provider[0].provider_id == provider_id:
+                data = self._data
+            # 外部 CLI 可直接换号；总览也必须校验身份，不能仅凭平台 ID 复用历史。
+            if data is not None and data.account_key != account_key:
+                data = None
+            snapshots[provider_id] = data
+        self.panel.provider_overview.set_data(snapshots)
+        self.panel.provider_overview.set_refreshing(bool(
+            self._overview_refresh_queue or self._overview_refresh_active
+        ))
+
+    def _refresh_overview(self) -> None:
+        if self._closed or self._overview_refresh_queue or self._overview_refresh_active:
+            return
+        self._overview_ids = configured_provider_ids()
+        self._overview_refresh_queue = list(self._overview_ids)
+        self._advance_overview_refresh()
+
+    def _advance_overview_refresh(self) -> None:
+        if self._closed:
+            return
+        self._overview_refresh_active = None
+        while self._overview_refresh_queue:
+            provider_id = self._overview_refresh_queue.pop(0)
+            # 逐个发起轻量采集，复用按平台去重和退避；不改变用户的后台同步设置。
+            if self._start_provider_refresh(
+                provider_id, dict(config_manager.all_config()),
+                lightweight=True, queue_if_busy=False, reason="overview",
+            ):
+                self._overview_refresh_active = provider_id
+                break
+        self._update_provider_overview()
+
     def refresh(
         self,
         *,
@@ -1292,7 +1369,7 @@ class FloatingWidget(QWidget):
                 self._mimo_renewal_attempted = False
         now = time.monotonic()
         if (
-            reason in {"periodic_current", "periodic_background"}
+            reason in {"periodic_current", "periodic_background", "overview"}
             and provider_id in self._auth_expired_providers
             and now - self._provider_last_started.get(provider_id, now) < AUTH_RECHECK_INTERVAL_SECONDS
         ):
@@ -1307,7 +1384,7 @@ class FloatingWidget(QWidget):
         ).strip().lower()
         backoff = self._provider_refresh_backoff.get((provider_id, account_key))
         if (
-            reason in {"periodic_current", "periodic_background"}
+            reason in {"periodic_current", "periodic_background", "overview"}
             and backoff is not None
             and time.monotonic() < backoff[1]
         ):
@@ -1404,6 +1481,10 @@ class FloatingWidget(QWidget):
             if self._in_flight_requests.get(provider_id) != request_id:
                 return
             self._in_flight_requests.pop(provider_id, None)
+            if provider_id == self.__dict__.get("_overview_refresh_active"):
+                # 包括删除平台/换号的早退路径；完成后始终推进这一批，避免按钮永久禁用。
+                self._overview_refresh_active = None
+                QTimer.singleShot(0, self._advance_overview_refresh)
             started_at = self._provider_task_started.pop(provider_id, None)
             pending = self._pending_refreshes.pop(provider_id, None)
             if provider_id in current_config.get("DISABLED_PROVIDER_IDS", []):
@@ -1459,6 +1540,7 @@ class FloatingWidget(QWidget):
             self._notify_low_quota(result, provider_id, current_account_key=current_account_key)
         if is_current:
             self._apply_update()
+        self._update_provider_overview()
         if pending is not None:
             QTimer.singleShot(
                 0,
