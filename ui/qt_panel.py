@@ -2230,7 +2230,6 @@ class MainPanel(QFrame):
     theme_requested = Signal(str)
     provider_selected = Signal(str)
     overview_requested = Signal()
-    profile_quota_observed = Signal(str, str, str, object)
     provider_configuration_changed = Signal(str, bool)
     activity_height_changed = Signal(int)
 
@@ -2379,15 +2378,13 @@ class MainPanel(QFrame):
         self.detail_action = bind_text(QAction(self), "平台详情")
         self.overview_action = bind_text(QAction(self), "平台总览")
         self.analytics_action = bind_text(QAction(self), "本机统计")
-        self.profiles_action = bind_text(QAction(self), "账户档案")
-        for action in (self.detail_action, self.overview_action, self.analytics_action, self.profiles_action):
+        for action in (self.detail_action, self.overview_action, self.analytics_action):
             action.setCheckable(True)
             self.view_menu.addAction(action)
         self.detail_action.setChecked(True)
         self.detail_action.triggered.connect(self.show_overview)
         self.overview_action.triggered.connect(self.overview_requested)
         self.analytics_action.triggered.connect(self._open_local_analytics)
-        self.profiles_action.triggered.connect(self._open_account_profiles)
         for button in (self.view_button, self.settings_button, self.refresh_button, self.close_button):
             header_layout.addWidget(button)
         root.addWidget(self.header)
@@ -2604,7 +2601,6 @@ class MainPanel(QFrame):
         footer.addStretch(1)
         footer.addWidget(self.updated_text)
         self._local_analytics_dialog = None
-        self._account_profiles_page = None
         content.addWidget(footer_widget)
         # 概览和设置共用面板主体，保留顶部拖动、主题切换和收起入口。
         self.content_stack = QStackedWidget()
@@ -2667,7 +2663,7 @@ class MainPanel(QFrame):
         self._select_view_action(self.detail_action)
 
     def _select_view_action(self, selected) -> None:
-        for action in (self.detail_action, self.overview_action, self.analytics_action, self.profiles_action):
+        for action in (self.detail_action, self.overview_action, self.analytics_action):
             action.setChecked(action is selected)
 
     def _back_to_panel(self) -> None:
@@ -2716,16 +2712,6 @@ class MainPanel(QFrame):
             self.content_stack.addWidget(self._local_analytics_dialog)
             self._local_analytics_dialog.finished.connect(self.show_overview)
         self._show_secondary_page(self._local_analytics_dialog, self.analytics_action)
-
-    def _open_account_profiles(self) -> None:
-        if self._account_profiles_page is None:
-            from ui.account_profiles import AccountProfilesPage
-
-            self._account_profiles_page = AccountProfilesPage(self)
-            self._account_profiles_page.quota_observed.connect(self.profile_quota_observed)
-            self.content_stack.addWidget(self._account_profiles_page)
-        self._account_profiles_page.reload_profiles()
-        self._show_secondary_page(self._account_profiles_page, self.profiles_action)
 
     def set_settings_save_status(self, message: str, tone: str) -> None:
         # 详细错误留在提示中，不能把共用标题栏撑宽并挤掉收起入口。

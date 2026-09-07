@@ -263,6 +263,7 @@ class SettingsWindow(QDialog):
     save_state_changed = Signal(str, str)
     pet_update_started = Signal()
     pet_update_finished = Signal()
+    profile_quota_observed = Signal(str, str, str, object)
 
     def __init__(
         self,
@@ -354,6 +355,9 @@ class SettingsWindow(QDialog):
         self.provider_combo.configuration_changed.connect(self._on_provider_configuration_changed)
         picker_row.addWidget(picker_label)
         picker_row.addWidget(self.provider_combo, 1)
+        self.manage_profiles_button = bind_text(QPushButton(), "管理多账户")
+        self.manage_profiles_button.clicked.connect(lambda: self.open_account_profiles())
+        picker_row.addWidget(self.manage_profiles_button)
 
         # Credentials card — rebuild when the selected provider changes.
         self.credentials_card = QFrame()
@@ -731,6 +735,11 @@ class SettingsWindow(QDialog):
         update_page_layout.addWidget(self.update_card)
         update_page_layout.addStretch(1)
 
+        self.account_profiles_page = None
+        self._profiles_layout = self._add_settings_page("多账户", "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。")
+        self._profiles_tab_index = self.tabs.count() - 1
+        self.tabs.currentChanged.connect(self._ensure_account_profiles)
+
         root.addWidget(self.tabs, 1)
         self.tabs.currentChanged.connect(lambda _index: self._sync_window_size())
         self._load_values()
@@ -750,6 +759,25 @@ class SettingsWindow(QDialog):
         controller = language_controller()
         if controller is not None:
             controller.changed.connect(self._on_language_state_changed)
+
+    def _ensure_account_profiles(self, index):
+        if index != self._profiles_tab_index or self.account_profiles_page is not None:
+            return
+        # 档案管理属于账户设置；仅切换到此页时加载，避免打开外观设置也启动账号采集。
+        from ui.account_profiles import AccountProfilesPage
+
+        self.account_profiles_page = AccountProfilesPage(self, embedded_settings=True)
+        self.account_profiles_page.quota_observed.connect(self.profile_quota_observed)
+        self.account_profiles_page.layout().setContentsMargins(0, 0, 0, 0)
+        self._profiles_layout.addWidget(self.account_profiles_page, 1)
+        self._sync_window_size()
+
+    def open_account_profiles(self, profile_id=None):
+        self.tabs.setCurrentIndex(self._profiles_tab_index)
+        self._ensure_account_profiles(self._profiles_tab_index)
+        self.account_profiles_page.reload_profiles()
+        if profile_id:
+            self.account_profiles_page.show_details(profile_id)
 
     def _refresh_pet_controls(self, message: str = "") -> None:
         busy = self._pet_worker is not None

@@ -154,8 +154,9 @@ class _ProfileTask(QRunnable):
 class AccountProfilesPage(ProviderOverview):
     quota_observed = Signal(str, str, str, object)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, embedded_settings=False):
         super().__init__(parent)
+        self._embedded_settings = embedded_settings
         self.profiles = []
         self.results = {}
         self._queue = []
@@ -180,8 +181,11 @@ class AccountProfilesPage(ProviderOverview):
             profiles = store.load_profiles()
         except (OSError, ValueError):
             bind_text(self.hint, "账户档案无法读取，请检查数据文件。")
+            self.hint.show()
             self._queue.clear()
             return False
+        bind_text(self.hint, "同一平台可添加多个账户档案；各账户独立采集和缓存。")
+        self.hint.setVisible(not self._embedded_settings)
         previous = {profile["id"]: profile["revision"] for profile in self.profiles}
         current = {profile["id"]: profile["revision"] for profile in profiles}
         for profile_id in set(previous) | set(current):

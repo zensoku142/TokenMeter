@@ -9,6 +9,7 @@ from shiboken6 import ownedByPython
 @pytest.fixture(autouse=True)
 def isolate_native_credentials(monkeypatch, tmp_path):
     from config import credentials
+    from config import account_profiles
     from data import history
 
     # 项目直接调用 Win32 凭据 API，不受 PYTHON_KEYRING_BACKEND 控制；测试默认断开真实后端。
@@ -16,6 +17,7 @@ def isolate_native_credentials(monkeypatch, tmp_path):
     monkeypatch.setattr(credentials, "_advapi32", None)
     # 自动统计会写入可选本地快照；每个测试必须与用户的真实用量数据库隔离。
     monkeypatch.setattr(history, "DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr(account_profiles, "_path", lambda: tmp_path / "account-profiles.json")
     # CLI 自动发现也只能看到临时目录；各账号用例再显式注入自己的登录文件。
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.delenv("CODEX_HOME", raising=False)

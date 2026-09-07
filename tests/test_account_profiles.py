@@ -121,12 +121,27 @@ def test_profile_notification_opens_its_profile_instead_of_default_account(monke
     monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "QUOTA_ALERT_ENABLED": True})
     widget = widget_stub()
     widget.expand_panel = Mock()
+    widget._settings_window = Mock()
     widget._switch_provider = Mock()
     result = TokenData(status="ok", account_key="profile-account", last_success_at=datetime.now(),
                        quota_source="interface", quota_windows=[QuotaWindow("weekly", "周额度", 95)])
     widget._notify_profile_quota("profile-id", "Work", "codex", result)
     assert "Work" in widget.tray.showMessage.call_args.args[0]
     widget.handle_auth_expired_notification_click()
-    widget.panel._open_account_profiles.assert_called_once_with()
-    widget.panel._account_profiles_page.show_details.assert_called_once_with("profile-id")
+    widget.open_settings.assert_called_once_with()
+    widget._settings_window.open_account_profiles.assert_called_once_with("profile-id")
     widget._switch_provider.assert_not_called()
+
+
+def test_profile_management_is_lazy_inside_settings(monkeypatch):
+    from ui.qt_settings import SettingsWindow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(config_manager, "load_config", lambda: dict(DEFAULT_CONFIG))
+    window = SettingsWindow()
+    assert window.account_profiles_page is None
+    window.manage_profiles_button.click()
+    assert window.tabs.currentIndex() == window._profiles_tab_index
+    assert window.account_profiles_page is not None
+    assert window.isAncestorOf(window.account_profiles_page)
+    window._autosave_ready = False

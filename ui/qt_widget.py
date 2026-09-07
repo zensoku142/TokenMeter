@@ -427,7 +427,6 @@ class FloatingWidget(QWidget):
         panel.settings_requested.connect(self.open_settings)
         panel.refresh_requested.connect(self._refresh_from_panel)
         panel.overview_requested.connect(self._open_provider_overview)
-        panel.profile_quota_observed.connect(self._notify_profile_quota)
         panel.provider_selected.connect(self._switch_provider)
         panel.provider_configuration_changed.connect(self._on_provider_configuration_changed)
         panel.close_requested.connect(self.collapse_panel)
@@ -1145,6 +1144,7 @@ class FloatingWidget(QWidget):
                 embedded=True,
             )
             self._settings_window.finished.connect(panel.show_overview)
+            self._settings_window.profile_quota_observed.connect(self._notify_profile_quota)
             self._settings_window.pet_update_started.connect(self._pause_vpet_update)
             self._settings_window.pet_update_finished.connect(self._resume_vpet_update)
             self._settings_window.save_state_changed.connect(panel.set_settings_save_status)
@@ -1280,8 +1280,9 @@ class FloatingWidget(QWidget):
         self._switch_provider(provider_id)
 
     def _refresh_from_panel(self) -> None:
-        if self.panel._account_profiles_page is not None and self.panel.content_stack.currentWidget() is self.panel._account_profiles_page:
-            self.panel._account_profiles_page.refresh_profiles()
+        settings = self.__dict__.get("_settings_window")
+        if settings is not None and settings.isVisible() and settings.account_profiles_page is not None and settings.tabs.currentIndex() == settings._profiles_tab_index:
+            settings.account_profiles_page.refresh_profiles()
         elif self.panel._local_analytics_dialog is not None and self.panel.content_stack.currentWidget() is self.panel._local_analytics_dialog:
             self.panel._local_analytics_dialog.scan()
         elif self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
@@ -1855,8 +1856,8 @@ class FloatingWidget(QWidget):
             if quota_provider and (quota_profile or quota_provider not in config_manager.get("DISABLED_PROVIDER_IDS", [])):
                 panel = self._ensure_panel()
                 if quota_profile:
-                    panel._open_account_profiles()
-                    panel._account_profiles_page.show_details(quota_profile[0])
+                    self.open_settings()
+                    self._settings_window.open_account_profiles(quota_profile[0])
                 else:
                     panel.show_overview()
                     self._switch_provider(quota_provider)

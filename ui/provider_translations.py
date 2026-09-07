@@ -1,6 +1,9 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "多账户": ("Profiles", "多帳戶", "複数アカウント", "다중 계정"),
+    "管理多账户": ("Manage profiles", "管理多帳戶", "アカウント管理", "계정 관리"),
+    "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。": ("Manage multiple connections per provider without changing the default connection or CLI logins.", "獨立管理同一平台的多個連線，不修改預設連線或 CLI 登入。", "既定の接続や CLI ログインを変更せず、同じプロバイダーの複数の接続を管理します。", "기본 연결이나 CLI 로그인을 변경하지 않고 공급자별 여러 연결을 관리합니다."),
     "账户档案": ("Account profiles", "帳戶檔案", "アカウントプロファイル", "계정 프로필"),
     "账户名称": ("Account name", "帳戶名稱", "アカウント名", "계정 이름"),
     "添加账户": ("Add account", "新增帳戶", "アカウント追加", "계정 추가"),

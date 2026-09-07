@@ -4730,6 +4730,7 @@ def test_settings_groups_configuration_into_scrolling_pages_with_separate_pet_pa
 
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
         "账户连接", "外观", "悬浮与启动", "桌宠", "采集与统计", "数据存储", "更新与关于",
+        "多账户",
     ]
     assert window.tabs.widget(0) is window.scroll_area
     for index, control in (
