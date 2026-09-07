@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -56,8 +57,10 @@ class ProviderOverview(QWidget):
         toolbar = QHBoxLayout()
         self.back_button = bind_text(QPushButton(), "返回面板")
         self.back_button.clicked.connect(self.back_requested)
-        toolbar.addWidget(self.back_button)
-        toolbar.addWidget(bind_text(QLabel(), "平台总览"), 1)
+        self.back_button.hide()
+        title = bind_text(QLabel(), "平台总览")
+        title.setObjectName("sectionTitle")
+        toolbar.addWidget(title, 1)
         self.refresh_button = bind_text(QPushButton(), "刷新总览")
         self.refresh_button.clicked.connect(self.refresh_requested)
         toolbar.addWidget(self.refresh_button)
@@ -126,7 +129,9 @@ class ProviderOverview(QWidget):
             # 复用只读快照供语言切换重算摘要，不复制其中的完整历史记录。
             summary, status, timestamp = (card_layout.itemAt(i).widget() for i in range(1, 4))
             bind_text(summary, lambda pid=provider_id, value=data: self._summary(pid, value))
-            bind_text(status, provider_status_message(data))
+            message = provider_status_message(data)
+            bind_text(status, message)
+            status.setVisible(bool(message))
             updated = data.last_success_at.strftime("%Y-%m-%d %H:%M:%S") if data and data.last_success_at else ""
             source = ("缓存数据" if data.quota_source.startswith("cache") else
                       "本机快照" if data.quota_source == "local_snapshot" else "接口数据") if data else ""
@@ -168,10 +173,13 @@ class ProviderOverview(QWidget):
 
     def refresh_theme(self, *_args) -> None:
         tokens = current_theme()
+        border = QColor(tokens.border)
+        divider = f"rgba({border.red()}, {border.green()}, {border.blue()}, 82)"
         self.setStyleSheet(f"""
-            QWidget#providerOverview {{ background: {tokens.surface}; color: {tokens.text}; }}
-            QFrame#overviewCard {{ background: {tokens.elevated}; border: 1px solid {tokens.border}; border-radius: 8px; }}
+            QWidget#providerOverview {{ background: {tokens.window}; color: {tokens.text}; }}
+            QFrame#overviewCard {{ background: {tokens.surface}; border: 1px solid {divider}; border-radius: 12px; }}
             QFrame#overviewCard QLabel {{ background: transparent; color: {tokens.text}; border: none; }}
+            QWidget#providerOverview QPushButton {{ min-height: 28px; padding: 0 12px; border: 1px solid {divider}; border-radius: 9px; }}
         """)
         for provider_id, card in self.cards.items():
             card.layout().itemAt(0).layout().itemAt(0).widget().setPixmap(provider_icon(provider_id, 24).pixmap(24, 24))

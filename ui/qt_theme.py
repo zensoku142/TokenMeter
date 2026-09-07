@@ -1019,6 +1019,23 @@ def fluent_icon(
     active_color: str | None = None,
 ) -> QIcon:
     """Return a Windows Fluent line icon with consistent normal/hover states."""
+    if name == "views":
+        # 几何视图图标不依赖系统图标字体，与标题栏相同的颜色和笔画在所有机器上稳定显示。
+        icon = QIcon()
+        tokens = current_theme()
+        for mode, color in ((QIcon.Mode.Normal, tokens.subtext), (QIcon.Mode.Active, tokens.accent_hover)):
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(color), 1.3))
+            cell = (size - 7) / 2
+            for x in (2, size / 2 + 1.5):
+                for y in (2, size / 2 + 1.5):
+                    painter.drawRoundedRect(QRectF(x, y, cell, cell), 1, 1)
+            painter.end()
+            icon.addPixmap(pixmap, mode)
+        return icon
     family = _fluent_icon_family()
     glyph = _FLUENT_GLYPHS.get(name)
     if family is None or glyph is None:

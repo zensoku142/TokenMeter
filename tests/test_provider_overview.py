@@ -49,10 +49,33 @@ def test_overview_is_lazy_and_preserves_original_default_page():
     panel = MainPanel()
     assert panel.provider_overview is None
     assert panel.content_stack.currentIndex() == 0
+    assert panel.settings_back_button.isHidden()
     page = panel.show_provider_overview()
+    assert not panel.settings_back_button.isHidden()
+    assert panel.provider_manage_button.isHidden()
     assert page is panel.show_provider_overview()
     panel.show_overview()
     assert panel.content_stack.currentIndex() == 0
+
+
+def test_analytics_uses_the_same_header_back_button_and_no_native_window():
+    panel = MainPanel()
+    panel._open_local_analytics()
+    assert panel.content_stack.currentWidget() is panel._local_analytics_dialog
+    assert not panel._local_analytics_dialog.isWindow()
+    assert panel.provider_manage_button.isHidden()
+    assert not panel.settings_back_button.isHidden()
+    panel.settings_back_button.click()
+    assert panel.content_stack.currentIndex() == 0
+
+
+def test_header_refresh_in_local_analytics_only_scans_logs():
+    widget = widget_stub()
+    widget.refresh = Mock()
+    widget.panel.content_stack.currentWidget.return_value = widget.panel._local_analytics_dialog
+    widget._refresh_from_panel()
+    widget.panel._local_analytics_dialog.scan.assert_called_once_with()
+    widget.refresh.assert_not_called()
 
 
 def test_empty_unknown_and_mixed_currencies_do_not_invent_values():

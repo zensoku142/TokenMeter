@@ -6,9 +6,9 @@ import os
 from collections import defaultdict
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -21,11 +21,15 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from config import runtime as config_manager
 from data.local_usage import LocalUsageScanner, export_usage, filter_usage
+from ui.activity import compact_tokens
 from ui.i18n import add_item, bind_text, language_controller, tr
+from ui.qt_settings import _SettingsComboBox
+from ui.qt_theme import current_theme, theme_controller
 
 
 class _ScanSignals(QObject):
@@ -48,8 +52,11 @@ class _ScanTask(QRunnable):
 
 
 class LocalAnalyticsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, embedded=False):
         super().__init__(parent)
+        self.setObjectName("localAnalytics")
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
         bind_text(self, "本机统计", method="setWindowTitle")
         self.resize(760, 560)
         self.setMinimumSize(480, 360)
@@ -57,11 +64,31 @@ class LocalAnalyticsDialog(QDialog):
         self.rows = []
         self.issues = 0
         self.busy = False
+        self.scanned = False
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 14, 22, 14)
+        layout.setSpacing(10)
+        heading = QHBoxLayout()
+        title = bind_text(QLabel(), "本机统计")
+        title.setObjectName("sectionTitle")
+        heading.addWidget(title, 1)
+        self.directory_button = bind_text(QPushButton(), "日志目录")
+        self.directory_button.setCheckable(True)
+        heading.addWidget(self.directory_button)
+        self.export_button = bind_text(QPushButton(), "导出统计")
+        self.export_button.clicked.connect(self.export)
+        self.export_button.setEnabled(False)
+        heading.addWidget(self.export_button)
+        layout.addLayout(heading)
         notice = bind_text(QLabel(), "仅统计所选目录的本机日志，账户归属未知；不代表订阅额度或实际账单")
         notice.setWordWrap(True)
+        notice.setObjectName("analyticsNote")
         layout.addWidget(notice)
-        form = QFormLayout()
+        self.directory_panel = QWidget()
+        form = QFormLayout(self.directory_panel)
+        form.setContentsMargins(0, 0, 0, 0)
+        self.directory_panel.hide()
+        self.directory_button.toggled.connect(self.directory_panel.setVisible)
         self.paths = {}
         self.browse_buttons = []
         defaults = {
@@ -79,18 +106,19 @@ class LocalAnalyticsDialog(QDialog):
             row.addWidget(browse)
             self.browse_buttons.append(browse)
             form.addRow(provider.title(), row)
-        layout.addLayout(form)
+        layout.addWidget(self.directory_panel)
         actions = QHBoxLayout()
         self.scan_button = bind_text(QPushButton(), "扫描本机日志")
+        self.scan_button.setObjectName("primaryButton")
         self.scan_button.clicked.connect(self.scan)
         actions.addWidget(self.scan_button)
-        self.period = QComboBox()
+        self.period = _SettingsComboBox()
         for title, days in (("今日", 1), ("最近 7 天", 7), ("最近 30 天", 30), ("全部", 0)):
             add_item(self.period, title, days)
         self.period.setCurrentIndex(1)
         self.period.currentIndexChanged.connect(self.render)
         actions.addWidget(self.period)
-        self.group = QComboBox()
+        self.group = _SettingsComboBox()
         for title, key in (("模型", "model"), ("项目", "project"), ("日期", "day"), ("会话", "session")):
             add_item(self.group, title, key)
         self.group.currentIndexChanged.connect(self.render)
@@ -101,34 +129,63 @@ class LocalAnalyticsDialog(QDialog):
         self.project.textChanged.connect(self.render)
         actions.addWidget(self.project, 1)
         layout.addLayout(actions)
+        self.total_label = QLabel("--")
+        self.total_label.setObjectName("analyticsTotal")
+        layout.addWidget(self.total_label)
         self.status = bind_text(QLabel(), "点击扫描后读取日志；不会连接平台或启动 WSL")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.table = QTableWidget(0, 7)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._refresh_headers()
         controller = language_controller()
         if controller is not None:
             controller.changed.connect(self._refresh_headers)
+        self.table.horizontalHeader().setMinimumSectionSize(48)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table, 1)
         footer = QHBoxLayout()
-        self.export_button = bind_text(QPushButton(), "导出统计")
-        self.export_button.clicked.connect(self.export)
-        self.export_button.setEnabled(False)
-        footer.addWidget(self.export_button)
+        footer.addWidget(bind_text(QLabel(), "输入包含缓存；悬停查看精确 Token 数"))
         footer.addStretch()
         close = bind_text(QPushButton(), "关闭")
         close.clicked.connect(self.reject)
         footer.addWidget(close)
+        close.setVisible(not embedded)
         layout.addLayout(footer)
+        theme_controller().changed.connect(self.refresh_theme)
+        self.refresh_theme()
 
     def _refresh_headers(self, *_args):
         # QTableWidgetItem 不支持现有弱引用文字绑定；表头随语言信号原位刷新。
         self.table.setHorizontalHeaderLabels([tr(name) for name in (
             "平台", "分组", "Token", "输入", "输出", "缓存读取", "缓存写入",
         )])
+        if hasattr(self, "export_button") and hasattr(self, "status"):
+            self.render()
+
+    def refresh_theme(self, *_args):
+        tokens = current_theme()
+        border = QColor(tokens.border)
+        divider = f"rgba({border.red()}, {border.green()}, {border.blue()}, 82)"
+        self.setStyleSheet(f"""
+            QDialog#localAnalytics {{ background: {tokens.window}; color: {tokens.text}; }}
+            QDialog#localAnalytics QLabel#analyticsNote {{ color: {tokens.subtext}; }}
+            QDialog#localAnalytics QLabel#analyticsTotal {{ color: {tokens.value}; font-size: 26px; font-weight: 600; }}
+            QDialog#localAnalytics QPushButton {{ min-height: 28px; padding: 0 12px; border: 1px solid {divider}; border-radius: 9px; }}
+            QDialog#localAnalytics QLineEdit {{ border: 1px solid {divider}; border-radius: 9px; }}
+            QDialog#localAnalytics QComboBox {{ min-height: 28px; padding: 0 28px 0 10px; border: 1px solid {divider}; border-radius: 9px; background: {tokens.surface}; }}
+            QDialog#localAnalytics QComboBox::drop-down {{ border: 0; width: 24px; background: transparent; }}
+            QDialog#localAnalytics QComboBox::down-arrow {{ width: 0; height: 0; }}
+            QDialog#localAnalytics QTableWidget {{ background: {tokens.surface}; alternate-background-color: {tokens.elevated}; color: {tokens.text}; border: 0; selection-background-color: {tokens.accent_soft}; selection-color: {tokens.text}; }}
+            QDialog#localAnalytics QTableWidget::item {{ padding: 4px 8px; border: 0; }}
+            QDialog#localAnalytics QHeaderView::section {{ background: {tokens.surface}; color: {tokens.subtext}; border: 0; border-bottom: 1px solid {tokens.border}; padding: 8px 6px; }}
+        """)
 
     def _choose_directory(self, provider):
         path = QFileDialog.getExistingDirectory(self, tr("选择目录"), self.paths[provider].text())
@@ -150,6 +207,7 @@ class LocalAnalyticsDialog(QDialog):
 
     def _finished(self, rows, issues, failed):
         self.busy = False
+        self.scanned = True
         self.rows, self.issues = rows, issues
         for control in (*self.paths.values(), *self.browse_buttons, self.scan_button):
             control.setEnabled(True)
@@ -161,6 +219,8 @@ class LocalAnalyticsDialog(QDialog):
         return filter_usage(self.rows, int(self.period.currentData() or 0), self.project.text().strip())
 
     def render(self, *_args):
+        if not self.scanned:
+            return
         rows = self.filtered_rows()
         groups = defaultdict(lambda: [0, 0, 0, 0, 0])
         dimension = self.group.currentData() or "model"
@@ -171,11 +231,17 @@ class LocalAnalyticsDialog(QDialog):
         self.table.setRowCount(len(groups))
         for index, ((provider, key), counts) in enumerate(sorted(groups.items())):
             for column, value in enumerate((provider, key or "--", *counts)):
-                self.table.setItem(index, column, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(tr(compact_tokens(value)) if column >= 2 else str(value))
+                if column >= 2:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    item.setToolTip(f"{value:,} Token")
+                self.table.setItem(index, column, item)
         self.export_button.setEnabled(bool(rows) and not self.busy)
         if not self.busy:
             count, tokens = len(rows), sum(row.total for row in rows)
-            bind_text(self.status, lambda: tr("{count} 条用量记录 · {tokens} Token · {issues} 项读取异常", count=count, tokens=tokens, issues=self.issues))
+            bind_text(self.total_label, lambda: f"{tr(compact_tokens(tokens))} Token")
+            self.total_label.setToolTip(f"{tokens:,} Token")
+            bind_text(self.status, lambda: tr("{count} 条用量记录 · {tokens} Token · {issues} 项读取异常", count=count, tokens=tr(compact_tokens(tokens)), issues=self.issues))
 
     def export(self):
         path, selected = QFileDialog.getSaveFileName(self, tr("导出统计"), "local-usage.json", "JSON (*.json);;CSV (*.csv)")

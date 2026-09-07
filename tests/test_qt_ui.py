@@ -764,7 +764,8 @@ def test_header_does_not_start_drag_from_provider_buttons(target):
     assert dragged == []
     assert released == []
 
-    free_point = QPoint(430, panel.header.height() // 2)
+    # 视图菜单增加后原固定坐标可能落在按钮上；标题文字始终是合法的拖动区域。
+    free_point = panel._title_label.mapTo(panel.header, panel._title_label.rect().center())
     panel.header.mousePressEvent(mouse_event(free_point, pressed_button=True))
     panel.header.mouseMoveEvent(
         mouse_event(free_point + QPoint(12, 0), pressed_button=True)
@@ -2099,7 +2100,7 @@ def test_panel_uses_fixed_v3_layout_budget_and_fluent_actions():
         <= panel.statistics.height()
         for value in panel.statistics._values
     )
-    assert [button.toolTip() for button in buttons] == ["设置", "刷新", "收起"]
+    assert [button.toolTip() for button in buttons] == ["切换视图", "设置", "刷新", "收起"]
     assert all(not button.icon().isNull() for button in buttons)
     assert all(button.iconSize().width() == 18 for button in buttons)
     assert panel.light_theme_button.size().width() == 24

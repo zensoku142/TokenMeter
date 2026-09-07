@@ -116,6 +116,12 @@ def test_local_dialog_filters_and_exports_same_records(monkeypatch, tmp_path):
     dialog.period.setCurrentIndex(3)
     dialog._finished([LocalUsage("claude", "s1", "demo", date.today().isoformat(), "model-a", 1, 2, 0, 0, 3)], 0, False)
     assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 2).toolTip() == "3 Token"
+    dialog._finished([LocalUsage("claude", "s1", "demo", date.today().isoformat(), "model-a", 100000000, 25000000, 0, 0, 125000000)], 0, False)
+    assert dialog.table.item(0, 2).text() == "125M"
+    configure_language(app, "zh-cn")
+    assert dialog.table.item(0, 2).text() == "1.25亿"
+    assert dialog.table.item(0, 2).toolTip() == "125,000,000 Token"
     dialog.project.setText("missing")
     assert dialog.table.rowCount() == 0
     assert not dialog.export_button.isEnabled()

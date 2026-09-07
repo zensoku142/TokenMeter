@@ -1136,7 +1136,6 @@ class FloatingWidget(QWidget):
             self._settings_window.finished.connect(panel.show_overview)
             self._settings_window.pet_update_started.connect(self._pause_vpet_update)
             self._settings_window.pet_update_finished.connect(self._resume_vpet_update)
-            panel.settings_back_button.clicked.connect(self._settings_window.reject)
             self._settings_window.save_state_changed.connect(panel.set_settings_save_status)
             self._settings_window.theme_requested.connect(self._request_theme_change)
             self._settings_window.appearance_preview_requested.connect(
@@ -1268,7 +1267,9 @@ class FloatingWidget(QWidget):
         self._switch_provider(provider_id)
 
     def _refresh_from_panel(self) -> None:
-        if self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
+        if self.panel._local_analytics_dialog is not None and self.panel.content_stack.currentWidget() is self.panel._local_analytics_dialog:
+            self.panel._local_analytics_dialog.scan()
+        elif self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
             self._refresh_overview()
         else:
             self.refresh()

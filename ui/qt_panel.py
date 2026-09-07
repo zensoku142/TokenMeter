@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QFont,
     QGuiApplication,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QSpacerItem,
@@ -2301,6 +2303,7 @@ class MainPanel(QFrame):
         self.settings_back_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         bind_text(self.settings_back_button, "返回面板", method='setAccessibleName')
         self.settings_back_button.hide()
+        self.settings_back_button.clicked.connect(self._back_to_panel)
         header_layout.addWidget(self.settings_back_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.provider_quick_combo.hide()
         self.provider_shortcuts = ProviderShortcuts(current_provider=provider_id)
@@ -2352,7 +2355,21 @@ class MainPanel(QFrame):
         self.settings_button.clicked.connect(self.settings_requested)
         self.refresh_button.clicked.connect(self.refresh_requested)
         self.close_button.clicked.connect(self.close_requested)
-        for button in (self.settings_button, self.refresh_button, self.close_button):
+        self.view_button = self._tool_button("views", QStyle.StandardPixmap.SP_FileDialogListView, "切换视图")
+        self.view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.view_menu = QMenu(self.view_button)
+        self.view_button.setMenu(self.view_menu)
+        self.detail_action = bind_text(QAction(self), "平台详情")
+        self.overview_action = bind_text(QAction(self), "平台总览")
+        self.analytics_action = bind_text(QAction(self), "本机统计")
+        for action in (self.detail_action, self.overview_action, self.analytics_action):
+            action.setCheckable(True)
+            self.view_menu.addAction(action)
+        self.detail_action.setChecked(True)
+        self.detail_action.triggered.connect(self.show_overview)
+        self.overview_action.triggered.connect(self.overview_requested)
+        self.analytics_action.triggered.connect(self._open_local_analytics)
+        for button in (self.view_button, self.settings_button, self.refresh_button, self.close_button):
             header_layout.addWidget(button)
         root.addWidget(self.header)
 
@@ -2567,12 +2584,6 @@ class MainPanel(QFrame):
         footer.addWidget(self.status_text)
         footer.addStretch(1)
         footer.addWidget(self.updated_text)
-        self.overview_button = bind_text(QToolButton(), "平台总览")
-        self.overview_button.clicked.connect(self.overview_requested)
-        footer.addWidget(self.overview_button)
-        self.local_analytics_button = bind_text(QToolButton(), "本机统计")
-        self.local_analytics_button.clicked.connect(self._open_local_analytics)
-        footer.addWidget(self.local_analytics_button)
         self._local_analytics_dialog = None
         content.addWidget(footer_widget)
         # 概览和设置共用面板主体，保留顶部拖动、主题切换和收起入口。
@@ -2610,6 +2621,7 @@ class MainPanel(QFrame):
             )
 
     def show_settings(self, settings: QWidget) -> None:
+        self._settings_page = settings
         if self.content_stack.indexOf(settings) < 0:
             self.content_stack.addWidget(settings)
         self.content_stack.setCurrentWidget(settings)
@@ -2620,6 +2632,7 @@ class MainPanel(QFrame):
         self.settings_button.hide()
         self.settings_back_button.show()
         self.settings_save_status.show()
+        self.view_button.hide()
 
     def show_overview(self) -> None:
         self.content_stack.setCurrentIndex(0)
@@ -2630,6 +2643,29 @@ class MainPanel(QFrame):
         self._update_provider_shortcuts_visibility()
         self.pricing_badge.setVisible(bool(self.pricing_badge.text()))
         self.settings_button.show()
+        self.view_button.show()
+        self._select_view_action(self.detail_action)
+
+    def _select_view_action(self, selected) -> None:
+        for action in (self.detail_action, self.overview_action, self.analytics_action):
+            action.setChecked(action is selected)
+
+    def _back_to_panel(self) -> None:
+        current = self.content_stack.currentWidget()
+        if current is self.__dict__.get("_settings_page"):
+            current.reject()
+        else:
+            self.show_overview()
+
+    def _show_secondary_page(self, page, action) -> None:
+        self.show_overview()
+        self.content_stack.setCurrentWidget(page)
+        self._select_view_action(action)
+        # 总览/统计与设置复用同一个返回位置，内页不再显示主面板的平台管理入口。
+        self.provider_manage_button.hide()
+        self.provider_shortcuts.hide()
+        self.pricing_badge.hide()
+        self.settings_back_button.show()
 
     def show_provider_overview(self):
         # 保留 show_overview 的旧语义（返回单平台面板）；总览按需创建以免拖慢启动。
@@ -2639,9 +2675,7 @@ class MainPanel(QFrame):
             self.provider_overview = ProviderOverview(self)
             self.content_stack.addWidget(self.provider_overview)
             self.provider_overview.back_requested.connect(self.show_overview)
-        self.show_overview()
-        self.content_stack.setCurrentWidget(self.provider_overview)
-        self._update_provider_shortcuts_visibility()
+        self._show_secondary_page(self.provider_overview, self.overview_action)
         return self.provider_overview
 
     def _open_quota_details(self) -> None:
@@ -2658,9 +2692,10 @@ class MainPanel(QFrame):
         if self._local_analytics_dialog is None:
             from ui.local_analytics import LocalAnalyticsDialog
 
-            self._local_analytics_dialog = LocalAnalyticsDialog(self)
-        self._local_analytics_dialog.show()
-        self._local_analytics_dialog.raise_()
+            self._local_analytics_dialog = LocalAnalyticsDialog(self, embedded=True)
+            self.content_stack.addWidget(self._local_analytics_dialog)
+            self._local_analytics_dialog.finished.connect(self.show_overview)
+        self._show_secondary_page(self._local_analytics_dialog, self.analytics_action)
 
     def set_settings_save_status(self, message: str, tone: str) -> None:
         # 详细错误留在提示中，不能把共用标题栏撑宽并挤掉收起入口。

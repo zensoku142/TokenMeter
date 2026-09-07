@@ -1,6 +1,10 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "切换视图": ("Switch view", "切換檢視", "表示切替", "보기 전환"),
+    "平台详情": ("Provider details", "平台詳情", "プロバイダー詳細", "공급자 상세"),
+    "日志目录": ("Log folders", "日誌目錄", "ログフォルダー", "로그 폴더"),
+    "输入包含缓存；悬停查看精确 Token 数": ("Input includes cache. Hover for exact token counts.", "輸入包含快取；懸停查看精確 Token 數", "入力にはキャッシュを含みます。ホバーで正確なトークン数を表示します。", "입력에 캐시가 포함됩니다. 마우스를 올리면 정확한 토큰 수를 볼 수 있습니다."),
     "本机统计": ("Local analytics", "本機統計", "ローカル統計", "로컬 통계"),
     "仅统计所选目录的本机日志，账户归属未知；不代表订阅额度或实际账单": ("Selected local logs only; account ownership is unknown. These are not subscription quotas or actual bills.", "僅統計所選目錄的本機日誌，帳戶歸屬未知；不代表訂閱額度或實際帳單", "選択したローカルログのみ集計します。アカウント帰属は不明です。利用枠や実際の請求額ではありません。", "선택한 로컬 로그만 집계하며 계정 소유 관계는 알 수 없습니다. 구독 한도나 실제 청구액이 아닙니다."),
     "选择目录": ("Choose folder", "選擇目錄", "フォルダー選択", "폴더 선택"),
