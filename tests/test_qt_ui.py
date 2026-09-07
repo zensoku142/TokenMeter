@@ -4702,7 +4702,7 @@ def test_settings_quota_threshold_has_room_for_complete_percentage(mode):
     controller = configure_theme(APP, mode)
     window = SettingsWindow()
     try:
-        window.tabs.setCurrentIndex(4)
+        window.tabs.setCurrentIndex(5)
         window.show()
         APP.processEvents()
         spin = window.quota_alert_threshold
@@ -4729,22 +4729,21 @@ def test_settings_groups_configuration_into_scrolling_pages_with_separate_pet_pa
         window = SettingsWindow()
 
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
-        "账户连接", "外观", "悬浮与启动", "桌宠", "采集与统计", "数据存储", "更新与关于",
-        "多账户",
+        "账户连接", "多账户", "外观", "悬浮与启动", "桌宠", "采集与统计", "数据存储", "更新与关于",
     ]
     assert window.tabs.widget(0) is window.scroll_area
     for index, control in (
         (0, window.provider_combo),
-        (1, window.theme_combo),
-        (2, window.panel_auto_collapse_check),
-        (3, window.vpet_check),
-        (3, window.pet_version_label),
-        (3, window.pet_install_button),
-        (4, window.refresh_seconds),
-        (4, window.deepseek_peak_pricing_card),
-        (5, window.minute_usage_retention_days),
-        (5, window.data_dir_edit),
-        (6, window.update_card),
+        (2, window.theme_combo),
+        (3, window.panel_auto_collapse_check),
+        (4, window.vpet_check),
+        (4, window.pet_version_label),
+        (4, window.pet_install_button),
+        (5, window.refresh_seconds),
+        (5, window.deepseek_peak_pricing_card),
+        (6, window.minute_usage_retention_days),
+        (6, window.data_dir_edit),
+        (7, window.update_card),
     ):
         assert isinstance(window.tabs.widget(index), QScrollArea)
         assert window.tabs.widget(index).isAncestorOf(control)
@@ -4803,7 +4802,7 @@ def test_settings_autosave_ignores_loading_and_coalesces_user_input(autosave_set
 
 def test_settings_switch_autosaves_and_return_flushes_last_edit(autosave_settings):
     window, values, saved, refreshed = autosave_settings
-    window.tabs.setCurrentIndex(2)
+    window.tabs.setCurrentIndex(3)
     window.edge_hide_check.click()
     window.reject()
 
@@ -4842,7 +4841,7 @@ def test_pet_actions_stay_in_one_row_with_visible_version(width, state, tmp_path
             elif state == "download":
                 window._pet_worker = Mock(operation="install")
             window._refresh_pet_controls()
-            window.tabs.setCurrentIndex(3)
+            window.tabs.setCurrentIndex(4)
             window.resize(width, 550)
             window.show()
             parent.show()
@@ -4884,7 +4883,7 @@ def test_pet_version_always_describes_installation_state(autosave_settings, mani
         patch("ui.qt_settings.pet_extension.removable_directories", return_value=[]),
     ):
         window._refresh_pet_controls()
-    window.tabs.setCurrentIndex(3)
+    window.tabs.setCurrentIndex(4)
     APP.processEvents()
     assert window.pet_version_label.isVisible()
     assert window.pet_version_label.text() == expected
@@ -4948,7 +4947,7 @@ def test_settings_switch_keeps_white_thumb_with_custom_accent(mode, accent):
     appearance = controller.appearance(mode)
     controller.set_appearance(mode, accent, 100)
     window = SettingsWindow()
-    window.tabs.setCurrentIndex(2)
+    window.tabs.setCurrentIndex(3)
     window.show()
     try:
         for checked, x in ((True, 37), (False, 13)):

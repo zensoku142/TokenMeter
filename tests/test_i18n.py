@@ -231,7 +231,7 @@ def test_setting_language_preserves_drafts_and_does_not_save_other_settings(isol
     credential = window._provider_widgets["AUTH"]
     credential.setText("synthetic-unsaved-token")
     window.refresh_seconds.setValue(125)
-    window.tabs.setCurrentIndex(1)
+    window.tabs.setCurrentIndex(2)
     with (
         patch.object(config_manager, "save_config") as save_all,
         patch.object(config_manager, "_write_credential") as write_secret,
@@ -239,7 +239,7 @@ def test_setting_language_preserves_drafts_and_does_not_save_other_settings(isol
         window.language_combo.setCurrentIndex(window.language_combo.findData("en"))
         assert isolated_language.resolved == "en"
         assert config_manager.get("UI_LANGUAGE") == "en"
-        assert window.tabs.currentIndex() == 1
+        assert window.tabs.currentIndex() == 2
         assert window._provider_widgets["AUTH"] is credential
         assert credential.text() == "synthetic-unsaved-token"
         assert window.refresh_seconds.value() == 125
@@ -259,7 +259,7 @@ def test_pet_page_and_version_state_follow_language(isolated_language):
         window = SettingsWindow()
         try:
             isolated_language.set_language("en")
-            assert window.tabs.tabText(3) == "Pet"
+            assert window.tabs.tabText(4) == "Pet"
             assert window.pet_version_label.text() == "Pet version: Not installed"
             assert window.pet_source_label.text().startswith("Pet source code: ")
             assert 'href="https://github.com/LorisYounger/VPet"' in window.pet_source_label.text()
@@ -268,7 +268,7 @@ def test_pet_page_and_version_state_follow_language(isolated_language):
             window._refresh_pet_controls()
             assert window.pet_version_label.text() == "Pet version: v0.1.0"
             isolated_language.set_language("zh-cn")
-            assert window.tabs.tabText(3) == "桌宠"
+            assert window.tabs.tabText(4) == "桌宠"
             assert window.pet_version_label.text() == "桌宠版本：v0.1.0"
             assert window.pet_source_label.text().startswith("桌宠源码来源：")
         finally:

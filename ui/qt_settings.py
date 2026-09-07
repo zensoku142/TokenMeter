@@ -424,6 +424,11 @@ class SettingsWindow(QDialog):
         content_layout.addStretch(1)
         add_tab(self.tabs, self.scroll_area, "账户连接")
 
+        # 将同属账户管理的入口相邻排列，更新与关于保留在导航末尾。
+        self.account_profiles_page = None
+        self._profiles_layout = self._add_settings_page("多账户", "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。")
+        self._profiles_tab_index = self.tabs.count() - 1
+
         appearance_layout = self._add_settings_page("外观", "调整主题与面板外观，修改立即应用并保存。")
 
         appearance_card = QFrame()
@@ -735,9 +740,6 @@ class SettingsWindow(QDialog):
         update_page_layout.addWidget(self.update_card)
         update_page_layout.addStretch(1)
 
-        self.account_profiles_page = None
-        self._profiles_layout = self._add_settings_page("多账户", "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。")
-        self._profiles_tab_index = self.tabs.count() - 1
         self.tabs.currentChanged.connect(self._ensure_account_profiles)
 
         root.addWidget(self.tabs, 1)
