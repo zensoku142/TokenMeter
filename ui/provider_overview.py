@@ -33,6 +33,8 @@ def provider_status_message(data: TokenData | None) -> str:
         return "登录已失效，请重新连接；下方仅为上次记录"
     if "NOT_CONFIGURED" in codes:
         return "请检查账户连接配置"
+    if "ACCOUNT_ID_UNAVAILABLE" in codes:
+        return "该数据源未提供可验证的账号身份"
     if "RATE_LIMITED" in codes:
         return "接口限流，自动采集将在退避结束后重试"
     if data.is_stale or data.quota_source.startswith("cache"):
@@ -89,6 +91,7 @@ class ProviderOverview(QWidget):
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll, 1)
         self.cards: dict[str, QFrame] = {}
+        self._entry_providers: dict[str, str] = {}
         self._auto_timer = QTimer(self)
         self._auto_timer.setInterval(60_000)
         self._auto_timer.timeout.connect(self.auto_refresh_requested)
@@ -114,15 +117,18 @@ class ProviderOverview(QWidget):
         self.refresh_button.setEnabled(not refreshing)
         bind_text(self.refresh_button, "正在刷新" if refreshing else "刷新总览")
 
-    def set_data(self, snapshots: dict[str, TokenData | None]) -> None:
+    def set_data(self, snapshots: dict[str, TokenData | None], *, providers: dict[str, str] | None = None, labels: dict[str, str] | None = None) -> None:
+        self._entry_providers = {key: (providers or {}).get(key, key) for key in snapshots}
+        snapshots = {key: value for key, value in snapshots.items() if self._entry_providers[key] in PROVIDERS}
         # 保留已有卡片和滚动位置；刷新不得让用户正在阅读的行跳到顶部。
         for provider_id in set(self.cards) - snapshots.keys():
             card = self.cards.pop(provider_id)
             self.cards_layout.removeWidget(card)
             card.deleteLater()
         self.empty.setVisible(not snapshots)
-        for index, (provider_id, data) in enumerate(snapshots.items()):
-            if provider_id not in self.cards:
+        for index, (entry_id, data) in enumerate(snapshots.items()):
+            provider_id = self._entry_providers[entry_id]
+            if entry_id not in self.cards:
                 card = QFrame()
                 card.setObjectName("overviewCard")
                 card_layout = QVBoxLayout(card)
@@ -132,13 +138,14 @@ class ProviderOverview(QWidget):
                 brand.setFixedSize(24, 24)
                 heading.addWidget(brand)
                 name = self._label()
+                name.setObjectName("overviewProviderName")
                 bind_text(name, PROVIDERS[provider_id].name)
                 heading.addWidget(name, 1)
                 details = bind_text(QPushButton(), "详情")
-                details.clicked.connect(lambda _checked=False, pid=provider_id: self.provider_selected.emit(pid))
+                details.clicked.connect(lambda _checked=False, pid=entry_id: self.provider_selected.emit(pid))
                 heading.addWidget(details)
                 connection = bind_text(QPushButton(), "账户连接")
-                connection.clicked.connect(lambda _checked=False, pid=provider_id: self.connection_requested.emit(pid))
+                connection.clicked.connect(lambda _checked=False, pid=entry_id: self.connection_requested.emit(pid))
                 heading.addWidget(connection)
                 card_layout.addLayout(heading)
                 for name in ("overviewSummary", "overviewStatus", "overviewTimestamp"):
@@ -171,9 +178,11 @@ class ProviderOverview(QWidget):
                     gauge_layout.addWidget(row)
                     card._gauges.append((row, label, value, bar, reset))
                 card_layout.insertWidget(2, gauges)
-                self.cards[provider_id] = card
+                self.cards[entry_id] = card
                 self.cards_layout.insertWidget(index + 1, card)
-            card = self.cards[provider_id]
+            card = self.cards[entry_id]
+            alias = (labels or {}).get(entry_id, "")
+            bind_text(card.findChild(QLabel, "overviewProviderName"), lambda pid=provider_id, title=alias: tr(PROVIDERS[pid].name) + (" · " + title if title else ""))
             card_layout = card.layout()
             # 复用只读快照供语言切换重算摘要，不复制其中的完整历史记录。
             summary, status, timestamp = (card.findChild(QLabel, name) for name in (
@@ -269,5 +278,6 @@ class ProviderOverview(QWidget):
             QFrame#overviewCard QProgressBar[tone="stale"]::chunk {{ background: {tokens.muted}; }}
             QWidget#providerOverview QPushButton {{ min-height: 28px; padding: 0 12px; border: 1px solid {divider}; border-radius: 9px; }}
         """)
-        for provider_id, card in self.cards.items():
+        for entry_id, card in self.cards.items():
+            provider_id = self._entry_providers[entry_id]
             card.layout().itemAt(0).layout().itemAt(0).widget().setPixmap(provider_icon(provider_id, 24).pixmap(24, 24))

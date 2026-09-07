@@ -1,6 +1,22 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "账户档案": ("Account profiles", "帳戶檔案", "アカウントプロファイル", "계정 프로필"),
+    "账户名称": ("Account name", "帳戶名稱", "アカウント名", "계정 이름"),
+    "添加账户": ("Add account", "新增帳戶", "アカウント追加", "계정 추가"),
+    "添加账户档案": ("Add account profile", "新增帳戶檔案", "プロファイルを追加", "계정 프로필 추가"),
+    "编辑账户档案": ("Edit account profile", "編輯帳戶檔案", "プロファイルを編集", "계정 프로필 편집"),
+    "删除账户档案": ("Remove account profile", "刪除帳戶檔案", "プロファイルを削除", "계정 프로필 삭제"),
+    "账户详情": ("Account details", "帳戶詳情", "アカウント詳細", "계정 상세"),
+    "选择文件": ("Choose file", "選擇檔案", "ファイルを選択", "파일 선택"),
+    "尚无账户档案": ("No account profiles yet", "尚無帳戶檔案", "プロファイルはまだありません", "아직 계정 프로필이 없습니다"),
+    "同一平台可添加多个账户档案；各账户独立采集和缓存。": ("Add multiple profiles per provider, with independent collection and caches.", "同一平台可新增多個帳戶檔案；各帳戶獨立採集和快取。", "同じプロバイダーに複数のプロファイルを追加できます。取得とキャッシュは独立しています。", "공급자마다 여러 프로필을 추가할 수 있으며 수집과 캐시는 계정별로 분리됩니다."),
+    "档案需明确指定凭据或登录路径；凭据保存在 Windows 凭据管理器，不修改 CLI 登录。": ("Specify credentials or a login path. Secrets use Windows Credential Manager; CLI logins are unchanged.", "檔案需明確指定憑據或登入路徑；憑據保存在 Windows 憑據管理員，不修改 CLI 登入。", "認証情報またはログインパスを指定してください。秘密情報は Windows 資格情報マネージャーに保存し、CLI のログインは変更しません。", "자격 증명 또는 로그인 경로를 지정하세요. 비밀 정보는 Windows 자격 증명 관리자에 저장하며 CLI 로그인은 변경하지 않습니다."),
+    "删除此档案？本机 CLI 登录和历史记录会保留。": ("Remove this profile? Local CLI logins and history will be kept.", "刪除此檔案？本機 CLI 登入和歷史紀錄會保留。", "このプロファイルを削除しますか？CLI のログインと履歴は保持します。", "프로필을 삭제할까요? 로컬 CLI 로그인과 기록은 유지됩니다."),
+    "请填写账户名称，并明确提供凭据或登录路径。": ("Enter an account name and explicit credentials or a login path.", "請填寫帳戶名稱，並明確提供憑據或登入路徑。", "アカウント名と認証情報またはログインパスを入力してください。", "계정 이름과 자격 증명 또는 로그인 경로를 입력하세요."),
+    "账户档案保存失败，请检查数据目录和凭据管理器。": ("Could not save the profile. Check the data folder and Credential Manager.", "帳戶檔案儲存失敗，請檢查資料目錄和憑據管理員。", "保存に失敗しました。データフォルダーと資格情報マネージャーを確認してください。", "프로필을 저장하지 못했습니다. 데이터 폴더와 자격 증명 관리자를 확인하세요."),
+    "账户档案无法读取，请检查数据文件。": ("Could not read account profiles. Check the data file.", "帳戶檔案無法讀取，請檢查資料檔案。", "プロファイルを読み取れません。データファイルを確認してください。", "계정 프로필을 읽지 못했습니다. 데이터 파일을 확인하세요."),
+    "该数据源未提供可验证的账号身份": ("This source does not provide a verifiable account identity.", "此資料來源未提供可驗證的帳號身分", "このデータソースには確認可能なアカウント識別情報がありません。", "이 데이터 소스는 확인 가능한 계정 식별 정보를 제공하지 않습니다."),
     "额度恢复时提醒": ("Notify when quota recovers", "額度恢復時提醒", "利用枠回復時に通知", "한도 회복 시 알림"),
     "需先启用低额度提醒；只在成功获取恢复后的额度时通知。": ("Requires low-quota alerts. Notify only after a successful refresh confirms recovery.", "需先啟用低額度提醒；只在成功取得恢復後的額度時通知。", "低残量通知の有効化が必要です。更新で回復を確認した場合のみ通知します。", "낮은 한도 알림을 먼저 켜세요. 업데이트로 회복을 확인한 경우에만 알립니다."),
     "显示额度消耗预测": ("Show quota burn-rate estimates", "顯示額度消耗預測", "利用枠消費の予測を表示", "한도 소모 예측 표시"),

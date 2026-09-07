@@ -181,7 +181,7 @@ def _fetch_tokens_safely(
         provider_cls = PROVIDERS.get(provider_id)
         data = (
             TokenData.cached_snapshot(provider_id, account_key)
-            if account_key is not None else None
+            if account_key is not None and not config.get("_ACCOUNT_PROFILE_ID") else None
         )
         if data is None:
             per_provider = []
@@ -427,6 +427,7 @@ class FloatingWidget(QWidget):
         panel.settings_requested.connect(self.open_settings)
         panel.refresh_requested.connect(self._refresh_from_panel)
         panel.overview_requested.connect(self._open_provider_overview)
+        panel.profile_quota_observed.connect(self._notify_profile_quota)
         panel.provider_selected.connect(self._switch_provider)
         panel.provider_configuration_changed.connect(self._on_provider_configuration_changed)
         panel.close_requested.connect(self.collapse_panel)
@@ -818,7 +819,7 @@ class FloatingWidget(QWidget):
             elif self._expanded:
                 if self._has_settings_child():
                     self._settings_window.reject()
-                elif self.panel is not None and self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
+                elif self.panel is not None and self.panel.content_stack.currentIndex() != 0:
                     self.panel.show_overview()
                 else:
                     self.collapse_panel()
@@ -1279,7 +1280,9 @@ class FloatingWidget(QWidget):
         self._switch_provider(provider_id)
 
     def _refresh_from_panel(self) -> None:
-        if self.panel._local_analytics_dialog is not None and self.panel.content_stack.currentWidget() is self.panel._local_analytics_dialog:
+        if self.panel._account_profiles_page is not None and self.panel.content_stack.currentWidget() is self.panel._account_profiles_page:
+            self.panel._account_profiles_page.refresh_profiles()
+        elif self.panel._local_analytics_dialog is not None and self.panel.content_stack.currentWidget() is self.panel._local_analytics_dialog:
             self.panel._local_analytics_dialog.scan()
         elif self.panel.provider_overview is not None and self.panel.content_stack.currentWidget() is self.panel.provider_overview:
             self._refresh_overview()
@@ -1648,14 +1651,24 @@ class FloatingWidget(QWidget):
             except Exception:
                 config_manager.logger().warning("Quota notification history could not be saved")
 
+    def _notify_profile_quota(self, profile_id: str, name: str, provider_id: str, result: TokenData) -> None:
+        # 档案页已验证本次账号/版本；借用相同通知规则，并保留点击时应打开的档案上下文。
+        self._quota_profile_context = (profile_id, name)
+        try:
+            self._notify_low_quota(result, provider_id, current_account_key=result.account_key)
+        finally:
+            self._quota_profile_context = None
+
     def _show_quota_notification(self, provider_id: str, windows: dict, *, recovered: bool) -> None:
         provider = PROVIDERS[provider_id]
         # 同一平台的多模型窗口合并一条；通知不包含账号标签、指纹或任何原始响应明细。
         # 额度提醒不能沿用上一条认证通知的点击动作，否则会误启动其他平台的 Cookie 获取。
         self._auth_expired_provider_id = None
         self._quota_notification_provider_id = provider_id
+        self._quota_notification_profile = self.__dict__.get("_quota_profile_context")
+        provider_name = provider.name + (" · " + self._quota_notification_profile[1] if self._quota_notification_profile else "")
         self.tray.showMessage(
-            tr("{app}：{provider} 额度恢复" if recovered else "{app}：{provider} 额度不足", app=APP_DISPLAY_NAME, provider=provider.name),
+            tr("{app}：{provider} 额度恢复" if recovered else "{app}：{provider} 额度不足", app=APP_DISPLAY_NAME, provider=provider_name),
             "\n".join(
                 tr("{window}：剩余 {remaining}%", window=title, remaining=f"{remaining:g}")
                 for title, remaining, _reset in windows.values()
@@ -1713,6 +1726,7 @@ class FloatingWidget(QWidget):
         self._auth_notified_providers.add(provider_id)
         self._auth_expired_provider_id = provider_id
         self._quota_notification_provider_id = None
+        self._quota_notification_profile = None
         if provider_id == "mimo":
             message = (
                 f"{auth_error.message}\n请切换到小米 MiMo 或打开设置重新登录；"
@@ -1835,10 +1849,17 @@ class FloatingWidget(QWidget):
         provider_id = getattr(self, "_auth_expired_provider_id", None)
         if not provider_id:
             quota_provider = self.__dict__.get("_quota_notification_provider_id")
+            quota_profile = self.__dict__.get("_quota_notification_profile")
             self._quota_notification_provider_id = None
-            if quota_provider and quota_provider not in config_manager.get("DISABLED_PROVIDER_IDS", []):
-                self._ensure_panel().show_overview()
-                self._switch_provider(quota_provider)
+            self._quota_notification_profile = None
+            if quota_provider and (quota_profile or quota_provider not in config_manager.get("DISABLED_PROVIDER_IDS", [])):
+                panel = self._ensure_panel()
+                if quota_profile:
+                    panel._open_account_profiles()
+                    panel._account_profiles_page.show_details(quota_profile[0])
+                else:
+                    panel.show_overview()
+                    self._switch_provider(quota_provider)
                 self.expand_panel()
             return
         # A tray click applies only to the notification that supplied this provider.

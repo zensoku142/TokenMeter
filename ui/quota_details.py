@@ -36,11 +36,12 @@ _SOURCE_NAMES = {
 
 
 class QuotaDetailsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, title_source: str = "全部额度"):
         super().__init__(parent)
+        self._title_source = title_source
         self.setObjectName("quotaDetailsDialog")
         self.setWindowModality(Qt.WindowModality.WindowModal)
-        bind_text(self, "全部额度", method="setWindowTitle")
+        bind_text(self, title_source, method="setWindowTitle")
         self.setMinimumSize(380, 300)
         self.resize(560, 590)
         self.provider_id = ""
@@ -150,7 +151,7 @@ class QuotaDetailsDialog(QDialog):
         provider = PROVIDERS.get(self.provider_id)
         name = data.per_provider[0].provider_name if data.per_provider else ""
         def title() -> str:
-            return f"{tr(name)} · {tr('全部额度')}" if name else tr("全部额度")
+            return f"{tr(name)} · {tr(self._title_source)}" if name else tr(self._title_source)
 
         bind_text(self.title, title)
         bind_text(self, title, method="setWindowTitle")

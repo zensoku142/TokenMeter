@@ -923,7 +923,12 @@ class TokenData:
         observed_at = provider_observed_at(provider.id, datetime.now().astimezone())
         current_day = today or observed_at.date()
         account_key = cls._snapshot_identity(provider)
-        cached = cls._base_snapshot(provider.id, account_key)
+        provider_config = getattr(provider, "_config", None)
+        isolated_profile = isinstance(provider_config, Mapping) and bool(provider_config.get("_ACCOUNT_PROFILE_ID"))
+        if isolated_profile and not account_key:
+            return cls(status="error", errors=[FetchError("ACCOUNT_ID_UNAVAILABLE", provider.id, "该数据源未提供可验证的账号身份")])
+        # 独立档案不覆盖默认连接的内存缓存；其离线快照仍按真实账号身份落盘。
+        cached = cls() if isolated_profile else cls._base_snapshot(provider.id, account_key)
         if (
             not cached.per_provider
             and getattr(provider, "supports_subscription_quota", False)
@@ -942,7 +947,7 @@ class TokenData:
         data.refresh_error_codes = ()
         try:
             history_provider = (
-                history.scoped_provider(provider.id, account_key)
+                (f"{provider.id}:{account_key}" if isolated_profile else history.scoped_provider(provider.id, account_key))
                 if not getattr(provider, "supports_subscription_quota", False) else provider.id
             )
         except Exception:
@@ -1486,10 +1491,11 @@ class TokenData:
             data.status = "partial" if per.errors else "ok"
             data.is_stale = per.is_stale
             with cls._cache_lock:
-                if provider.id not in {"claude", "antigravity"} or account_key:
-                    cls._provider_snapshots[provider.id] = cls._copy_for_cache(data)
-                else:
-                    cls._provider_snapshots.pop(provider.id, None)
+                if not isolated_profile:
+                    if provider.id not in {"claude", "antigravity"} or account_key:
+                        cls._provider_snapshots[provider.id] = cls._copy_for_cache(data)
+                    else:
+                        cls._provider_snapshots.pop(provider.id, None)
             if quota_refresh_succeeded:
                 try:
                     cls._save_persisted_quota_snapshot(provider, data)
