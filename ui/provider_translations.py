@@ -1,6 +1,10 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "选择要监控的平台": ("Select providers to monitor", "選擇要監控的平台", "監視するプロバイダーを選択", "모니터링할 공급자를 선택하세요"),
+    "双平台看板": ("Two-provider monitor", "雙平台看板", "2プロバイダーモニター", "두 공급자 모니터"),
+    "选择平台": ("Select provider", "選擇平台", "プロバイダーを選択", "공급자 선택"),
+    "只监控所选平台的默认连接": ("Monitors the selected providers' default connections", "只監控所選平台的預設連線", "選択したプロバイダーの既定の接続を監視します", "선택한 공급자의 기본 연결을 모니터링합니다"),
     "多账户": ("Profiles", "多帳戶", "複数アカウント", "다중 계정"),
     "管理多账户": ("Manage profiles", "管理多帳戶", "アカウント管理", "계정 관리"),
     "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。": ("Manage multiple connections per provider without changing the default connection or CLI logins.", "獨立管理同一平台的多個連線，不修改預設連線或 CLI 登入。", "既定の接続や CLI ログインを変更せず、同じプロバイダーの複数の接続を管理します。", "기본 연결이나 CLI 로그인을 변경하지 않고 공급자별 여러 연결을 관리합니다."),

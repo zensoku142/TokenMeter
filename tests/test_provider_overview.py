@@ -138,6 +138,14 @@ def test_unknown_quota_has_no_fake_bar_and_cached_quota_is_muted():
     assert page.cards["codex"]._gauges[0][3].isHidden()
 
 
+def test_provider_with_unlimited_metric_is_not_shown_as_unavailable():
+    from api.providers.base import QuotaMetric
+
+    page = ProviderOverview()
+    page.set_data({"copilot": snapshot("copilot", quota_metrics=[QuotaMetric("Chat", "不限量", value_kind="unlimited")])})
+    assert "不限量" in texts(page.cards["copilot"])
+
+
 def test_refresh_preserves_cards_scroll_and_language_bindings():
     page = ProviderOverview()
     page.resize(640, 430)

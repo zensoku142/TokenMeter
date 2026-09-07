@@ -190,6 +190,28 @@ class DraggableHeader(QFrame):
         super().mouseReleaseEvent(event)
 
 
+def set_panel_tool_icon(button, name, standard, role="") -> None:
+    tokens = current_theme()
+    active_color = tokens.danger if role == "close" else tokens.accent_hover
+    icon = fluent_icon(name, active_color=active_color)
+    button.setIcon(icon if not icon.isNull() else button.style().standardIcon(standard))
+
+
+def create_panel_tool_button(name, standard, tooltip, *, role="", parent=None):
+    # 主面板与紧凑看板共用尺寸、焦点、悬停和关闭按钮角色，避免出现另一套系统标题栏样式。
+    button = QToolButton(parent)
+    button.setObjectName("panelToolButton")
+    button.setIconSize(QSize(18, 18))
+    button.setFixedSize(32, 32)
+    button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    if role:
+        button.setProperty("role", role)
+    bind_text(button, tooltip, method="setToolTip")
+    bind_text(button, tooltip, method="setAccessibleName")
+    set_panel_tool_icon(button, name, standard, role)
+    return button
+
+
 class MinuteCalendarWidget(QCalendarWidget):
     """Compact calendar grid whose cell states follow the application theme."""
 
@@ -2231,6 +2253,7 @@ class MainPanel(QFrame):
     theme_requested = Signal(str)
     provider_selected = Signal(str)
     overview_requested = Signal()
+    compact_requested = Signal()
     provider_configuration_changed = Signal(str, bool)
     activity_height_changed = Signal(int)
 
@@ -2386,6 +2409,10 @@ class MainPanel(QFrame):
         self.detail_action.triggered.connect(self.show_overview)
         self.overview_action.triggered.connect(self.overview_requested)
         self.analytics_action.triggered.connect(self._open_local_analytics)
+        compact = bind_text(QAction(self), "双平台看板")
+        compact.triggered.connect(self.compact_requested)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(compact)
         for button in (self.view_button, self.settings_button, self.refresh_button, self.close_button):
             header_layout.addWidget(button)
         root.addWidget(self.header)
@@ -3064,15 +3091,7 @@ class MainPanel(QFrame):
         tooltip: str,
         role: str = "",
     ) -> QToolButton:
-        button = QToolButton()
-        button.setIconSize(QSize(18, 18))
-        bind_text(button, tooltip, method='setToolTip')
-        bind_text(button, tooltip, method='setAccessibleName')
-        button.setObjectName("panelToolButton")
-        if role:
-            button.setProperty("role", role)
-        button.setFixedSize(32, 32)
-        button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        button = create_panel_tool_button(name, standard, tooltip, role=role)
         self._button_specs.append((button, name, standard, role))
         return button
 
@@ -3146,9 +3165,7 @@ class MainPanel(QFrame):
     def _refresh_icons(self) -> None:
         tokens = current_theme()
         for button, name, standard, role in self._button_specs:
-            active_color = tokens.danger if role == "close" else tokens.accent_hover
-            icon = fluent_icon(name, active_color=active_color)
-            button.setIcon(icon if not icon.isNull() else self.style().standardIcon(standard))
+            set_panel_tool_icon(button, name, standard, role)
         for button in (self.light_theme_button, self.dark_theme_button):
             icon = fluent_icon(button._theme_icon_name, size=14, active_color=tokens.text)
             button.setIcon(icon)

@@ -18,7 +18,12 @@ from PySide6.QtWidgets import (
 
 from api.providers import PROVIDERS
 from data.store import TokenData
-from ui.formatting import format_money, format_reset_countdown, quota_used_percent
+from ui.formatting import (
+    format_money,
+    format_quota_metric,
+    format_reset_countdown,
+    quota_used_percent,
+)
 from ui.i18n import bind_text, tr
 from ui.provider_branding import provider_icon
 from ui.qt_theme import current_theme, theme_controller
@@ -54,8 +59,9 @@ class ProviderOverview(QWidget):
     provider_selected = Signal(str)
     connection_requested = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, window_limit=2):
         super().__init__(parent)
+        self._window_limit = max(1, min(2, window_limit))
         self.setObjectName("providerOverview")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -196,7 +202,7 @@ class ProviderOverview(QWidget):
             summary.setVisible(not available or (subscription and not windows))
             stale = bool(data and (data.is_stale or data.errors or data.refresh_error_codes or data.quota_source.startswith("cache")))
             for position, (row, label, value, bar, reset) in enumerate(card._gauges):
-                row.setVisible(available and (not subscription or position < len(windows)))
+                row.setVisible(available and (not subscription or position < min(len(windows), self._window_limit)))
                 if not available:
                     continue
                 if subscription and position < len(windows):
@@ -217,8 +223,8 @@ class ProviderOverview(QWidget):
                     value.setText(format_money(data.balance_cny if position == 0 else data.today_cost_cny, data.currency))
                     bar.hide()
                     reset.hide()
-            if available and subscription and len(windows) > 2:
-                bind_text(summary, lambda count=len(windows) - 2: tr("还有 {count} 个额度窗口，请查看详情", count=count))
+            if available and subscription and len(windows) > self._window_limit:
+                bind_text(summary, lambda count=len(windows) - self._window_limit: tr("还有 {count} 个额度窗口，请查看详情", count=count))
                 summary.show()
             message = provider_status_message(data)
             bind_text(status, message)
@@ -256,6 +262,8 @@ class ProviderOverview(QWidget):
                 rows.append(f"{tr(window.title)} · {remaining} · {reset}")
             if len(windows) > 2:
                 rows.append(tr("还有 {count} 个额度窗口，请查看详情", count=len(windows) - 2))
+            if not rows and data.quota_metrics:
+                return "\n".join(f"{tr(metric.title)} · {format_quota_metric(metric)}" for metric in data.quota_metrics[:2])
             return "\n".join(rows) or tr("暂无可用额度，请查看详情")
         return "\n".join((
             f"{tr(provider.balance_label)} · {format_money(data.balance_cny, data.currency)}",

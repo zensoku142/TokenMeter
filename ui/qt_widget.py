@@ -427,6 +427,7 @@ class FloatingWidget(QWidget):
         panel.settings_requested.connect(self.open_settings)
         panel.refresh_requested.connect(self._refresh_from_panel)
         panel.overview_requested.connect(self._open_provider_overview)
+        panel.compact_requested.connect(self._open_compact_overview)
         panel.provider_selected.connect(self._switch_provider)
         panel.provider_configuration_changed.connect(self._on_provider_configuration_changed)
         panel.close_requested.connect(self.collapse_panel)
@@ -1182,6 +1183,10 @@ class FloatingWidget(QWidget):
             self._apply_update()
         if self.panel is not None:
             self.panel.provider_shortcuts.refresh()
+        compact = self.__dict__.get("_compact_overview")
+        if compact is not None:
+            compact.set_sources(configured_provider_ids())
+            self._update_provider_overview()
         if self.__dict__.get("_overview_opened", False):
             self._overview_ids = configured_provider_ids()
             self._update_provider_overview()
@@ -1279,6 +1284,33 @@ class FloatingWidget(QWidget):
         self.panel.show_overview()
         self._switch_provider(provider_id)
 
+    def _open_compact_overview(self) -> None:
+        if self.__dict__.get("_compact_overview") is None:
+            from ui.compact_overview import CompactOverview
+
+            self._compact_overview = CompactOverview(self)
+            compact = self._compact_overview
+            compact.auto_refresh_requested.connect(lambda: self._refresh_overview(automatic=True, provider_ids=compact.selected_providers()))
+            compact.refresh_requested.connect(lambda: self._refresh_overview(provider_ids=compact.selected_providers()))
+            compact.sources_changed.connect(self._compact_sources_changed)
+            compact.auto_refresh_stopped.connect(self._stop_overview_auto_refresh)
+            compact.provider_selected.connect(self._open_compact_provider)
+            compact.settings_requested.connect(self.open_settings)
+        self._compact_overview.set_sources(configured_provider_ids())
+        self._compact_overview.show()
+        self._compact_overview.raise_()
+        self._update_provider_overview()
+
+    def _compact_sources_changed(self) -> None:
+        self._update_provider_overview()
+        self._stop_overview_auto_refresh()
+        self._refresh_overview(automatic=True, provider_ids=self._compact_overview.selected_providers())
+
+    def _open_compact_provider(self, provider_id: str) -> None:
+        self._ensure_panel().show_overview()
+        self._switch_provider(provider_id)
+        self.expand_panel()
+
     def _refresh_from_panel(self) -> None:
         settings = self.__dict__.get("_settings_window")
         if settings is not None and settings.isVisible() and settings.account_profiles_page is not None and settings.tabs.currentIndex() == settings._profiles_tab_index:
@@ -1291,13 +1323,19 @@ class FloatingWidget(QWidget):
             self.refresh()
 
     def _update_provider_overview(self) -> None:
-        if not self.__dict__.get("_overview_opened", False):
-            return
-        if self.panel is None or self.panel.provider_overview is None:
+        overview = self.panel.provider_overview if self.panel is not None and self.__dict__.get("_overview_opened", False) else None
+        if overview is not None and not overview.isVisible():
+            overview = None
+        compact = self.__dict__.get("_compact_overview")
+        compact_visible = compact is not None and compact.isVisible()
+        if overview is None and not compact_visible:
             return
         captured = dict(config_manager.all_config())
         snapshots = {}
-        for provider_id in self._overview_ids:
+        provider_ids = list(self._overview_ids) if overview is not None else []
+        if compact_visible:
+            provider_ids = list(dict.fromkeys([*provider_ids, *compact.selected_providers()]))
+        for provider_id in provider_ids:
             if provider_id in captured.get("DISABLED_PROVIDER_IDS", []):
                 continue
             captured["ACTIVE_PROVIDER"] = provider_id
@@ -1309,28 +1347,36 @@ class FloatingWidget(QWidget):
             if data is not None and data.account_key != account_key:
                 data = None
             snapshots[provider_id] = data
-        self.panel.provider_overview.set_data(snapshots)
-        self.panel.provider_overview.set_refreshing(bool(
-            self._overview_refresh_queue or self._overview_refresh_active
-        ))
+        if overview is not None:
+            overview.set_data({pid: data for pid, data in snapshots.items() if pid in self._overview_ids})
+            overview.set_refreshing(bool(self._overview_refresh_queue or self._overview_refresh_active))
+        if compact_visible:
+            compact.board.set_data({pid: snapshots.get(pid) for pid in compact.selected_providers() if pid in snapshots})
 
-    def _refresh_overview(self, *, automatic: bool = False) -> None:
+    def _refresh_overview(self, *, automatic: bool = False, provider_ids: list[str] | None = None) -> None:
         if self._closed or self._overview_refresh_queue or self._overview_refresh_active:
             return
         self._overview_ids = configured_provider_ids()
+        targets = self._overview_ids if provider_ids is None else [pid for pid in provider_ids if pid in self._overview_ids]
         self._overview_batch_automatic = automatic
         now = time.monotonic()
         # 页面切换和定时器可同时触发；自动采集跳过一分钟内已开始的请求，避免重复轮询。
         self._overview_refresh_queue = [
-            provider_id for provider_id in self._overview_ids
+            provider_id for provider_id in targets
             if not automatic or now - self._provider_last_started.get(provider_id, float("-inf")) >= 60
         ]
         self._advance_overview_refresh()
 
     def _stop_overview_auto_refresh(self) -> None:
         if self.__dict__.get("_overview_batch_automatic", False):
-            # 已发出的请求正常收尾；离开总览后不再为该页面启动后续平台请求。
-            self._overview_refresh_queue.clear()
+            # 各展示面共享同一队列；只保留仍可见的看板所需请求，已发出的任务正常收尾。
+            remaining = set()
+            if self.panel is not None and self.__dict__.get("_overview_opened", False) and self.panel.provider_overview is not None and self.panel.provider_overview.isVisible():
+                remaining.update(self._overview_ids)
+            compact = self.__dict__.get("_compact_overview")
+            if compact is not None and compact.isVisible():
+                remaining.update(compact.selected_providers())
+            self._overview_refresh_queue[:] = [pid for pid in self._overview_refresh_queue if pid in remaining]
 
     def _advance_overview_refresh(self) -> None:
         if self._closed:
@@ -2099,6 +2145,9 @@ class FloatingWidget(QWidget):
             x, y = self.x(), self.y()
         config_manager.save_widget_position(x, y)
         self._closed = True
+        compact = self.__dict__.get("_compact_overview")
+        if compact is not None:
+            compact.close()
         self._vpet.stop()
         self._refresh_timer.stop()
         self._background_refresh_timer.stop()
