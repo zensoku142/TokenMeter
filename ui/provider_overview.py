@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -27,7 +27,7 @@ from ui.qt_theme import current_theme, theme_controller
 def provider_status_message(data: TokenData | None) -> str:
     """Use error codes, never raw responses, for a safe recovery explanation."""
     if data is None:
-        return "尚未采集，点击刷新总览"
+        return "尚未采集，等待自动更新"
     codes = set(data.refresh_error_codes) | {error.code for error in data.errors}
     if "AUTH_EXPIRED" in codes:
         return "登录已失效，请重新连接；下方仅为上次记录"
@@ -47,6 +47,8 @@ def provider_status_message(data: TokenData | None) -> str:
 class ProviderOverview(QWidget):
     back_requested = Signal()
     refresh_requested = Signal()
+    auto_refresh_requested = Signal()
+    auto_refresh_stopped = Signal()
     provider_selected = Signal(str)
     connection_requested = Signal(str)
 
@@ -87,8 +89,26 @@ class ProviderOverview(QWidget):
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll, 1)
         self.cards: dict[str, QFrame] = {}
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(60_000)
+        self._auto_timer.timeout.connect(self.auto_refresh_requested)
         theme_controller().changed.connect(self.refresh_theme)
         self.refresh_theme()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._auto_timer.start()
+        # 首次创建时先完成信号连接并绘制缓存，再启动自动采集。
+        QTimer.singleShot(0, self._request_visible_refresh)
+
+    def _request_visible_refresh(self):
+        if self.isVisible():
+            self.auto_refresh_requested.emit()
+
+    def hideEvent(self, event):
+        self._auto_timer.stop()
+        self.auto_refresh_stopped.emit()
+        super().hideEvent(event)
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_button.setEnabled(not refreshing)

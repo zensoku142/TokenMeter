@@ -1256,6 +1256,8 @@ class FloatingWidget(QWidget):
         overview = panel.show_provider_overview()
         if created:
             overview.refresh_requested.connect(self._refresh_overview)
+            overview.auto_refresh_requested.connect(lambda: self._refresh_overview(automatic=True))
+            overview.auto_refresh_stopped.connect(self._stop_overview_auto_refresh)
             overview.provider_selected.connect(self._overview_select_provider)
             overview.connection_requested.connect(self.open_settings)
         self._overview_ids = configured_provider_ids()
@@ -1298,12 +1300,23 @@ class FloatingWidget(QWidget):
             self._overview_refresh_queue or self._overview_refresh_active
         ))
 
-    def _refresh_overview(self) -> None:
+    def _refresh_overview(self, *, automatic: bool = False) -> None:
         if self._closed or self._overview_refresh_queue or self._overview_refresh_active:
             return
         self._overview_ids = configured_provider_ids()
-        self._overview_refresh_queue = list(self._overview_ids)
+        self._overview_batch_automatic = automatic
+        now = time.monotonic()
+        # 页面切换和定时器可同时触发；自动采集跳过一分钟内已开始的请求，避免重复轮询。
+        self._overview_refresh_queue = [
+            provider_id for provider_id in self._overview_ids
+            if not automatic or now - self._provider_last_started.get(provider_id, float("-inf")) >= 60
+        ]
         self._advance_overview_refresh()
+
+    def _stop_overview_auto_refresh(self) -> None:
+        if self.__dict__.get("_overview_batch_automatic", False):
+            # 已发出的请求正常收尾；离开总览后不再为该页面启动后续平台请求。
+            self._overview_refresh_queue.clear()
 
     def _advance_overview_refresh(self) -> None:
         if self._closed:

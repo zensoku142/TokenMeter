@@ -211,3 +211,30 @@ def test_overview_obeys_rate_limit_backoff(monkeypatch):
     assert not widget._start_provider_refresh("codex", DEFAULT_CONFIG, lightweight=True,
                                                queue_if_busy=False, reason="overview")
     widget._thread_pool.start.assert_not_called()
+
+
+def test_overview_auto_refresh_starts_on_show_and_stops_when_hidden():
+    page = ProviderOverview()
+    spy = QSignalSpy(page.auto_refresh_requested)
+    page.show()
+    APP.processEvents()
+    assert spy.count() == 1
+    assert page._auto_timer.isActive()
+    page.hide()
+    assert not page._auto_timer.isActive()
+
+
+def test_auto_overview_skips_recently_refreshed_providers(monkeypatch):
+    import time
+
+    widget = widget_stub()
+    widget._overview_refresh_queue = []
+    widget._overview_refresh_active = None
+    widget._provider_last_started["codex"] = time.monotonic() - 10
+    widget._advance_overview_refresh = Mock()
+    monkeypatch.setattr("ui.qt_widget.configured_provider_ids", lambda: ["codex", "claude"])
+    widget._refresh_overview(automatic=True)
+    assert widget._overview_refresh_queue == ["claude"]
+    widget._advance_overview_refresh.assert_called_once_with()
+    widget._stop_overview_auto_refresh()
+    assert widget._overview_refresh_queue == []

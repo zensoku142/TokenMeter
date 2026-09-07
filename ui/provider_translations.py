@@ -1,6 +1,7 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "尚未采集，等待自动更新": ("Not collected yet. Waiting for automatic refresh.", "尚未採集，等待自動更新", "未取得です。自動更新を待っています。", "아직 수집되지 않았습니다. 자동 업데이트를 기다리는 중입니다."),
     "导出 Excel": ("Export Excel", "匯出 Excel", "Excel にエクスポート", "Excel 내보내기"),
     "正在导出 Excel": ("Exporting Excel", "正在匯出 Excel", "Excel を出力中", "Excel 내보내는 중"),
     "Excel 已导出": ("Excel exported", "Excel 已匯出", "Excel を出力しました", "Excel 내보내기 완료"),
