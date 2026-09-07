@@ -55,6 +55,7 @@ class LocalAnalyticsDialog(QDialog):
     def __init__(self, parent=None, *, embedded=False):
         super().__init__(parent)
         self.setObjectName("localAnalytics")
+        self._embedded = embedded
         if embedded:
             self.setWindowFlags(Qt.WindowType.Widget)
         bind_text(self, "本机统计", method="setWindowTitle")
@@ -174,7 +175,7 @@ class LocalAnalyticsDialog(QDialog):
         border = QColor(tokens.border)
         divider = f"rgba({border.red()}, {border.green()}, {border.blue()}, 82)"
         self.setStyleSheet(f"""
-            QDialog#localAnalytics {{ background: {tokens.window}; color: {tokens.text}; }}
+            QDialog#localAnalytics {{ background: {'transparent' if self._embedded else tokens.window}; color: {tokens.text}; }}
             QDialog#localAnalytics QLabel#analyticsNote {{ color: {tokens.subtext}; }}
             QDialog#localAnalytics QLabel#analyticsTotal {{ color: {tokens.value}; font-size: 26px; font-weight: 600; }}
             QDialog#localAnalytics QPushButton {{ min-height: 28px; padding: 0 12px; border: 1px solid {divider}; border-radius: 9px; }}

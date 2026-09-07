@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -120,15 +121,76 @@ class ProviderOverview(QWidget):
                 connection.clicked.connect(lambda _checked=False, pid=provider_id: self.connection_requested.emit(pid))
                 heading.addWidget(connection)
                 card_layout.addLayout(heading)
-                for _ in range(3):
-                    card_layout.addWidget(self._label())
+                for name in ("overviewSummary", "overviewStatus", "overviewTimestamp"):
+                    label = self._label()
+                    label.setObjectName(name)
+                    card_layout.addWidget(label)
+                gauges = QWidget()
+                gauge_layout = QVBoxLayout(gauges)
+                gauge_layout.setContentsMargins(0, 4, 0, 4)
+                gauge_layout.setSpacing(10)
+                card._gauges = []
+                for _ in range(2):
+                    row = QWidget()
+                    row_layout = QVBoxLayout(row)
+                    row_layout.setContentsMargins(0, 0, 0, 0)
+                    row_layout.setSpacing(4)
+                    line = QHBoxLayout()
+                    label, value, reset = (self._label() for _ in range(3))
+                    value.setObjectName("overviewValue")
+                    value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    line.addWidget(label, 2)
+                    line.addWidget(value, 1)
+                    row_layout.addLayout(line)
+                    bar = QProgressBar()
+                    bar.setRange(0, 1000)
+                    bar.setTextVisible(False)
+                    bar.setFixedHeight(8)
+                    row_layout.addWidget(bar)
+                    row_layout.addWidget(reset)
+                    gauge_layout.addWidget(row)
+                    card._gauges.append((row, label, value, bar, reset))
+                card_layout.insertWidget(2, gauges)
                 self.cards[provider_id] = card
                 self.cards_layout.insertWidget(index + 1, card)
             card = self.cards[provider_id]
             card_layout = card.layout()
             # 复用只读快照供语言切换重算摘要，不复制其中的完整历史记录。
-            summary, status, timestamp = (card_layout.itemAt(i).widget() for i in range(1, 4))
+            summary, status, timestamp = (card.findChild(QLabel, name) for name in (
+                "overviewSummary", "overviewStatus", "overviewTimestamp",
+            ))
             bind_text(summary, lambda pid=provider_id, value=data: self._summary(pid, value))
+            available = bool(data and data.last_success_at)
+            subscription = PROVIDERS[provider_id].supports_subscription_quota
+            windows = sorted(data.quota_windows, key=lambda w: quota_used_percent(w.used_percent) or 0, reverse=True) if data else []
+            # 未知或缺失额度不绘制进度；过期读数用灰色并保留醒目的状态说明。
+            summary.setVisible(not available or (subscription and not windows))
+            stale = bool(data and (data.is_stale or data.errors or data.refresh_error_codes or data.quota_source.startswith("cache")))
+            for position, (row, label, value, bar, reset) in enumerate(card._gauges):
+                row.setVisible(available and (not subscription or position < len(windows)))
+                if not available:
+                    continue
+                if subscription and position < len(windows):
+                    window = windows[position]
+                    used = quota_used_percent(window.used_percent)
+                    remaining = max(0, 100 - used) if used is not None else None
+                    bind_text(label, window.title)
+                    bind_text(value, lambda amount=remaining: tr("剩余 {remaining}%", remaining=f"{amount:g}") if amount is not None else "--")
+                    bar.setVisible(remaining is not None)
+                    bar.setValue(round(remaining * 10) if remaining is not None else 0)
+                    bar.setProperty("tone", "stale" if stale else "low" if remaining is not None and remaining <= 10 else "normal")
+                    bind_text(bar, window.title, method="setAccessibleName")
+                    bind_text(bar, lambda amount=remaining: tr("剩余 {remaining}%", remaining=f"{amount:g}") if amount is not None else "--", method="setAccessibleDescription")
+                    bind_text(reset, lambda current=window: tr(format_reset_countdown(current.resets_at)) if current.resets_at else tr("平台未提供重置时间"))
+                    reset.show()
+                elif not subscription:
+                    bind_text(label, PROVIDERS[provider_id].balance_label if position == 0 else "今日使用金额")
+                    value.setText(format_money(data.balance_cny if position == 0 else data.today_cost_cny, data.currency))
+                    bar.hide()
+                    reset.hide()
+            if available and subscription and len(windows) > 2:
+                bind_text(summary, lambda count=len(windows) - 2: tr("还有 {count} 个额度窗口，请查看详情", count=count))
+                summary.show()
             message = provider_status_message(data)
             bind_text(status, message)
             status.setVisible(bool(message))
@@ -176,9 +238,15 @@ class ProviderOverview(QWidget):
         border = QColor(tokens.border)
         divider = f"rgba({border.red()}, {border.green()}, {border.blue()}, 82)"
         self.setStyleSheet(f"""
-            QWidget#providerOverview {{ background: {tokens.window}; color: {tokens.text}; }}
+            QWidget#providerOverview {{ background: transparent; color: {tokens.text}; }}
             QFrame#overviewCard {{ background: {tokens.surface}; border: 1px solid {divider}; border-radius: 12px; }}
             QFrame#overviewCard QLabel {{ background: transparent; color: {tokens.text}; border: none; }}
+            QFrame#overviewCard QLabel#overviewValue {{ font-size: 20px; font-weight: 600; }}
+            QFrame#overviewCard QLabel#overviewTimestamp {{ color: {tokens.subtext}; }}
+            QFrame#overviewCard QProgressBar {{ background: {divider}; border: 0; border-radius: 4px; }}
+            QFrame#overviewCard QProgressBar::chunk {{ background: {tokens.accent}; border-radius: 4px; }}
+            QFrame#overviewCard QProgressBar[tone="low"]::chunk {{ background: {tokens.danger}; }}
+            QFrame#overviewCard QProgressBar[tone="stale"]::chunk {{ background: {tokens.muted}; }}
             QWidget#providerOverview QPushButton {{ min-height: 28px; padding: 0 12px; border: 1px solid {divider}; border-radius: 9px; }}
         """)
         for provider_id, card in self.cards.items():

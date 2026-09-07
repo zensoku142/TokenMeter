@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 from api.providers import PROVIDERS
 from api.providers.base import FetchError, QuotaWindow
@@ -99,10 +99,43 @@ def test_tightest_quota_first_and_hostile_titles_are_plain_text():
     ])
     page.set_data({"codex": data})
     summary = page.cards["codex"].layout().itemAt(1).widget()
-    assert summary.text().startswith("<img")
-    assert "剩余 5%" in summary.text()
+    gauge = page.cards["codex"]._gauges[0]
+    assert gauge[1].text().startswith("<img")
+    assert "剩余 5%" in gauge[2].text()
+    assert gauge[3].value() == 50
     assert "还有 1 个" in summary.text()
     assert summary.textFormat() == Qt.TextFormat.PlainText
+
+
+@pytest.mark.parametrize("view", ["overview", "analytics"])
+def test_embedded_pages_preserve_transparent_bottom_corners(view):
+    from ui.qt_theme import configure_theme
+
+    configure_theme(APP, "light")
+    host = QWidget()
+    host.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    panel = MainPanel()
+    layout.addWidget(panel)
+    if view == "overview":
+        panel.show_provider_overview().set_data({"codex": snapshot()})
+    else:
+        panel._open_local_analytics()
+    host.show()
+    APP.processEvents()
+    image = host.grab().toImage()
+    assert image.pixelColor(0, image.height() - 1).alpha() == 0
+    assert image.pixelColor(image.width() - 1, image.height() - 1).alpha() == 0
+    host.close()
+
+
+def test_unknown_quota_has_no_fake_bar_and_cached_quota_is_muted():
+    page = ProviderOverview()
+    page.set_data({"codex": snapshot(is_stale=True, quota_windows=[QuotaWindow("weekly", "周额度", 80)])})
+    assert page.cards["codex"]._gauges[0][3].property("tone") == "stale"
+    page.set_data({"codex": snapshot(quota_windows=[QuotaWindow("weekly", "周额度", float("nan"))])})
+    assert page.cards["codex"]._gauges[0][3].isHidden()
 
 
 def test_refresh_preserves_cards_scroll_and_language_bindings():
