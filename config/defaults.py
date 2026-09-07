@@ -84,6 +84,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "CLAUDE_ACCESS_TOKEN": "",
     "CLAUDE_CREDENTIALS_FILE": "",
     "REFRESH_INTERVAL": 60_000,
+    "QUOTA_ALERT_ENABLED": False,
+    "QUOTA_ALERT_THRESHOLD": 10,
     "WIDGET_COMPACT_SIZE": 88,
     "WIDGET_EXPANDED_SIZE": (820, 564),
     "BG_COLOR": "#071427",
@@ -113,6 +115,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
 FIELD_META: dict[str, dict[str, Any]] = {
     **{key: {"kind": "text", "secret": key in SECRET_KEYS} for key in DEFAULT_CONFIG},
     "REFRESH_INTERVAL": {"kind": "int", "min": 5_000},
+    "QUOTA_ALERT_ENABLED": {"kind": "bool"},
+    "QUOTA_ALERT_THRESHOLD": {"kind": "int", "min": 1, "max": 50},
     "DEEPSEEK_PEAK_PRICING_ENABLED": {"kind": "bool"},
     "DEEPSEEK_PEAK_PERIOD_1_START": {"kind": "time"},
     "DEEPSEEK_PEAK_PERIOD_1_END": {"kind": "time"},

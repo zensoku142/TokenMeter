@@ -37,6 +37,8 @@ def widget_stub():
     widget._provider_results = {}
     widget._provider_last_started = {}
     widget._provider_task_started = {}
+    widget._provider_refresh_backoff = {}
+    widget._quota_alerted_windows = set()
     widget._closed = False
     widget._vpet = Mock(active=False)
     widget._vpet_updating = False
@@ -317,6 +319,7 @@ class RefreshTests(unittest.TestCase):
             account_key="A", status="ok", today_tokens=7, balance_cny=12.3,
             last_success_at=saved_at,
             per_provider=[PerProviderData("deepseek", "DeepSeek", status="ok")],
+            refresh_error_codes=("RATE_LIMITED",),
         )
         for account_key in ("A", "B"):
             with (
@@ -329,6 +332,7 @@ class RefreshTests(unittest.TestCase):
                 self.assertEqual(result.account_key, account_key)
                 self.assertEqual(result.status, "error")
                 self.assertEqual(result.errors[0].code, "UNKNOWN_ERROR")
+                self.assertEqual(result.refresh_error_codes, ("UNKNOWN_ERROR",))
                 self.assertEqual(result.per_provider[0].errors, result.errors)
                 if account_key == "A":
                     self.assertEqual(result.today_tokens, 7)
@@ -785,8 +789,339 @@ class RefreshTests(unittest.TestCase):
                 )
 
 
+class RefreshBackoffTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1000.0
+        self.config = {"ACTIVE_PROVIDER": "deepseek", "TEST_ACCOUNT": "A", "REFRESH_INTERVAL": 5000}
+        self.widget = widget_stub()
+        for item in (
+            patch("ui.qt_widget.time.monotonic", side_effect=lambda: self.now),
+            patch("ui.qt_widget.config_manager.all_config", side_effect=lambda: dict(self.config)),
+            patch("ui.qt_widget.config_manager.get", side_effect=lambda key, default=None: self.config.get(key, default)),
+            patch.object(TokenData, "account_key_for_config", side_effect=lambda config: str(config.get("TEST_ACCOUNT", "A"))),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
+
+    def start(self, provider="deepseek", reason="periodic_current"):
+        return self.widget._start_provider_refresh(
+            provider, self.config, lightweight=True, queue_if_busy=False, reason=reason,
+        )
+
+    def complete(self, error_code="", *, provider="deepseek", silent=False, account=None):
+        result = TokenData(
+            account_key=account or str(self.config["TEST_ACCOUNT"]),
+            status="ok" if silent or not error_code else "partial",
+            errors=[] if silent or not error_code else [FetchError(error_code, "额度", "测试错误")],
+            refresh_error_codes=(error_code,) if silent and error_code else (),
+        )
+        self.widget._finish_refresh(self.widget._in_flight_requests[provider], provider, result)
+        return result
+
+    def test_rate_limit_backoff_increases_from_completion_and_caps_at_fifteen_minutes(self):
+        self.assertTrue(self.start())
+        for delay in (60, 120, 240, 480, 900, 900, 900):
+            self.now += 7
+            self.complete("RATE_LIMITED")
+            deadline = self.now + delay
+            self.now = deadline - 0.001
+            self.assertFalse(self.start())
+            self.assertFalse(self.widget._pending_refreshes)
+            self.now = deadline
+            self.assertTrue(self.start())
+
+    def test_network_errors_throttle_current_timer_without_changing_configured_interval(self):
+        for error_code in ("NETWORK_ERROR", "NETWORK_TIMEOUT", "SERVER_ERROR"):
+            with self.subTest(error_code=error_code):
+                self.widget = widget_stub()
+                self.assertTrue(self.start())
+                self.complete(error_code)
+                self.now += 5
+                self.widget._periodic_refresh()
+                self.assertEqual(self.widget._thread_pool.start.call_count, 1)
+                self.widget._refresh_timer.start.assert_called_once_with(5000)
+                self.now += 25
+                self.assertTrue(self.start())
+
+    def test_silent_cached_quota_failure_still_backs_off(self):
+        self.assertTrue(self.start())
+        result = self.complete("RATE_LIMITED", silent=True)
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.errors, [])
+        self.now += 5
+        self.assertFalse(self.start())
+
+    def test_backoff_isolated_between_providers_and_accounts(self):
+        self.assertTrue(self.start())
+        self.complete("RATE_LIMITED")
+        self.assertFalse(self.start())
+        self.assertTrue(self.start("mimo", reason="periodic_background"))
+        self.complete(provider="mimo")
+        self.config["TEST_ACCOUNT"] = "B"
+        self.assertTrue(self.start())
+        self.complete()
+        self.config["TEST_ACCOUNT"] = "A"
+        self.assertFalse(self.start())
+
+    def test_manual_success_restores_normal_cadence_and_resets_failure_count(self):
+        self.assertTrue(self.start())
+        self.complete("RATE_LIMITED")
+        self.now += 5
+        self.assertTrue(self.start(reason="manual"))
+        self.complete()
+        self.assertFalse(self.widget._provider_refresh_backoff)
+        self.now += 5
+        self.widget._periodic_refresh()
+        self.assertEqual(self.widget._thread_pool.start.call_count, 3)
+        self.complete("RATE_LIMITED")
+        self.now += 60
+        self.assertTrue(self.start())
+
+    def test_pending_manual_retry_survives_automatic_failure_backoff(self):
+        self.assertTrue(self.start())
+        self.widget.refresh()
+        self.widget.refresh()
+        with patch("ui.qt_widget.QTimer.singleShot") as queue:
+            self.complete("RATE_LIMITED")
+        queue.assert_called_once()
+        queue.call_args.args[1]()
+        self.assertEqual(self.widget._thread_pool.start.call_count, 2)
+
+    def test_switch_allows_immediate_retry(self):
+        self.assertTrue(self.start())
+        self.complete("NETWORK_ERROR")
+        self.widget.refresh(force=True)
+        self.assertEqual(self.widget._thread_pool.start.call_count, 2)
+
+    def test_old_account_failure_cannot_delay_queued_new_account_request(self):
+        self.assertTrue(self.start())
+        self.config["TEST_ACCOUNT"] = "B"
+        with patch("ui.qt_widget.QTimer.singleShot") as queue:
+            self.complete("RATE_LIMITED", account="A")
+        self.assertFalse(self.widget._provider_refresh_backoff)
+        queue.call_args.args[1]()
+        self.assertEqual(self.widget._thread_pool.start.call_count, 2)
+        self.assertEqual(self.widget._thread_pool.start.call_args.args[0]._config["TEST_ACCOUNT"], "B")
+
+    def test_background_backoff_skips_only_failed_provider(self):
+        self.config["ACTIVE_PROVIDER"] = "codex"
+        self.config["BACKGROUND_PROVIDER_IDS"] = ["deepseek", "mimo"]
+        self.assertTrue(self.start(reason="periodic_background"))
+        self.complete("RATE_LIMITED")
+        self.assertTrue(self.start(reason="manual"))
+        self.complete("RATE_LIMITED")
+        self.now += 60
+        with patch("ui.qt_widget.configured_provider_ids", return_value=["codex", "deepseek", "mimo"]):
+            self.widget._periodic_background_refresh()
+        tasks = [call.args[0].provider_id for call in self.widget._thread_pool.start.call_args_list]
+        self.assertEqual(tasks, ["deepseek", "deepseek", "mimo"])
+
+    def test_local_storage_failure_does_not_throttle_network_collection(self):
+        self.assertTrue(self.start())
+        self.complete("LOCAL_STORAGE")
+        self.now += 5
+        self.assertTrue(self.start())
 
 
+class QuotaAlertTests(unittest.TestCase):
+    def setUp(self):
+        self.widget = widget_stub()
+        self.config = {
+            "ACTIVE_PROVIDER": "codex", "QUOTA_ALERT_ENABLED": True,
+            "QUOTA_ALERT_THRESHOLD": 10, "TEST_ACCOUNT": "A",
+        }
+        self.now = datetime(2026, 9, 5, 12)
+        clock = Mock()
+        clock.now.side_effect = lambda zone=None: self.now.replace(tzinfo=zone)
+        for item in (
+            patch("ui.qt_widget.config_manager.get", side_effect=lambda key, default=None: self.config.get(key, default)),
+            patch("ui.qt_widget.config_manager.all_config", side_effect=lambda: dict(self.config)),
+            patch.object(TokenData, "account_key_for_config", side_effect=lambda config: config.get("TEST_ACCOUNT", "A")),
+            patch("ui.qt_widget.datetime", clock),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
+
+    def result(self, used=95, **changes):
+        return TokenData(**{
+            "account_key": "A", "status": "ok", "last_success_at": self.now,
+            "quota_source": "interface", "quota_windows": [QuotaWindow("week", "Weekly", used)],
+            **changes,
+        })
+
+    def notify(self, result=None, provider="codex", account="A"):
+        self.widget._notify_low_quota(
+            result if result is not None else self.result(), provider, current_account_key=account,
+        )
+
+    def test_alert_is_disabled_by_default_and_configuration_bounds_are_validated(self):
+        self.assertIs(DEFAULT_CONFIG["QUOTA_ALERT_ENABLED"], False)
+        self.assertEqual(DEFAULT_CONFIG["QUOTA_ALERT_THRESHOLD"], 10)
+        self.config.pop("QUOTA_ALERT_ENABLED")
+        self.notify()
+        self.widget.tray.showMessage.assert_not_called()
+        self.assertFalse(self.widget._quota_alerted_windows)
+        self.assertEqual(validate_value("QUOTA_ALERT_THRESHOLD", 1), 1)
+        self.assertEqual(validate_value("QUOTA_ALERT_THRESHOLD", "50"), 50)
+        for invalid in (0, 51, "invalid"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_value("QUOTA_ALERT_THRESHOLD", invalid)
+
+    def test_every_new_low_window_is_merged_in_one_private_data_free_notification(self):
+        result = self.result(
+            account_key="secret-fingerprint", account_label="private@example.test",
+            account_plan="private-plan", per_provider=[PerProviderData("codex", "private-name")],
+            quota_windows=[
+                QuotaWindow("session", "Session", 95, detail="Bearer PRIVATE"),
+                QuotaWindow("week", "Weekly", 100),
+                QuotaWindow("other", "Healthy", 20),
+            ],
+        )
+        self.notify(result, account="secret-fingerprint")
+        self.widget.tray.showMessage.assert_called_once()
+        title, message, icon, duration = self.widget.tray.showMessage.call_args.args
+        self.assertIn("Codex", title)
+        self.assertIn("Session", message)
+        self.assertIn("5%", message)
+        self.assertIn("Weekly", message)
+        self.assertIn("0%", message)
+        self.assertNotIn("Healthy", message)
+        for private in ("secret-fingerprint", "private@example.test", "private-plan", "private-name", "PRIVATE"):
+            self.assertNotIn(private, title + message)
+        self.assertEqual(icon, QSystemTrayIcon.MessageIcon.Warning)
+        self.assertEqual(duration, 10_000)
+
+    def test_low_window_notifies_once_until_recovery_exceeds_hysteresis_margin(self):
+        for used in (90, 95, 89, 90, 85, 90):
+            self.notify(self.result(used))
+        self.assertEqual(self.widget.tray.showMessage.call_count, 1)
+        self.notify(self.result(84.9))
+        self.notify(self.result(90))
+        self.assertEqual(self.widget.tray.showMessage.call_count, 2)
+
+    def test_newly_low_window_can_notify_without_repeating_already_alerted_window(self):
+        self.notify(self.result(95))
+        self.notify(self.result(quota_windows=[
+            QuotaWindow("week", "Weekly", 95), QuotaWindow("session", "Session", 90),
+        ]))
+        self.assertEqual(self.widget.tray.showMessage.call_count, 2)
+        message = self.widget.tray.showMessage.call_args.args[1]
+        self.assertIn("Session", message)
+        self.assertNotIn("Weekly", message)
+
+    def test_scopes_are_isolated_by_account_and_provider(self):
+        self.notify()
+        self.notify(self.result(account_key="B"), account="B")
+        self.notify(provider="claude")
+        self.notify()
+        self.assertEqual(self.widget.tray.showMessage.call_count, 3)
+
+    def test_unverified_or_stale_results_cannot_alert_or_rearm(self):
+        changes = (
+            {"status": "partial"}, {"status": "error"}, {"is_stale": True},
+            {"errors": [FetchError("SERVER_ERROR", "quota", "test")]},
+            {"refresh_error_codes": ("RATE_LIMITED",)}, {"last_success_at": None},
+            {"quota_source": "cache"}, {"quota_source": ""}, {"account_key": ""},
+        )
+        for values in changes:
+            with self.subTest(values=values):
+                self.widget._quota_alerted_windows.clear()
+                self.widget.tray.reset_mock()
+                self.notify(self.result(**values))
+                self.widget.tray.showMessage.assert_not_called()
+                self.notify()
+                self.notify(self.result(0, **values))
+                self.notify()
+                self.assertEqual(self.widget.tray.showMessage.call_count, 1)
+
+    def test_unknown_or_nonfinite_percentages_do_not_alert(self):
+        for used in (None, float("nan"), float("inf"), float("-inf"), True, -1, "invalid"):
+            with self.subTest(used=used):
+                self.notify(self.result(used))
+        self.widget.tray.showMessage.assert_not_called()
+        self.notify(self.result(120))
+        self.assertIn("0%", self.widget.tray.showMessage.call_args.args[1])
+
+    def test_expired_windows_are_ignored_for_naive_and_aware_reset_times(self):
+        for zone in (None, timezone.utc):
+            self.notify(self.result(quota_windows=[QuotaWindow(
+                "expired", "Expired", 100, self.now.replace(tzinfo=zone) - timedelta(seconds=1),
+            )]))
+        self.widget.tray.showMessage.assert_not_called()
+        self.notify(self.result(quota_windows=[QuotaWindow(
+            "future", "Future", 100, self.now + timedelta(minutes=1),
+        )]))
+        self.widget.tray.showMessage.assert_called_once()
+
+    def test_fresh_local_snapshot_with_verified_account_can_alert(self):
+        self.notify(self.result(quota_source="local_snapshot"))
+        self.widget.tray.showMessage.assert_called_once()
+
+    def test_account_mismatch_and_non_subscription_provider_never_alert(self):
+        self.notify(account="B")
+        self.notify(provider="deepseek")
+        self.notify(provider="unknown")
+        self.widget.tray.showMessage.assert_not_called()
+
+    def test_configured_threshold_is_inclusive_and_invalid_values_fall_back_to_ten(self):
+        self.config["QUOTA_ALERT_THRESHOLD"] = 50
+        self.notify(self.result(49.9))
+        self.widget.tray.showMessage.assert_not_called()
+        self.notify(self.result(50))
+        self.widget.tray.showMessage.assert_called_once()
+        for invalid in (None, True, 0, 51, float("nan"), "invalid", 10.5):
+            with self.subTest(invalid=invalid):
+                self.widget._quota_alerted_windows.clear()
+                self.widget.tray.reset_mock()
+                self.config["QUOTA_ALERT_THRESHOLD"] = invalid
+                self.notify(self.result(89))
+                self.widget.tray.showMessage.assert_not_called()
+                self.notify(self.result(90))
+                self.widget.tray.showMessage.assert_called_once()
+
+    def test_absent_tray_does_not_consume_alert_for_later_visible_tray(self):
+        tray = self.widget.tray
+        self.widget.tray = None
+        self.notify()
+        self.assertFalse(self.widget._quota_alerted_windows)
+        self.widget.tray = tray
+        self.notify()
+        tray.showMessage.assert_called_once()
+
+    def test_background_refresh_notifies_without_replacing_current_provider_view(self):
+        self.config["ACTIVE_PROVIDER"] = "deepseek"
+        current = self.widget._data
+        self.widget._in_flight_requests["codex"] = 1
+        self.widget._finish_refresh(1, "codex", self.result())
+        self.assertIs(self.widget._data, current)
+        self.widget.tray.showMessage.assert_called_once()
+
+    def test_finished_old_account_request_cannot_notify_new_account(self):
+        self.config["TEST_ACCOUNT"] = "B"
+        self.widget._in_flight_requests["codex"] = 1
+        with patch("ui.qt_widget.QTimer.singleShot"):
+            self.widget._finish_refresh(1, "codex", self.result())
+        self.widget.tray.showMessage.assert_not_called()
+
+    def test_duplicate_window_ids_produce_one_notification_line(self):
+        result = self.result()
+        self.notify(replace(result, quota_windows=result.quota_windows * 2))
+        self.assertEqual(len(self.widget.tray.showMessage.call_args.args[1].splitlines()), 1)
+
+    def test_quota_notification_click_does_not_reuse_previous_authentication_action(self):
+        self.widget._auth_expired_provider_id = "mimo"
+        self.widget._auth_expired_providers.add("mimo")
+        self.notify()
+        self.widget.handle_auth_expired_notification_click()
+        self.widget.open_settings.assert_not_called()
+        self.assertIn("mimo", self.widget._auth_expired_providers)
+
+    def test_notification_translates_without_altering_provider_or_percentage(self):
+        with patch("ui.i18n.current_language", return_value="en"):
+            self.notify()
+        title, message = self.widget.tray.showMessage.call_args.args[:2]
+        self.assertIn("Codex quota running low", title)
+        self.assertEqual(message, "Weekly: 5% remaining")
 
 
 if __name__ == "__main__":

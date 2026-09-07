@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from datetime import datetime
@@ -58,6 +59,10 @@ MAX_BALL_SIZE = 124
 BALL_SIZE_STEP = 4
 BALL_SIZE_SAVE_DELAY_MS = 300
 BACKGROUND_PROVIDER_INTERVAL_MS = 60_000
+MAX_REFRESH_BACKOFF_SECONDS = 15 * 60
+_REFRESH_BACKOFF_ERROR_CODES = {
+    "RATE_LIMITED", "NETWORK_ERROR", "NETWORK_TIMEOUT", "SERVER_ERROR",
+}
 
 
 class FetchSignals(QObject):
@@ -188,6 +193,7 @@ def _fetch_tokens_safely(
         data.errors = [
             FetchError("UNKNOWN_ERROR", "后台刷新", "刷新数据时发生未知错误")
         ]
+        data.refresh_error_codes = ("UNKNOWN_ERROR",)
         for per in data.per_provider:
             per.status = data.status
             per.is_stale = data.is_stale
@@ -214,6 +220,8 @@ class FloatingWidget(QWidget):
         self._provider_results: dict[str, TokenData] = {}
         self._provider_last_started: dict[str, float] = {}
         self._provider_task_started: dict[str, float] = {}
+        self._provider_refresh_backoff: dict[tuple[str, str], tuple[int, float]] = {}
+        self._quota_alerted_windows: set[tuple[str, str, str]] = set()
         self._closed = False
         self._vpet = VPetHost(self)
         self._vpet_updating = False
@@ -1248,6 +1256,14 @@ class FloatingWidget(QWidget):
             config_manager.get("ACTIVE_PROVIDER", "")
         ).strip().lower()
         account_key = TokenData.account_key_for_config(captured_config)
+        backoff = self._provider_refresh_backoff.get((provider_id, account_key))
+        if (
+            reason in {"periodic_current", "periodic_background"}
+            and backoff is not None
+            and time.monotonic() < backoff[1]
+        ):
+            # 手动刷新/换凭据仍可主动重试；自动请求按账号隔离，避免限流持续恶化。
+            return False
         cached = self._provider_results.get(provider_id)
         if cached is not None and cached.account_key != account_key:
             self._provider_results.pop(provider_id, None)
@@ -1324,9 +1340,10 @@ class FloatingWidget(QWidget):
         provider_id = provider_id.strip().lower()
         current_config = dict(config_manager.all_config())
         current_config["ACTIVE_PROVIDER"] = provider_id
-        stale_account = bool(result.account_key) and (
-            result.account_key != TokenData.account_key_for_config(current_config)
+        current_account_key = (
+            TokenData.account_key_for_config(current_config) if result.account_key else ""
         )
+        stale_account = bool(result.account_key) and result.account_key != current_account_key
         with self._refresh_lock:
             if self._closed:
                 return
@@ -1368,7 +1385,20 @@ class FloatingWidget(QWidget):
             elapsed_ms,
         )
         if not stale_account:
+            scope = (provider_id, result.account_key)
+            error_codes = set(result.refresh_error_codes) | {
+                error.code for error in result.errors
+            }
+            if error_codes & _REFRESH_BACKOFF_ERROR_CODES:
+                failures = min(self._provider_refresh_backoff.get(scope, (0, 0))[0] + 1, 6)
+                base_delay = 60 if "RATE_LIMITED" in error_codes else 30
+                delay = min(base_delay * 2 ** (failures - 1), MAX_REFRESH_BACKOFF_SECONDS)
+                # 从请求完成计时，避免慢请求吃掉冷却期；monotonic 不受系统校时影响。
+                self._provider_refresh_backoff[scope] = (failures, time.monotonic() + delay)
+            else:
+                self._provider_refresh_backoff.pop(scope, None)
             self._notify_auth_expired(result, provider_id, is_current=is_current)
+            self._notify_low_quota(result, provider_id, current_account_key=current_account_key)
         if is_current:
             self._apply_update()
         if pending is not None:
@@ -1378,6 +1408,63 @@ class FloatingWidget(QWidget):
                     current_id, value
                 ),
             )
+
+    def _notify_low_quota(
+        self, result: TokenData, provider_id: str, *, current_account_key: str,
+    ) -> None:
+        provider = PROVIDERS.get(provider_id)
+        if (
+            config_manager.get("QUOTA_ALERT_ENABLED", False) is not True
+            or self.tray is None
+            or provider is None
+            or not provider.supports_subscription_quota
+            or not result.account_key
+            or result.account_key != current_account_key
+            or result.status != "ok"
+            or result.is_stale
+            or result.errors
+            or result.refresh_error_codes
+            or result.last_success_at is None
+            or result.quota_source not in {"interface", "local_snapshot"}
+        ):
+            return
+        threshold = config_manager.get("QUOTA_ALERT_THRESHOLD", 10)
+        if type(threshold) is not int or not 1 <= threshold <= 50:
+            threshold = 10
+        low_windows: dict[tuple[str, str, str], tuple[str, float]] = {}
+        for window in result.quota_windows:
+            try:
+                used = float(window.used_percent)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if isinstance(window.used_percent, bool) or not math.isfinite(used) or used < 0:
+                continue
+            if window.resets_at is not None and window.resets_at <= datetime.now(window.resets_at.tzinfo):
+                # 已结束的旧周期不能触发告警；等平台返回新周期，避免重置边界的虚假低额度。
+                continue
+            remaining = max(0.0, 100 - used)
+            scope = (provider_id, result.account_key, window.id)
+            if remaining > threshold + 5:
+                # 留出 5 个百分点的恢复区间，防止接口舍入或边界抖动反复打扰用户。
+                self._quota_alerted_windows.discard(scope)
+            elif remaining <= threshold and scope not in self._quota_alerted_windows:
+                title = " ".join(window.title.split()) or tr("订阅额度")
+                low_windows[scope] = (title, remaining)
+        if not low_windows:
+            return
+        # 同一平台的多模型窗口合并一条；通知不包含账号标签、指纹或任何原始响应明细。
+        # 额度提醒不能沿用上一条认证通知的点击动作，否则会误启动其他平台的 Cookie 获取。
+        self._auth_expired_provider_id = None
+        self.tray.showMessage(
+            tr("{app}：{provider} 额度不足", app=APP_DISPLAY_NAME, provider=provider.name),
+            "\n".join(
+                tr("{window}：剩余 {remaining}%", window=title, remaining=f"{remaining:g}")
+                for title, remaining in low_windows.values()
+            ),
+            QSystemTrayIcon.MessageIcon.Warning,
+            10_000,
+        )
+        self._quota_alerted_windows.update(low_windows)
 
     def _notify_auth_expired(
         self, result: TokenData, provider_id: str, *, is_current: bool

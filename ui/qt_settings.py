@@ -560,6 +560,24 @@ class SettingsWindow(QDialog):
             self.background_provider_checks[provider_id] = check
             background_provider_layout.addWidget(check, index // 3, index % 3)
         runtime_form.addRow(bind_text(QLabel(), "同时获取"), background_provider_widget)
+        alert_row = QWidget()
+        alert_layout = QHBoxLayout(alert_row)
+        alert_layout.setContentsMargins(0, 0, 0, 0)
+        alert_layout.setSpacing(8)
+        self.quota_alert_check = bind_text(QCheckBox(), "低额度提醒")
+        self.quota_alert_threshold = QSpinBox()
+        self.quota_alert_threshold.setRange(1, 50)
+        self.quota_alert_threshold.setSuffix("%")
+        self.quota_alert_threshold.setFixedWidth(76)
+        bind_text(self.quota_alert_threshold, "提醒阈值", method="setAccessibleName")
+        self.quota_alert_threshold.setEnabled(False)
+        self.quota_alert_check.toggled.connect(self.quota_alert_threshold.setEnabled)
+        bind_text(self.quota_alert_check, "仅在成功刷新后提醒，同一低额度状态不会重复打扰。", method="setToolTip")
+        alert_layout.addWidget(self.quota_alert_check)
+        alert_layout.addStretch()
+        alert_layout.addWidget(bind_text(QLabel(), "剩余不高于"))
+        alert_layout.addWidget(self.quota_alert_threshold)
+        runtime_form.addRow(bind_text(QLabel(), "订阅额度"), alert_row)
         self.minute_usage_interval_minutes = QSpinBox()
         self.minute_usage_interval_minutes.setRange(1, 60)
         bind_text(self.minute_usage_interval_minutes, " 分钟", method='setSuffix')
@@ -1655,6 +1673,8 @@ class SettingsWindow(QDialog):
             int(values.get("MINUTE_USAGE_RETENTION_DAYS", 3))
         )
         background_provider_ids = set(values.get("BACKGROUND_PROVIDER_IDS", []))
+        self.quota_alert_check.setChecked(bool(values.get("QUOTA_ALERT_ENABLED", False)))
+        self.quota_alert_threshold.setValue(int(values.get("QUOTA_ALERT_THRESHOLD", 10)))
         for provider_id, check in self.background_provider_checks.items():
             check.setChecked(provider_id in background_provider_ids)
         self.set_theme_mode(
@@ -1748,6 +1768,8 @@ class SettingsWindow(QDialog):
             "MINUTE_USAGE_INTERVAL_MINUTES": self.minute_usage_interval_minutes.value(),
             "MINUTE_USAGE_RETENTION_DAYS": self.minute_usage_retention_days.value(),
             "ACTIVE_PROVIDER": str(self.provider_combo.currentData() or ""),
+            "QUOTA_ALERT_ENABLED": self.quota_alert_check.isChecked(),
+            "QUOTA_ALERT_THRESHOLD": self.quota_alert_threshold.value(),
             "BACKGROUND_PROVIDER_IDS": [
                 provider_id
                 for provider_id, check in self.background_provider_checks.items()

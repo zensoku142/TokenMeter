@@ -445,6 +445,8 @@ class StoreTests(unittest.TestCase):
 
         for error_code in (
             "INVALID_RESPONSE",
+            "NETWORK_ERROR",
+            "NETWORK_TIMEOUT",
             "RATE_LIMITED",
             "SERVER_ERROR",
             "UNKNOWN_ERROR",
@@ -465,6 +467,9 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(data.weekly_usage[0]["tokens"], 5678)
                 self.assertEqual(data.account_plan, "pro")
                 self.assertEqual(data.errors, [])
+                self.assertEqual(data.refresh_error_codes, (error_code,))
+                recovered = self.fetch_with(SuccessfulQuotaProvider())
+                self.assertEqual(recovered.refresh_error_codes, ())
 
     def test_codex_stats_failure_keeps_official_cache_and_merges_only_today(self):
         class QuotaProvider(FakeProvider):
@@ -773,6 +778,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(second.today_tokens, 7)
         self.assertEqual(second.status, "error")
         self.assertTrue(second.is_stale)
+        self.assertEqual(second.refresh_error_codes, ("NETWORK_TIMEOUT",))
 
     def test_switching_provider_never_reuses_previous_provider_data(self):
         deepseek = self.fetch_with(FakeProvider(payloads=[payload("2026-07-03", 7, ".2")]))

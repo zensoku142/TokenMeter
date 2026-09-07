@@ -450,6 +450,8 @@ class TokenData:
     account_key: str = ""
     history_provider: str = ""
     minute_history_complete: bool = True
+    # 缓存降级会隐藏界面错误；调度器仍需本轮错误码退避，不能沿用旧快照的状态。
+    refresh_error_codes: tuple[str, ...] = ()
 
     _last_snapshot: ClassVar["TokenData | None"] = None
     _provider_snapshots: ClassVar[dict[str, "TokenData"]] = {}
@@ -905,6 +907,7 @@ class TokenData:
                     cached = persisted
         data = cached
         data.account_key = account_key
+        data.refresh_error_codes = ()
         try:
             history_provider = (
                 history.scoped_provider(provider.id, account_key)
@@ -914,6 +917,7 @@ class TokenData:
             # 账号隔离迁移失败时不能退回无账号历史；保留同账号快照并报告存储错误。
             config_manager.logger().exception("Account history initialization failed for %s", provider.id)
             data.errors = [FetchError("LOCAL_STORAGE", "历史缓存", "账号历史初始化失败")]
+            data.refresh_error_codes = ("LOCAL_STORAGE",)
             data.is_stale = True
             data.status = "partial" if data.last_success_at else "error"
             if not data.per_provider:
@@ -1122,6 +1126,7 @@ class TokenData:
                 # 没有本地活动时也继续展示上一份完整额度。
                 successes += 1
             if quota_error:
+                data.refresh_error_codes = (quota_error.code,)
                 if kept_cached_quota:
                     # 静默降级只影响界面；日志仍保留失败证据用于诊断。
                     config_manager.logger().warning(
@@ -1417,6 +1422,9 @@ class TokenData:
         data.weekly_activity_source = per.weekly_activity_source
         data.statistics_source = per.statistics_source
         data.errors = list(per.errors)
+        data.refresh_error_codes = tuple(dict.fromkeys(
+            (*data.refresh_error_codes, *(error.code for error in data.errors))
+        ))
         data.minute_usage = minute_rows
         data.minute_usage_status = minute_status
         data.minute_usage_date = current_day.isoformat()
