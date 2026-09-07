@@ -253,9 +253,13 @@ internal sealed partial class PetWindow
             Usage("Codex · 演示数据", "剩余 65%");
             checks["cloudQuotaRestoresNeutralOutline"] = quotaCloud.OutlineColor == Color.FromRgb(216, 222, 229);
             var customTheme = new { accent = "#8A4FFF", accent_hover = "#9D6BFF", water_top = "#BDA1FF",
-                water_deep = "#6439B9", water_back = "#9D6BFF", peak = "#F2AB3B", on_accent = "#FFFFFF" };
+                water_deep = "#6439B9", water_back = "#9D6BFF", peak = "#F2AB3B", on_accent = "#FFFFFF",
+                surface = "#1D1D1D", text = "#FAFAFA", subtext = "#A8A8AD", border = "#6A6A6A", warning = "#F2AB3B" };
             Usage("Codex · 演示数据", "剩余 65%", theme: customTheme);
             checks["cloudWaterUsesThemeAccent"] = quotaCloud.LiquidColor == Color.FromRgb(138, 79, 255) && quotaCloud.PrimaryText == "65%";
+            checks["cloudAndQuotaFollowDarkSurface"] = quotaCloud.SurfaceColor == Color.FromRgb(29, 29, 29) &&
+                quotaCloud.TextColor == Color.FromRgb(250, 250, 250) &&
+                ((SolidColorBrush)quota!.Background).Color == Color.FromRgb(29, 29, 29);
             CaptureCloudPreview(Path.Combine(output, "cloud-theme-quota.png"));
             Usage("DeepSeek · 演示数据", "余额 ¥12.80", pricingPeak: false);
             checks["cloudOffpeakUsesThemeAccent"] = quotaCloud.OutlineColor == Color.FromRgb(138, 79, 255);
@@ -266,6 +270,14 @@ internal sealed partial class PetWindow
             Usage("DeepSeek · 演示数据", "余额 ¥12.80", pricingPeak: true, theme: new { accent = "invalid", peak = "#GGGGGG" });
             checks["cloudInvalidThemeKeepsPreviousColors"] = quotaCloud.LiquidColor == Color.FromRgb(138, 79, 255) &&
                 quotaCloud.OutlineColor == Color.FromRgb(242, 171, 59);
+            Usage("Codex · 演示数据", "剩余 5%", "剩余额度不足", true, theme: customTheme);
+            checks["cloudLowQuotaUsesThemeWarning"] = quotaCloud.TextColor == Color.FromRgb(242, 171, 59);
+            Usage("Codex · 演示数据", "剩余 65%", theme: new {
+                surface = "#FFFFFF", text = "#111318", subtext = "#5E6571", border = "#90949B", warning = "#946000" });
+            checks["cloudAndQuotaFollowLightSurface"] = quotaCloud.SurfaceColor == Colors.White &&
+                quotaCloud.TextColor == Color.FromRgb(17, 19, 24) &&
+                ((SolidColorBrush)quota!.Background).Color == Colors.White;
+            CaptureCloudPreview(Path.Combine(output, "cloud-theme-light.png"));
             Usage("Codex · 演示数据", "剩余 65%");
             GetWindowRect(handle, out var beforeDrag);
             StartPetGesture(new Point(beforeDrag.Left + 60, beforeDrag.Top + 60), new Point(250, 100));

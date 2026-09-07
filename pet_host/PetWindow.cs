@@ -306,7 +306,10 @@ internal sealed partial class PetWindow : Window, IController
         bool? peak = usage.TryGetProperty("pricing_peak", out var pricing) &&
             pricing.ValueKind is JsonValueKind.True or JsonValueKind.False ? pricing.GetBoolean() : null;
         if (usage.TryGetProperty("theme", out var theme) && theme.ValueKind == JsonValueKind.Object)
+        {
+            quota?.SetTheme(theme);
             quotaCloud!.SetTheme(theme);
+        }
         quotaCloud!.SetUsage(Text("provider"), Text("primary"), Text("secondary"), Text("status"), warning, peak);
         string key = Text("provider") + ":" + Text("status");
         // 仅在警告首次出现时提示，不能每次额度轮询都打断宠物动作。

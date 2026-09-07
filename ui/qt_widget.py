@@ -1635,6 +1635,11 @@ class FloatingWidget(QWidget):
                 "water_back": theme.heat[3] if theme.name == "light" else theme.accent_hover,
                 "peak": "#FFB000" if theme.name == "light" else theme.warning,
                 "on_accent": theme.on_accent,
+                "surface": theme.surface,
+                "text": theme.value,
+                "subtext": theme.subtext,
+                "border": theme.border,
+                "warning": theme.warning,
             }
             self._vpet.update_usage(message)
 

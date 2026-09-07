@@ -36,6 +36,11 @@ internal sealed class QuotaCloudWindow : Window
     private readonly Viewbox surface;
     private Color accentColor = Color.FromRgb(47, 114, 232);
     private Color peakColor = Color.FromRgb(255, 176, 0);
+    private Color textColor = Color.FromRgb(68, 81, 92);
+    private Color borderColor = Color.FromRgb(216, 222, 229);
+    private Color mutedColor = Colors.SlateGray;
+    private Color warningColor = Color.FromRgb(177, 86, 53);
+    private Color warningDotColor = Colors.DarkOrange;
     private Rect? lastBounds;
     private Point? lastPointerPosition;
     internal string PrimaryText => primary.Text;
@@ -47,6 +52,8 @@ internal sealed class QuotaCloudWindow : Window
     internal Geometry BubbleGeometry => silhouette.Data;
     internal Color OutlineColor => ((SolidColorBrush)silhouette.Stroke).Color;
     internal Color LiquidColor => ((LinearGradientBrush)frontWater.Fill).GradientStops[2].Color;
+    internal Color SurfaceColor => ((SolidColorBrush)silhouette.Fill).Color;
+    internal Color TextColor => ((SolidColorBrush)primary.Foreground).Color;
 
     public QuotaCloudWindow(bool demo, Action openPanel)
     {
@@ -136,17 +143,16 @@ internal sealed class QuotaCloudWindow : Window
 
     internal void SetTheme(JsonElement theme)
     {
-        Color Read(string key, Color fallback)
-        {
-            // 旧主程序不传主题时沿用默认色；异常颜色不能中断桌宠或交给 WPF 解析任意资源表达式。
-            if (theme.ValueKind == JsonValueKind.Object && theme.TryGetProperty(key, out var value) &&
-                value.ValueKind == JsonValueKind.String && value.GetString() is { Length: 7 } hex && hex[0] == '#' &&
-                int.TryParse(hex.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int rgb))
-                return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
-            return fallback;
-        }
+        Color Read(string key, Color fallback) => ReadThemeColor(theme, key, fallback);
         accentColor = Read("accent", accentColor);
         peakColor = Read("peak", peakColor);
+        // 旧主程序缺少这些可选字段时保留旧外观；新主程序让云朵底色、文字和提示一起跟随主题。
+        silhouette.Fill = new SolidColorBrush(Read("surface", SurfaceColor));
+        textColor = Read("text", textColor);
+        borderColor = Read("border", borderColor);
+        mutedColor = Read("subtext", mutedColor);
+        warningColor = Read("warning", warningColor);
+        warningDotColor = Read("warning", warningDotColor);
         var previous = frontWater.Fill as LinearGradientBrush;
         var gradient = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
         gradient.GradientStops.Add(new GradientStop(Read("water_top", previous?.GradientStops[0].Color ?? Color.FromRgb(132, 174, 243)), 0));
@@ -159,12 +165,22 @@ internal sealed class QuotaCloudWindow : Window
         waterText.Fill = new SolidColorBrush(Read("on_accent", ((SolidColorBrush)waterText.Fill).Color));
     }
 
+    internal static Color ReadThemeColor(JsonElement theme, string key, Color fallback)
+    {
+        // 两种额度窗口只接受 #RRGGBB；拒绝资源表达式或路径，非法颜色保留已有配色。
+        if (theme.ValueKind == JsonValueKind.Object && theme.TryGetProperty(key, out var value) &&
+            value.ValueKind == JsonValueKind.String && value.GetString() is { Length: 7 } hex && hex[0] == '#' &&
+            int.TryParse(hex.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int rgb))
+            return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+        return fallback;
+    }
+
     internal void SetUsage(string provider, string value, string secondary, string status, bool warning, bool? pricingPeak = null)
     {
         bool hasStatus = !string.IsNullOrWhiteSpace(status);
         // 小云朵仅保留数值；刷新/异常用小圆点提示，完整说明仍在原额度窗口和辅助功能文本中。
         statusDot.Visibility = hasStatus ? Visibility.Visible : Visibility.Collapsed;
-        statusDot.Fill = warning ? Brushes.DarkOrange : Brushes.SlateGray;
+        statusDot.Fill = new SolidColorBrush(warning ? warningDotColor : mutedColor);
         text.Margin = new Thickness(0, 40, 0, 0);
         primary.Text = string.IsNullOrWhiteSpace(value) ? "--" : value;
         // 保留现有管道和独立额度窗口的文案，只在云朵里把旧格式“剩余 65%”简化成“65%”。
@@ -180,7 +196,7 @@ internal sealed class QuotaCloudWindow : Window
             }
             else primary.Text = "--";
         }
-        primary.Foreground = new SolidColorBrush(warning ? Color.FromRgb(177, 86, 53) : Color.FromRgb(68, 81, 92));
+        primary.Foreground = new SolidColorBrush(warning ? warningColor : textColor);
         // 外轮廓进一步缩小时保住百分比字号，避免小气泡虽然不遮挡却读不清核心数值。
         primary.FontSize = RemainingPercent.HasValue ? 32 : 23;
         bool showPricing = RemainingPercent == null && pricingPeak.HasValue &&
@@ -188,7 +204,7 @@ internal sealed class QuotaCloudWindow : Window
         // 峰时使用当前主题的提醒色、平时使用强调色；关闭分时或切换账户后恢复中性描边。
         silhouette.Stroke = new SolidColorBrush(showPricing
             ? pricingPeak == true ? peakColor : accentColor
-            : Color.FromRgb(216, 222, 229));
+            : borderColor);
         silhouette.StrokeThickness = showPricing ? 2 : 1;
         string pricingLabel = showPricing ? pricingPeak == true ? "峰时" : "平时" : "";
         System.Windows.Automation.AutomationProperties.SetName(this, $"{provider} {primary.Text} {secondary} {status} {pricingLabel}");
