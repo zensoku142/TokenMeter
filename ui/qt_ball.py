@@ -67,8 +67,9 @@ CODEX_JERK_LIMIT = 320.0
 CODEX_VELOCITY_TAU = 0.055
 CODEX_ACCELERATION_TAU = 0.075
 CODEX_STOP_TIME = 0.085
-CODEX_IDLE_SPEED = 0.42
-CODEX_IDLE_AMPLITUDE_PX = 0.55
+# 小球缩放后也要有清晰可见的波峰；约 4.6 秒一个周期，面积校正保持额度水位不变。
+CODEX_IDLE_SPEED = 3.8
+CODEX_IDLE_AMPLITUDE_PX = 3.5
 CODEX_DYNAMIC_AMPLITUDE_PX = 1.2
 CODEX_AREA_SAMPLES = 128
 CODEX_SURFACE_SAMPLES = 64
@@ -636,6 +637,9 @@ class FloatingUsageBall(QWidget):
             self._quota_title,
             self._quota_value_text,
         ):
+            # 相同读数仍可能出现在动画被中断后；可见时恢复定时器，不重复重置物理状态。
+            if self.isVisible() and remaining is not None and remaining > 0:
+                self._ensure_animation()
             return
         self._quota_mode = True
         self._quota_remaining, self._quota_reset_text, self._quota_title, self._quota_value_text = state
