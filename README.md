@@ -32,15 +32,16 @@
 
 真实组件截图，使用演示数据。[查看原图与来源](docs/images/readme/README.md)。
 
-TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI Token 用量与订阅额度监控工具：可查看 Codex、Cursor 的已用与剩余额度、重置时间，以及 DeepSeek、Xiaomi MiMo、NayutoAI 的 Token 用量、API 费用、账户余额和历史趋势。
+TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI 用量与额度监控工具，当前源码提供 14 个独立平台入口，按平台能力展示订阅额度、重置时间、API 费用、账户余额和历史趋势。各平台的数据范围及权限要求不同，下载版的功能以对应 Release 说明为准。
 
 ## 功能
 
-- **订阅额度**：Codex / Cursor 的已用与剩余比例、重置时间；Codex 另有近 7 天 Token、年度活动和使用统计。
-- **API 用量**：DeepSeek / MiMo / NayutoAI 的费用与余额、今日分时图、Token 构成和历史趋势。
+- **品牌识别与快速切换**：离线品牌 SVG、纯图标快捷入口和“＋”管理面板，支持中英文名称搜索、已配置筛选和常用收藏。点击星形或按 `Ctrl+D` 收藏；当前平台始终显示，高亮标识选中状态。Nayuto 暂用通用标识。
+- **订阅额度**：Codex、Claude Code、Cursor、GitHub Copilot、GLM / Z.ai、Kimi Coding、MiniMax Token Plan、Gemini CLI 和 ElevenLabs；支持范围取决于平台接口。“额度明细”展示全部窗口、账户指标和数据来源。
+- **API 用量**：DeepSeek / MiMo / NayutoAI 的费用、余额与历史趋势，OpenRouter 的密钥预算和费用，以及 Moonshot / Kimi API 的账户余额；不同币种和不同预算范围分别展示。
 - **悬浮展示**：额度水球或余额展示，支持拖动、滚轮缩放、贴边隐藏和系统托盘常驻。
 - **外观与语言**：浅色、深色及系统主题，可调整主题色和透明度；支持简中、繁中、英语、日语、韩语。
-- **采集与缓存**：默认仅刷新当前平台，可选后台同步；支持离线缓存、DeepSeek 峰谷提示与 MiMo Cookie 获取及续期。
+- **采集与缓存**：默认仅刷新当前平台，可选后台同步；限流或网络故障时自动退避，手动刷新可主动重试。低额度提醒默认关闭，可在“采集与统计”中启用。支持离线缓存、DeepSeek 峰谷提示与 MiMo Cookie 获取及续期。
 - **桌面集成**：开机自启、自动更新、数据目录迁移，以及可选的 VPet 桌宠扩展。
 
 ## 安装与配置
@@ -52,6 +53,10 @@ TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI Token 用量与订�
 3. 设置自动保存，默认每 60 秒刷新。主题和语言位于“外观”，启动与贴边选项位于“悬浮与启动”。
 
 > 数据依赖平台接口与登录状态，接口变化或风控可能暂时影响获取。请仅使用自己的账户凭据。
+
+主面板和“设置 → 账户连接”共用品牌卡片选择器，支持名称搜索与已配置/常用筛选。OpenRouter 的密钥预算不代表全账户余额；Kimi API 余额与 Kimi Coding 订阅使用不同的密钥和独立入口；Copilot 需要有权访问额度的登录令牌。Claude Code 默认只读本机 OAuth 登录，也可手动填写 Access Token；显式指定[状态栏快照文件](docs/provider-support-research-2026-09-05.md#个人订阅官方状态栏快照)仍优先使用快照。平台未提供的明细显示为不可用；本程序不自动续期或改写其他客户端的 OAuth 登录。
+
+[平台支持范围与来源](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs 配置](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude 接入指南](docs/gemini-quota-2026-09-05.md) · [首批迭代规划](docs/iteration-plan-2026-09-05.md)
 
 ## VPet 桌宠（可选）
 

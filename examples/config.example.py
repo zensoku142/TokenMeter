@@ -24,8 +24,47 @@ MIMO_BASE = "https://platform.xiaomimimo.com"
 # Codex 默认读取本机 CLI 的 OAuth 登录文件；仅在凭据目录不是默认位置时填写。
 CODEX_HOME = ""
 
-# 可选值：deepseek、mimo、codex
+# Cursor 读取本机登录；NayutoAI 使用控制台凭据。
+CURSOR_GLOBAL_STORAGE = ""
+NAYUTO_AUTH = ""
+NAYUTO_BASE = "https://nayutoai.xyz"
+
+# 普通 Key 只读取该密钥的预算和费用，不是 OpenRouter 全账户余额。
+OPENROUTER_API_KEY = ""
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+# 国内站人民币；国际站地址为 https://api.moonshot.ai/v1，使用独立的国际站密钥。
+MOONSHOT_API_KEY = ""
+MOONSHOT_BASE = "https://api.moonshot.cn/v1"
+
+# Copilot 内部额度接口是实验性接入；令牌必须有本人账号的额度读取权限。
+COPILOT_TOKEN = ""
+
+# 可选：指定快照路径时优先读取该文件；留空先读取本机 OAuth 登录，无登录时回退默认快照。
+CLAUDE_STATUSLINE_FILE = ""
+CLAUDE_ACCESS_TOKEN = ""  # 可选：默认只读本机 Claude Code OAuth 登录
+CLAUDE_CREDENTIALS_FILE = ""  # 可选：指定非默认的登录文件
+
+# 仅显示已知套餐/工具额度比例；国内 API 根地址为 https://open.bigmodel.cn。
+ZAI_API_KEY = ""
+ZAI_BASE = "https://api.z.ai"
+
+# 编程订阅与API余额是独立入口，Kimi Coding使用其自己的密钥。
+KIMI_API_KEY = ""
+KIMI_BASE = "https://api.kimi.com/coding/v1"
+MINIMAX_API_KEY = ""
+MINIMAX_BASE = "https://api.minimax.io/v1"  # 国内站：https://api.minimaxi.com/v1
+ELEVENLABS_API_KEY = ""
+ELEVENLABS_BASE = "https://api.elevenlabs.io/v1"
+
+# 适用于仍由Code Assist提供额度的Gemini CLI OAuth账号，不是AI Studio API Key。
+GEMINI_ACCESS_TOKEN = ""
+GEMINI_CREDENTIALS_FILE = ""
+GEMINI_PROJECT_ID = ""
+
+# 可选值见 config/defaults.py 的 PROVIDER_IDS。
 ACTIVE_PROVIDER = "deepseek"
+BACKGROUND_PROVIDER_IDS = []  # 仅勾选需要后台同步的平台
 
 # Refresh interval in milliseconds
 REFRESH_INTERVAL = 60_000  # 60 seconds

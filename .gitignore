@@ -41,6 +41,10 @@ design-qa.md
 # docs 默认只作为本地过程资料；公开仓库仅保留 README 依赖的文件。
 docs/*
 !docs/PROJECT_STRUCTURE.md
+!docs/provider-support-research-2026-09-05.md
+!docs/iteration-plan-2026-09-05.md
+!docs/codexbar-provider-coverage-2026-09-05.md
+!docs/gemini-quota-2026-09-05.md
 !docs/images/
 docs/images/*
 !docs/images/readme-hero-v1.12.0.webp
