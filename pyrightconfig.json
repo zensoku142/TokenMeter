@@ -6,6 +6,9 @@
   "include": [
     "main.py",
     "config",
+    "data/local_usage.py",
+    "data/excel_export.py",
+    "data/quota_history.py",
     "api/providers/base.py",
     "api/providers/api_balance.py",
     "api/providers/claude.py",

@@ -99,7 +99,7 @@ class LocalUsageScanner:
                 return
             self.changed = True
             append = previous and previous.signature[:2] == signature[:2] and stat.st_size > previous.signature[2]
-            data = previous if append else _FileUsage(signature, session=hashlib.sha256(str(path).encode()).hexdigest())
+            data = previous if append and previous is not None else _FileUsage(signature, session=hashlib.sha256(str(path).encode()).hexdigest())
             with path.open("rb") as stream:
                 stream.seek(data.offset)
                 lines = 0

@@ -4,6 +4,13 @@ line-length = 100
 include = [
     "main.py",
     "config/*.py",
+    "data/local_usage.py",
+    "data/excel_export.py",
+    "data/quota_history.py",
+    "ui/provider_overview.py",
+    "ui/local_analytics.py",
+    "ui/account_profiles.py",
+    "ui/compact_overview.py",
     "api/deepseek.py",
     "api/http.py",
     "api/deepseek_pricing.py",
