@@ -2357,6 +2357,8 @@ class MainPanel(QFrame):
         self.close_button.clicked.connect(self.close_requested)
         self.view_button = self._tool_button("views", QStyle.StandardPixmap.SP_FileDialogListView, "切换视图")
         self.view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        # 标题栏只保留统一图标；菜单仍可点击/键盘打开，不叠加 Qt 的下箭头。
+        self.view_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; height: 0; }")
         self.view_menu = QMenu(self.view_button)
         self.view_button.setMenu(self.view_menu)
         self.detail_action = bind_text(QAction(self), "平台详情")
