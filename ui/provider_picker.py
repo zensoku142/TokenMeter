@@ -49,8 +49,8 @@ def pinned_provider_ids() -> list[str]:
 
 
 class _ProviderCardDelegate(QStyledItemDelegate):
-    hovered_pin = None
-    pressed_pin = None
+    hovered_pin: str | None = None
+    pressed_pin: str | None = None
 
     @staticmethod
     def pin_rect(rect):
@@ -178,7 +178,9 @@ class ProviderPicker(QComboBox):
         self.grid.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.grid.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.grid.setMouseTracking(True)
-        self.grid.setItemDelegate(_ProviderCardDelegate(self.grid))
+        # 保留具体委托类型；Qt 的 itemDelegate() 只声明基类，无法描述自定义收藏状态。
+        self._card_delegate = _ProviderCardDelegate(self.grid)
+        self.grid.setItemDelegate(self._card_delegate)
         bind_text(self.grid, "AI 平台列表", method="setAccessibleName")
         self.grid.itemClicked.connect(self._activate_item)
         self.grid.itemActivated.connect(self._activate_item)
@@ -213,8 +215,8 @@ class ProviderPicker(QComboBox):
         self._populate()
 
     def _populate(self, *_args) -> None:
-        self.grid.itemDelegate().hovered_pin = None
-        self.grid.itemDelegate().pressed_pin = None
+        self._card_delegate.hovered_pin = None
+        self._card_delegate.pressed_pin = None
         self._grid_viewport.unsetCursor()
         query = self.search.text().strip().casefold()
         if query and self._filter != "all":
@@ -394,7 +396,7 @@ class ProviderPicker(QComboBox):
             self.grid.doItemsLayout()
             self._position_remove_buttons()
         if watched is self._grid_viewport and event.type() == QEvent.Type.Leave:
-            self.grid.itemDelegate().hovered_pin = None
+            self._card_delegate.hovered_pin = None
             self._grid_viewport.unsetCursor()
             self._grid_viewport.update()
         if watched is self._grid_viewport and event.type() in (
@@ -403,9 +405,9 @@ class ProviderPicker(QComboBox):
         ):
             position = event.pos() if event.type() == QEvent.Type.ToolTip else event.position().toPoint()
             item = self.grid.itemAt(position)
-            delegate = self.grid.itemDelegate()
+            delegate = self._card_delegate
             over_pin = item is not None and delegate.pin_rect(self.grid.visualItemRect(item)).contains(position)
-            provider_id = item.data(Qt.ItemDataRole.UserRole)[0] if over_pin else None
+            provider_id = item.data(Qt.ItemDataRole.UserRole)[0] if over_pin and item is not None else None
             delegate.hovered_pin = provider_id
             self._grid_viewport.setCursor(Qt.CursorShape.PointingHandCursor if over_pin else Qt.CursorShape.ArrowCursor)
             self._grid_viewport.update()
@@ -422,7 +424,7 @@ class ProviderPicker(QComboBox):
                 delegate.pressed_pin = None
                 # 必须在同一收藏热区按下并松开；拖出按钮时取消，不能误收藏或切换平台。
                 if pressed_pin is not None:
-                    if pressed_pin == provider_id:
+                    if pressed_pin == provider_id and item is not None:
                         self._toggle_pin(item)
                     return True
                 if over_pin:
