@@ -23,7 +23,7 @@
 
 <p align="center">
   <strong>Windows AI Token 用量、費用與餘額監控工具</strong><br>
-  <sub>適用於 Codex、Cursor、DeepSeek、Xiaomi MiMo 與 NayutoAI 的用量監控工具。</sub>
+  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
 </p>
 
 <p align="center">
@@ -32,16 +32,20 @@
 
 真實元件截圖，介面為簡體中文，使用示範資料。[查看原圖與來源](docs/images/readme/README.md)。
 
-TokenMeter 是一款適用於 Windows 10/11 的輕量級 AI Token 用量與訂閱額度監控工具：可查看 Codex、Cursor 的已用與剩餘額度、重設時間，以及 DeepSeek、Xiaomi MiMo、NayutoAI 的 Token 用量、API 費用、帳戶餘額和歷史趨勢。
+TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 15 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
+
+目前版本：**v1.15.0** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
-- **訂閱額度**：Codex / Cursor 的已用與剩餘比例、重設時間；Codex 另有近 7 天 Token、年度活動和使用統計。
-- **API 用量**：DeepSeek / MiMo / NayutoAI 的費用與餘額、今日分時圖、Token 組成和歷史趨勢。
-- **懸浮顯示**：額度水球或餘額顯示，支援拖曳、滾輪縮放、貼邊隱藏和系統匣常駐。
-- **外觀與語言**：淺色、深色及系統主題，可調整主題色和透明度；支援簡中、繁中、英語、日語、韓語。
-- **擷取與快取**：預設只更新目前平台，可選背景同步；支援離線快取、DeepSeek 峰谷提示及 MiMo Cookie 取得與續期。
-- **桌面整合**：開機自動啟動、自動更新、資料目錄遷移，以及選用的 VPet 桌寵擴充套件。
+- **額度與餘額**：支援 Codex、Claude Code、Cursor、GitHub Copilot、GLM / Z.ai、Kimi Coding、MiniMax Token Plan、Gemini CLI 和 ElevenLabs 額度；DeepSeek / MiMo / NayutoAI 用量；OpenRouter 金鑰預算與費用；Moonshot / Kimi API 餘額。Antigravity CLI 讀取明確設定的狀態列快照。缺少的欄位顯示不可用，不混合幣別或預算範圍。
+- **總覽與多帳戶**：總覽可見時自動更新已設定平台。「設定 → 多帳戶」獨立保存連線、憑據和監控狀態，不覆蓋預設連線或 CLI 登入。兩個已設定平台也可在置頂小看板中常駐。
+- **本機統計與 Excel**：讀取 Codex（含封存）與 Claude 本機日誌，先顯示快取，再背景更新。支援日期、專案、模型篩選、每日比較、圖表縮放，並匯出 `.xlsx` 摘要、明細與統計口徑。本機日誌無法確認帳戶歸屬，不代表訂閱額度或實際帳單；可選擇已可存取的 WSL 目錄，不啟動 WSL。
+- **平台管理**：離線品牌圖示、搜尋、收藏及移除應用程式保存的連線；保留 CLI 登入與歷史記錄。
+- **更新與提醒**：失敗退避、離線快取、可選低額度與恢復提醒、消耗預測及靜默時段。預測需要同週期至少 10 分鐘的有效樣本；恢復提醒需先開啟低額度提醒，並以實際更新確認。提醒狀態可跨重啟保留。
+- **桌面顯示**：可拖曳懸浮球、滾輪縮放、貼邊隱藏、系統匣、明暗與系統主題、顏色與透明度、五種語言、自動更新和選用 VPet。主程式 v1.15.0 搭配桌寵 v0.1.4 可同步額度視窗主題。
+
+[平台設定與限制](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity 狀態列](docs/antigravity-statusline-2026-09-07.md)
 
 ## 安裝與設定
 
@@ -109,7 +113,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.14.2`，選用桌寵擴充套件 `0.1.3`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.15.0`，選用桌寵擴充套件 `0.1.4`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

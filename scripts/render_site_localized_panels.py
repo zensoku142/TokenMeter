@@ -29,11 +29,12 @@ from ui.qt_theme import DARK_THEME, LIGHT_THEME, configure_theme
 
 
 OUTPUT_DIR = ROOT / "site" / "assets"
-LOCALES = ("zh-tw", "en", "ja", "ko")
+LOCALES = ("zh-cn", "zh-tw", "en", "ja", "ko")
 
 
 def codex_demo() -> TokenData:
-    today = date(2026, 8, 31)
+    # 图表以系统当天为窗口终点；演示日期随采集日平移，避免旧示例落在可见区间外。
+    today = date.today()
     daily_usage = []
     for offset in range(364, -1, -1):
         day = today - timedelta(days=offset)
@@ -51,8 +52,8 @@ def codex_demo() -> TokenData:
         }
         for index, tokens in enumerate(weekly_tokens)
     ]
-    reset = datetime(2026, 9, 4, 12, 26, tzinfo=timezone.utc)
-    active_until = datetime(2026, 9, 30, 0, 0, tzinfo=timezone.utc)
+    reset = datetime.combine(today + timedelta(days=4), datetime.min.time(), tzinfo=timezone.utc)
+    active_until = datetime.combine(today + timedelta(days=30), datetime.min.time(), tzinfo=timezone.utc)
     windows = [QuotaWindow("codex-weekly", "每周额度", 35, resets_at=reset)]
     statistics = [
         QuotaMetric("累计 Token 数", "11.4亿", raw_value=1_140_000_000, value_kind="tokens"),
@@ -92,7 +93,7 @@ def codex_demo() -> TokenData:
 
 
 def deepseek_demo() -> TokenData:
-    today = date(2026, 8, 31)
+    today = date.today()
     costs = [Decimal("2.18"), Decimal("2.83"), Decimal("2.51"), Decimal("3.46"), Decimal("3.02"), Decimal("1.94"), Decimal("3.94")]
     daily_usage = [
         {
@@ -177,7 +178,8 @@ def render_panel(app: QApplication, locale: str, theme: str, kind: str) -> Path:
         app.processEvents()
 
     stem = "panel-light" if kind == "codex" and theme == "light" else "panel-dark" if kind == "codex" else "panel-deepseek"
-    output = OUTPUT_DIR / f"{stem}-{locale}.png"
+    suffix = "" if locale == "zh-cn" else f"-{locale}"
+    output = OUTPUT_DIR / f"{stem}{suffix}.png"
     pixmap = panel.grab()
     if not pixmap.save(str(output), "PNG"):
         raise RuntimeError(f"Unable to save {output}")

@@ -23,7 +23,7 @@
 
 <p align="center">
   <strong>AI Token Usage, Cost & Balance Monitor for Windows</strong><br>
-  <sub>Track Codex, Cursor, DeepSeek, Xiaomi MiMo, and NayutoAI from a lightweight desktop floating widget.</sub>
+  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
 </p>
 
 <p align="center">
@@ -32,16 +32,20 @@
 
 Actual component screenshots in Chinese, using demo data. [Original images and sources](docs/images/readme/README.md).
 
-TokenMeter is a lightweight AI token usage and subscription quota monitor for Windows 10/11. Track used and remaining Codex and Cursor quotas and reset times, plus DeepSeek, Xiaomi MiMo, and NayutoAI token usage, API costs, account balances, and historical trends.
+TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
+
+Current version：**v1.15.0** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
-- **Subscription quotas**: used and remaining percentages and reset times for Codex / Cursor; Codex also shows seven-day tokens, annual activity, and usage statistics.
-- **API usage**: costs and balances, today's intraday chart, token breakdowns, and historical trends for DeepSeek / MiMo / NayutoAI.
-- **Floating display**: a quota water-level widget or balance display, with dragging, mouse-wheel resizing, edge hiding, and a system tray icon.
-- **Appearance and languages**: light, dark, and system themes, custom colors and opacity; Simplified Chinese, Traditional Chinese, English, Japanese, and Korean.
-- **Collection and caching**: refresh only the current provider by default, with optional background providers; offline caching, DeepSeek peak-pricing hints, and MiMo Cookie collection and renewal.
-- **Desktop integration**: launch at sign-in, automatic updates, data-directory migration, and an optional VPet extension.
+- **Quotas and balances**: Codex, Claude Code, Cursor, GitHub Copilot, GLM / Z.ai, Kimi Coding, MiniMax Token Plan, Gemini CLI and ElevenLabs quotas; DeepSeek, MiMo and NayutoAI usage; OpenRouter key budgets and costs; Moonshot / Kimi API balances. Antigravity CLI reads an explicitly configured statusline snapshot. Missing fields remain unavailable; currencies and budget scopes stay separate.
+- **Overview and accounts**: automatically refresh configured providers while the overview is visible. Settings → Multi-account stores independent connections, credentials and monitoring state without replacing default connections or CLI logins. Two configured providers can also stay visible in a compact, always-on-top dashboard.
+- **Local analytics and Excel**: read local Codex (including archived sessions) and Claude logs, show cached results, then update in the background. Filter by date, project and model, compare daily usage, zoom charts and export `.xlsx` summaries, details and methodology. Local logs have unknown account attribution and do not represent subscription quotas or actual bills; accessible WSL directories can be selected without starting WSL.
+- **Provider management**: offline brand icons, search, favorites and removal of app-managed connections. Removing a provider preserves CLI logins and history.
+- **Refresh and alerts**: retry backoff, offline cache, optional low-quota and recovery alerts, forecasts and quiet hours. Forecasts require at least 10 minutes of valid samples from the same quota cycle; recovery alerts require low-quota alerts and a confirmed refresh. Alert state survives restarts.
+- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and optional VPet. Pet quota windows follow the app theme with pet v0.1.4 and app v1.15.0.
+
+[Provider setup and limitations (Chinese)](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity statusline](docs/antigravity-statusline-2026-09-07.md)
 
 ## Installation and setup
 
@@ -109,7 +113,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.14.2`; optional pet extension: `0.1.3`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.15.0`; optional pet extension: `0.1.4`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

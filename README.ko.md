@@ -23,7 +23,7 @@
 
 <p align="center">
   <strong>Windows용 AI Token 사용량, 비용 및 잔액 모니터</strong><br>
-  <sub>Codex, Cursor, DeepSeek, Xiaomi MiMo 및 NayutoAI 사용량 모니터.</sub>
+  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
 </p>
 
 <p align="center">
@@ -32,16 +32,20 @@
 
 실제 컴포넌트 화면이며 중국어 UI와 데모 데이터를 사용했습니다. [원본 이미지와 출처](docs/images/readme/README.md).
 
-TokenMeter는 Windows 10/11용 경량 AI Token 사용량 및 구독 한도 모니터입니다. Codex와 Cursor의 사용·잔여 한도와 초기화 시간뿐 아니라 DeepSeek, Xiaomi MiMo, NayutoAI의 Token 사용량, API 비용, 계정 잔액과 과거 추세를 확인할 수 있습니다.
+TokenMeter는 Windows 10/11용 경량 AI 사용량 모니터입니다. 독립적인 플랫폼 연결 15개를 제공하며 각 플랫폼의 지원 범위에 따라 구독 한도, 초기화 시간, API 비용, 잔액과 기록을 표시합니다.
+
+현재 버전：**v1.15.0** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 기능
 
-- **구독 한도**: Codex / Cursor의 사용률, 남은 비율, 초기화 시간을 표시합니다. Codex는 최근 7일 Token, 연간 활동과 사용 통계도 제공합니다.
-- **API 사용량**: DeepSeek / MiMo / NayutoAI의 비용과 잔액, 오늘의 시간대별 차트, Token 구성과 과거 추세를 표시합니다.
-- **플로팅 표시**: 수위로 나타내는 남은 한도 또는 잔액을 표시하며 드래그, 휠 크기 조절, 가장자리 숨김과 시스템 트레이를 지원합니다.
-- **모양과 언어**: 라이트·다크·시스템 테마, 색상과 투명도 조절을 지원합니다. 중국어 간체·번체, 영어, 일본어, 한국어를 제공합니다.
-- **수집과 캐시**: 기본적으로 현재 공급자만 갱신하며 백그라운드 공급자를 추가할 수 있습니다. 오프라인 캐시, DeepSeek 피크 요금 알림, MiMo Cookie 수집·갱신을 지원합니다.
-- **데스크톱 연동**: 로그인 시 자동 시작, 자동 업데이트, 데이터 디렉터리 이전과 선택적 VPet 확장을 제공합니다.
+- **한도와 잔액**: Codex, Claude Code, Cursor, GitHub Copilot, GLM / Z.ai, Kimi Coding, MiniMax Token Plan, Gemini CLI, ElevenLabs 한도와 DeepSeek / MiMo / NayutoAI 사용량, OpenRouter 키 예산·비용, Moonshot / Kimi API 잔액을 지원합니다. Antigravity CLI는 명시적으로 설정한 상태 표시줄 스냅샷을 읽습니다. 제공되지 않는 필드는 사용 불가로 표시하며 통화나 예산 범위를 합치지 않습니다.
+- **개요와 다중 계정**: 개요가 보이는 동안 설정된 플랫폼을 자동 갱신합니다. 설정 → 다중 계정에서 연결·자격 증명·모니터링 상태를 각각 저장하며 기본 연결이나 CLI 로그인을 덮어쓰지 않습니다. 설정한 두 플랫폼을 항상 위에 표시되는 작은 대시보드로 볼 수도 있습니다.
+- **로컬 통계와 Excel**: Codex(보관 세션 포함)와 Claude 로컬 로그를 읽고 캐시를 먼저 표시한 뒤 백그라운드에서 갱신합니다. 날짜·프로젝트·모델 필터, 일별 비교, 차트 확대·축소와 요약·상세·집계 기준의 `.xlsx` 내보내기를 지원합니다. 로그의 계정 소속은 알 수 없으며 구독 한도나 실제 청구액이 아닙니다. 접근 가능한 WSL 디렉터리는 선택할 수 있지만 WSL을 시작하지 않습니다.
+- **플랫폼 관리**: 오프라인 브랜드 아이콘, 검색, 즐겨찾기와 앱에 저장된 연결 삭제를 제공합니다. CLI 로그인과 기록은 유지합니다.
+- **갱신과 알림**: 실패 시 갱신 간격 증가, 오프라인 캐시, 선택적 한도 부족·회복 알림, 소진 예측과 방해 금지 시간을 지원합니다. 예측에는 같은 주기의 유효한 표본이 10분 이상 필요합니다. 회복 알림은 한도 부족 알림을 켜고 갱신으로 회복을 확인한 경우에 보냅니다. 알림 상태는 재시작 후에도 유지됩니다.
+- **데스크톱 표시**: 드래그, 휠 크기 조절, 가장자리 숨김, 트레이, 라이트·다크·시스템 테마, 색상과 투명도, 5개 언어, 자동 업데이트와 선택적 VPet을 제공합니다. 앱 v1.15.0과 펫 v0.1.4를 함께 사용하면 한도 창 테마가 동기화됩니다.
+
+[플랫폼 설정 및 제한(중국어)](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity](docs/antigravity-statusline-2026-09-07.md)
 
 ## 설치 및 설정
 
@@ -109,7 +113,7 @@ Qt 테스트에는 사용 가능한 Windows 데스크톱 세션이, 설치 파�
 
 ## 버전
 
-메인 앱 `1.14.2`, 선택적 펫 확장 `0.1.3`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
+메인 앱 `1.15.0`, 선택적 펫 확장 `0.1.4`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
 
 ## 라이선스 및 감사의 말
 

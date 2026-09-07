@@ -32,6 +32,8 @@ DeepSeek 示例重点展示“今日分时”：按 5 分钟显示缓存命中�
 
 GitHub Pages 会随界面语言切换对应的 Codex 浅色、Codex 深色和 DeepSeek 深色面板。英文、繁体中文、日文和韩文截图位于 `site/assets/panel-*-<locale>.png`，通过 `scripts/render_site_localized_panels.py` 使用生产 Qt 组件、固定演示数据和对应语言资源导出；不读取账户凭据、用户配置或私人用量。
 
+官网的五种语言面板于 2026-09-07 按 v1.15.0 发布批次重新渲染，简体中文使用不带语言后缀的文件名。演示日期随采集日平移，数值保持合成示例，不代表实时账户数据；上方 README 合成图及原始截图仍是所注明的历史采集版本。
+
 在 Windows 桌面会话中运行：
 
 ```powershell

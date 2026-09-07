@@ -23,7 +23,7 @@
 
 <p align="center">
   <strong>Windows 向け AI Token 使用量・コスト・残高モニター</strong><br>
-  <sub>Codex、Cursor、DeepSeek、Xiaomi MiMo、NayutoAI の使用量モニター。</sub>
+  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
 </p>
 
 <p align="center">
@@ -32,16 +32,20 @@
 
 実際のコンポーネントを撮影した画面です。表示は中国語、数値はデモデータです。[元画像と出典](docs/images/readme/README.md)。
 
-TokenMeter は Windows 10/11 向けの軽量な AI Token 使用量・サブスクリプション枠モニターです。Codex と Cursor の使用済み・残り枠とリセット時刻に加え、DeepSeek、Xiaomi MiMo、NayutoAI の Token 使用量、API コスト、アカウント残高、履歴の推移を確認できます。
+TokenMeter は Windows 10/11 向けの軽量な AI 使用量モニターです。15 の独立した接続先を備え、各サービスの対応範囲に応じて契約の利用枠、リセット時刻、API コスト、残高と履歴を表示します。
+
+現在のバージョン：**v1.15.0** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 機能
 
-- **サブスクリプション枠**：Codex / Cursor の使用率、残量、リセット時刻。Codex は直近 7 日間の Token、年間アクティビティ、利用統計も表示します。
-- **API 使用量**：DeepSeek / MiMo / NayutoAI のコストと残高、本日の時間帯別グラフ、Token 内訳、履歴の推移。
-- **フローティング表示**：残量を示す水位表示または残高表示。ドラッグ、ホイールでのサイズ変更、画面端での非表示、システムトレイに対応。
-- **外観と言語**：ライト、ダーク、システム連動テーマ、色と透明度の調整。簡体字中国語、繁体字中国語、英語、日本語、韓国語に対応。
-- **取得とキャッシュ**：既定では現在のサービスのみ更新し、任意でバックグラウンド取得を追加。オフラインキャッシュ、DeepSeek のピーク料金通知、MiMo Cookie の取得・更新に対応。
-- **デスクトップ連携**：ログイン時の起動、自動更新、データディレクトリ移行、任意の VPet 拡張。
+- **利用枠と残高**：Codex、Claude Code、Cursor、GitHub Copilot、GLM / Z.ai、Kimi Coding、MiniMax Token Plan、Gemini CLI、ElevenLabs の利用枠、DeepSeek / MiMo / NayutoAI の使用量、OpenRouter のキー予算とコスト、Moonshot / Kimi API の残高に対応。Antigravity CLI は明示的に設定したステータスラインのスナップショットを読み取ります。未提供の値は利用不可とし、通貨や予算の範囲を混ぜません。
+- **一覧と複数アカウント**：一覧の表示中は設定済みサービスを自動更新。「設定 → 複数アカウント」で接続・認証情報・監視状態を個別管理し、既定の接続や CLI ログインを上書きしません。設定済みの 2 サービスを最前面の小型ダッシュボードにも表示できます。
+- **ローカル統計と Excel**：Codex（アーカイブを含む）と Claude のローカルログを読み取り、キャッシュを先に表示してバックグラウンド更新。日付・プロジェクト・モデルの絞り込み、日別比較、グラフのズーム、集計・明細・集計基準の `.xlsx` 出力に対応。ログのアカウント帰属は不明で、契約の残量や実際の請求額ではありません。アクセス可能な WSL ディレクトリも選択できますが WSL は起動しません。
+- **接続先管理**：オフラインのブランドアイコン、検索、お気に入り、アプリが保存した接続の削除。CLI ログインと履歴は保持します。
+- **更新と通知**：失敗時の更新間隔延長、オフラインキャッシュ、任意の残量低下・回復通知、消費予測と通知休止時間。予測には同じ周期の有効なサンプルが 10 分以上必要です。回復通知は残量低下通知が有効で、取得結果で回復を確認した場合に送ります。通知状態は再起動後も保持します。
+- **デスクトップ表示**：ドラッグ、ホイールによるサイズ変更、画面端での非表示、トレイ、明暗・システムテーマ、色と透明度、5 言語、自動更新、任意の VPet。アプリ v1.15.0 とペット v0.1.4 の組み合わせで利用枠ウィンドウのテーマを同期します。
+
+[接続設定と制限（中国語）](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity](docs/antigravity-statusline-2026-09-07.md)
 
 ## インストールと設定
 
@@ -109,7 +113,7 @@ Qt テストには利用可能な Windows デスクトップセッション、�
 
 ## バージョン
 
-本体 `1.14.2`、任意のペット拡張 `0.1.3`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
+本体 `1.15.0`、任意のペット拡張 `0.1.4`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
 
 ## ライセンスと謝辞
 

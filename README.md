@@ -23,7 +23,7 @@
 
 <p align="center">
   <strong>Windows AI 编程订阅额度、Token 用量与余额监控工具</strong><br>
-  <sub>Codex & Cursor Subscription Quota, DeepSeek, MiMo & NayutoAI Token Usage Monitor.</sub>
+  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
 </p>
 
 <p align="center">
@@ -32,7 +32,9 @@
 
 真实组件截图，使用演示数据。[查看原图与来源](docs/images/readme/README.md)。
 
-TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI 用量与额度监控工具，当前源码提供 15 个独立平台入口，按平台能力展示订阅额度、重置时间、API 费用、账户余额和历史趋势。各平台的数据范围及权限要求不同，下载版的功能以对应 Release 说明为准。
+TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI 用量与额度监控工具，提供 15 个独立平台入口，按平台能力展示订阅额度、重置时间、API 费用、账户余额和历史趋势。各平台的数据范围及权限要求不同，具体支持范围见下方配置指南。
+
+当前版本：**v1.15.0** · 桌宠扩展 **v0.1.4** · [产品官网（GitHub Pages）](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
@@ -76,6 +78,7 @@ TokenMeter 是一款适用于 Windows 10/11 的轻量级 AI 用量与额度监�
 
 - 支持轻触互动、拖动缩放、自主活动和贴边额度气泡；双击气泡打开用量面板。
 - 右键菜单可设置额度气泡展示方式，以及默认关闭的喝水、休息提醒；桌宠菜单目前为中文。
+- 主程序 v1.15.0 配合桌宠 v0.1.4，可同步额度气泡与独立额度窗口的明暗底色、文字和低额度提示色；旧版仍可连接。
 - 精简版不含投喂、工作、养成、Steam 或联机功能。扩展可单独更新，主程序退出时桌宠一同退出。
 
 实现细节和独立构建见 [桌宠开发说明](pet_host/README.md)，使用素材前请阅读 [来源与授权](pet_host/THIRD_PARTY_NOTICES.md)。
@@ -126,7 +129,7 @@ Qt 测试需要可用的 Windows 桌面会话；生成安装器需要 Inno Setup
 
 ## 版本
 
-主程序 `1.14.2`，可选桌宠扩展 `0.1.3`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程序 `1.15.0`，可选桌宠扩展 `0.1.4`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 许可与致谢
 
