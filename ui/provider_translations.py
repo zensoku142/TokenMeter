@@ -1,6 +1,11 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "导出 Excel": ("Export Excel", "匯出 Excel", "Excel にエクスポート", "Excel 내보내기"),
+    "正在导出 Excel": ("Exporting Excel", "正在匯出 Excel", "Excel を出力中", "Excel 내보내는 중"),
+    "Excel 已导出": ("Excel exported", "Excel 已匯出", "Excel を出力しました", "Excel 내보내기 완료"),
+    "目标文件已存在，是否覆盖？": ("The destination file exists. Replace it?", "目標檔案已存在，是否覆寫？", "保存先のファイルは存在します。上書きしますか？", "대상 파일이 있습니다. 덮어쓸까요?"),
+    "导出失败，请检查目标目录或关闭正在使用的文件": ("Export failed. Check the destination or close the file if it is open.", "匯出失敗，請檢查目標目錄或關閉正在使用的檔案", "出力に失敗しました。保存先を確認し、使用中のファイルを閉じてください。", "내보내기에 실패했습니다. 대상 폴더를 확인하거나 사용 중인 파일을 닫으세요."),
     "重置视图": ("Reset view", "重設檢視", "表示をリセット", "보기 초기화"),
     "更多操作": ("More actions", "更多操作", "その他の操作", "추가 작업"),
     "总 Token": ("Total tokens", "總 Token", "総トークン", "총 토큰"),

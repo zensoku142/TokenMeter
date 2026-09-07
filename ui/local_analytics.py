@@ -41,7 +41,6 @@ from data.local_usage import (
     LocalUsage,
     LocalUsageScanner,
     daily_model_series,
-    export_usage,
     filter_usage,
     load_local_report,
     local_cache_scope,
@@ -86,6 +85,27 @@ class _ScanTask(QRunnable):
             self.signals.finished.emit([], 0, True)
 
 
+class _ExportSignals(QObject):
+    finished = Signal(bool)
+
+
+class _ExportTask(QRunnable):
+    def __init__(self, path, rows, issues, dimension):
+        super().__init__()
+        self.path, self.rows, self.issues, self.dimension = path, rows, issues, dimension
+        self.signals = _ExportSignals()
+
+    def run(self):
+        from data.excel_export import export_local_usage
+
+        try:
+            export_local_usage(self.path, self.rows, issues=self.issues, dimension=self.dimension)
+        except Exception:
+            self.signals.finished.emit(False)
+        else:
+            self.signals.finished.emit(True)
+
+
 class LocalAnalyticsDialog(QDialog):
     def __init__(self, parent=None, *, embedded=False):
         super().__init__(parent)
@@ -100,6 +120,7 @@ class LocalAnalyticsDialog(QDialog):
         self.rows = []
         self.issues = 0
         self.busy = False
+        self._export_busy = False
         self.scanned = False
         self._last_scan = 0.0
         self._scan_scope = ""
@@ -133,7 +154,7 @@ class LocalAnalyticsDialog(QDialog):
         heading.addWidget(title, 1)
         self.directory_button = bind_text(QAction(self), "日志目录")
         self.directory_button.setCheckable(True)
-        self.export_button = bind_text(QAction(self), "导出统计")
+        self.export_button = bind_text(QAction(self), "导出 Excel")
         self.export_button.triggered.connect(self.export)
         self.export_button.setEnabled(False)
         self.reset_button = bind_text(QPushButton(), "重置视图")
@@ -595,7 +616,7 @@ class LocalAnalyticsDialog(QDialog):
         if self.result_stack.currentWidget() is self.table:
             self._render_table()
         count, tokens, input_tokens, output_tokens = self._aggregate_totals
-        self.export_button.setEnabled(bool(count) and not self.busy)
+        self.export_button.setEnabled(bool(count) and not self.busy and not self._export_busy)
         for label, amount in ((self.total_label, tokens), (self.input_total_label, input_tokens),
                               (self.output_total_label, output_tokens)):
             bind_text(label, lambda value=amount: tr(compact_tokens(value)))
@@ -784,13 +805,29 @@ class LocalAnalyticsDialog(QDialog):
         show_usage_tooltip(self.chart, self.hover_tooltip, self.chart.mapFromScene(position), refresh_layout=changed)
 
     def export(self):
-        path, selected = QFileDialog.getSaveFileName(self, tr("导出统计"), "local-usage.json", "JSON (*.json);;CSV (*.csv)")
+        if self._export_busy:
+            return
+        path, _selected = QFileDialog.getSaveFileName(self, tr("导出 Excel"), "local-usage.xlsx", "Excel (*.xlsx)")
         if not path:
             return
         destination = Path(path)
-        if destination.suffix.lower() not in {".json", ".csv"}:
-            destination = destination.with_suffix(".csv" if selected.startswith("CSV") else ".json")
-        try:
-            export_usage(destination, self.filtered_rows(), issues=self.issues)
-        except OSError:
-            QMessageBox.warning(self, tr("导出统计"), tr("导出失败，请检查目标目录"))
+        if destination.suffix.lower() != ".xlsx":
+            destination = Path(str(destination) + ".xlsx")
+            if destination.exists() and QMessageBox.question(self, tr("导出 Excel"), tr("目标文件已存在，是否覆盖？")) != QMessageBox.StandardButton.Yes:
+                return
+        dimension = "daily_model" if self.chart_mode.currentData() == "daily" else str(self.group.currentData())
+        # 捕获当前筛选的只读记录；导出期间允许继续浏览，不在 GUI 线程构造工作簿。
+        self._export_task = _ExportTask(destination, self.filtered_rows(), self.issues, dimension)
+        self._export_task.signals.finished.connect(self._export_finished)
+        self._export_busy = True
+        self.export_button.setEnabled(False)
+        bind_text(self.status, "正在导出 Excel")
+        QThreadPool.globalInstance().start(self._export_task)
+
+    def _export_finished(self, success):
+        self._export_busy = False
+        self.render()
+        if success:
+            bind_text(self.status, "Excel 已导出")
+        else:
+            QMessageBox.warning(self, tr("导出 Excel"), tr("导出失败，请检查目标目录或关闭正在使用的文件"))
