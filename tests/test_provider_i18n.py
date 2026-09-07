@@ -3,6 +3,7 @@ import re
 import pytest
 
 from api.providers.api_balance import MoonshotProvider, OpenRouterProvider
+from api.providers.antigravity import AntigravityProvider
 from api.providers.claude import ClaudeProvider
 from api.providers.copilot import CopilotProvider
 from api.providers.elevenlabs import ElevenLabsProvider
@@ -18,7 +19,7 @@ def test_provider_settings_metadata_translates_without_changing_api_urls(monkeyp
     monkeypatch.setattr("ui.i18n.current_language", lambda: language)
     for provider in (
         OpenRouterProvider, MoonshotProvider, CopilotProvider, ClaudeProvider, ZaiProvider,
-        KimiProvider, MiniMaxProvider, ElevenLabsProvider, GeminiProvider,
+        KimiProvider, MiniMaxProvider, ElevenLabsProvider, GeminiProvider, AntigravityProvider,
     ):
         sources = [provider.support_description]
         for meta in provider.credential_fields.values():
@@ -77,7 +78,7 @@ def test_provider_picker_text_and_numbered_count_are_localized(monkeypatch, lang
     monkeypatch.setattr("ui.i18n.current_language", lambda: language)
     sources = (
         "切换 AI 平台", "搜索平台名称，如 Claude、Kimi、智谱", "搜索 AI 平台",
-        "全部平台", "已配置", "常用平台", "未配置", "API 用量", "AI 平台列表",
+        "全部平台", "已配置", "常用平台", "未配置", "API 用量", "AI 平台列表", "删除", "已移除",
         "没有匹配的平台，试试其他名称或查看全部平台",
         "Enter 切换 · Ctrl+D 收藏 · Esc 关闭",
     )

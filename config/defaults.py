@@ -7,7 +7,7 @@ from typing import Any
 PROVIDER_IDS = (
     "deepseek", "mimo", "codex", "cursor", "nayuto", "openrouter", "moonshot", "copilot", "claude",
     "zai",
-    "kimi", "minimax", "elevenlabs", "gemini",
+    "kimi", "minimax", "elevenlabs", "gemini", "antigravity",
 )
 
 SECRET_KEYS = (
@@ -83,6 +83,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "GEMINI_PROJECT_ID": "",
     "CLAUDE_ACCESS_TOKEN": "",
     "CLAUDE_CREDENTIALS_FILE": "",
+    "ANTIGRAVITY_STATUSLINE_FILE": "",
     "REFRESH_INTERVAL": 60_000,
     "QUOTA_ALERT_ENABLED": False,
     "QUOTA_ALERT_THRESHOLD": 10,

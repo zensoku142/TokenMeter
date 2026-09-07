@@ -23,6 +23,7 @@ directory. The complete upstream copyright and license notice is retained in
 | `claude-color.svg` | Claude / Claude Code |
 | `zai.svg` | GLM / Z.ai |
 | `gemini-color.svg` | Gemini CLI / Code Assist |
+| `antigravity.svg` | Antigravity CLI; retrieved 2026-09-07 from the same source revision; monochrome variant avoids unsupported SVG masks/filters in Qt |
 | `minimax-color.svg` | MiniMax Token Plan |
 | `elevenlabs.svg` | ElevenLabs |
 | `bailian-color.svg` | Alibaba Cloud Bailian (asset prepared for future support) |

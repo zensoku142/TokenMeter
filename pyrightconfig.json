@@ -9,6 +9,7 @@
     "api/providers/base.py",
     "api/providers/api_balance.py",
     "api/providers/claude.py",
+    "api/providers/antigravity.py",
     "api/providers/copilot.py",
     "api/providers/zai.py",
     "api/providers/quota_api.py",

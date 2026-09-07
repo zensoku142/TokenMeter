@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from api.providers.antigravity import AntigravityProvider
 from api.providers.api_balance import MoonshotProvider, OpenRouterProvider
 from api.providers.base import (
     ExactMinuteUsage,
@@ -49,6 +50,7 @@ PROVIDERS: dict[str, type[Provider]] = {
     MiniMaxProvider.id: MiniMaxProvider,
     ElevenLabsProvider.id: ElevenLabsProvider,
     GeminiProvider.id: GeminiProvider,
+    AntigravityProvider.id: AntigravityProvider,
 }
 
 

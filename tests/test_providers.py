@@ -82,6 +82,40 @@ class MultiProviderTests(unittest.TestCase):
         finally:
             provider.close()
 
+    def test_codex_invalid_primary_structure_is_reported_before_metadata_requests(self):
+        for invalid in (True, ["invalid"], "invalid", 5):
+            with self.subTest(invalid=invalid):
+                provider = CodexProvider({})
+                provider._credentials = Mock(return_value=("synthetic", "", {}))
+                provider._activity_snapshot = Mock(return_value=((), (), ()))
+                provider._local_only_quota = Mock(return_value=None)
+                provider._session.get = Mock(return_value=response({"rate_limit": invalid}))
+                try:
+                    quota, error = provider.fetch_quota()
+                    self.assertIsNone(quota)
+                    self.assertEqual(error.code, "INVALID_RESPONSE")
+                    provider._activity_snapshot.assert_not_called()
+                finally:
+                    provider.close()
+
+    def test_codex_malformed_optional_limits_do_not_hide_valid_main_window(self):
+        window = {"used_percent": 25, "reset_at": 1999999999, "limit_window_seconds": 18000}
+        for extras in (True, "invalid", {"invalid": 1}, [{"rate_limit": ["invalid"]}, {"rate_limit": {"primary_window": window}}]):
+            with self.subTest(extras=extras):
+                provider = CodexProvider({})
+                provider._credentials = Mock(return_value=("synthetic", "", {}))
+                provider._activity_snapshot = Mock(return_value=((), (), ()))
+                provider._session.get = Mock(return_value=response({
+                    "rate_limit": {"primary_window": window}, "additional_rate_limits": extras,
+                }))
+                try:
+                    quota, error = provider.fetch_quota()
+                    self.assertIsNone(error)
+                    self.assertEqual(quota.windows[0].used_percent, 25)
+                    self.assertEqual(len(quota.windows), 2 if isinstance(extras, list) else 1)
+                finally:
+                    provider.close()
+
     def test_codex_reads_subscription_windows_and_credits(self):
         provider = CodexProvider()
         provider._credentials = Mock(return_value=("access", "account", {"email": "a@example.com"}))
@@ -686,6 +720,7 @@ class CursorProviderTests(unittest.TestCase):
                 ("minimax", "MiniMax Token Plan"),
                 ("elevenlabs", "ElevenLabs"),
                 ("gemini", "Gemini CLI"),
+                ("antigravity", "Antigravity"),
             ],
         )
 

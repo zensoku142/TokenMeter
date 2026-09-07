@@ -652,6 +652,11 @@ class CodexProvider(Provider):
             payload = response.json()
             if not isinstance(payload, dict):
                 raise ValueError
+            rate_limit = payload.get("rate_limit")
+            if rate_limit is None:
+                rate_limit = {}
+            if not isinstance(rate_limit, dict):
+                raise ValueError
         except (requests.JSONDecodeError, ValueError):
             return self._local_only_quota(activity_cache_key), FetchError(
                 "INVALID_RESPONSE", "Codex 订阅额度", "Codex 额度数据结构已变化"
@@ -661,16 +666,19 @@ class CodexProvider(Provider):
             activity_cache_key, headers
         )
 
-        rate_limit = payload.get("rate_limit") or {}
         windows = [
             self._window("codex-primary", rate_limit.get("primary_window")),
             self._window("codex-secondary", rate_limit.get("secondary_window")),
         ]
-        for index, item in enumerate(payload.get("additional_rate_limits") or []):
+        additional = payload.get("additional_rate_limits")
+        # 附加额度是可选扩展；单个分组结构变化不应阻断仍然有效的主额度。
+        for index, item in enumerate(additional if isinstance(additional, list) else []):
             if not isinstance(item, dict):
                 continue
             name = str(item.get("limit_name") or item.get("metered_feature") or f"专项额度 {index + 1}")
             extra = item.get("rate_limit") or {}
+            if not isinstance(extra, dict):
+                continue
             windows.extend(
                 (
                     self._window(

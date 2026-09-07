@@ -24,6 +24,7 @@ _PROVIDER_BRANDS = {
     "claude": ("claude-color.svg", "Claude", "Anthropic Claude Code 克劳德 编程"),
     "zai": ("zai.svg", "GLM / Z.ai", "Zhipu 智谱 智谱清言 GLM Coding Plan"),
     "gemini": ("gemini-color.svg", "Gemini CLI", "Google Code Assist 谷歌 双子座"),
+    "antigravity": ("antigravity.svg", "Antigravity", "Google Antigravity agy 谷歌 反重力 CLI"),
     "kimi": ("kimi.svg", "Kimi Coding", "Moonshot 月之暗面 编程 会员 订阅"),
     "minimax": ("minimax-color.svg", "MiniMax", "Mini Max 稀宇 海螺 Token Plan Coding"),
     "elevenlabs": ("elevenlabs.svg", "ElevenLabs", "Eleven Labs 语音 配音 TTS"),

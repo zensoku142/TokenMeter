@@ -45,6 +45,9 @@ CLAUDE_STATUSLINE_FILE = ""
 CLAUDE_ACCESS_TOKEN = ""  # 可选：默认只读本机 Claude Code OAuth 登录
 CLAUDE_CREDENTIALS_FILE = ""  # 可选：指定非默认的登录文件
 
+# 配置 scripts/antigravity_statusline.py；只读官方 CLI 状态栏快照，不发送模型请求。
+ANTIGRAVITY_STATUSLINE_FILE = ""  # 默认 ~/.gemini/antigravity-cli/tokenmeter-usage.json
+
 # 仅显示已知套餐/工具额度比例；国内 API 根地址为 https://open.bigmodel.cn。
 ZAI_API_KEY = ""
 ZAI_BASE = "https://api.z.ai"
