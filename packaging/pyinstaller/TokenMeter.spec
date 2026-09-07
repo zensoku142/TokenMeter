@@ -8,7 +8,11 @@ a = Analysis(
     pathex=["../.."],
     binaries=[],
     # Qt loads the same ICO at runtime for the window, tray, and panel branding.
-    datas=[("../../assets/TokenMeter.ico", "assets")],
+    datas=[
+        ("../../assets/TokenMeter.ico", "assets"),
+        # 品牌 SVG 与上游许可一起离线分发，供应商切换不依赖运行时网络。
+        ("../../assets/providers", "assets/providers"),
+    ],
     # pyqtgraph 0.14 启动时会动态导入这两个模块；显式保留可以避免
     # PyInstaller 静态分析遗漏后，发布版在冷启动阶段报缺模块。
     hiddenimports=["PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets"],

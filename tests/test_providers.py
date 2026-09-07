@@ -677,6 +677,15 @@ class CursorProviderTests(unittest.TestCase):
                 ("codex", "Codex"),
                 ("cursor", "Cursor"),
                 ("nayuto", "NayutoAI"),
+                ("openrouter", "OpenRouter"),
+                ("moonshot", "Moonshot / Kimi API"),
+                ("copilot", "GitHub Copilot"),
+                ("claude", "Claude Code"),
+                ("zai", "GLM / Z.ai Coding Plan"),
+                ("kimi", "Kimi Coding"),
+                ("minimax", "MiniMax Token Plan"),
+                ("elevenlabs", "ElevenLabs"),
+                ("gemini", "Gemini CLI"),
             ],
         )
 

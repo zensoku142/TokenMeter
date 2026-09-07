@@ -334,6 +334,7 @@ class FloatingUsageBall(QWidget):
         self._secondary_label = "余额"
         self._quota_mode = False
         self._quota_remaining: float | None = None
+        self._quota_value_text = ""
         self._quota_reset_text = ""
         self._quota_title = "周额度"
         self._wave_phase = 0.0
@@ -611,21 +612,33 @@ class FloatingUsageBall(QWidget):
         remaining_percent: float | None,
         reset_text: str,
         title: str = "周额度",
+        *,
+        value_text: str = "",
     ) -> None:
-        remaining = (
-            None if remaining_percent is None else max(0.0, min(100.0, float(remaining_percent)))
-        )
+        try:
+            raw_remaining = float(remaining_percent) if remaining_percent is not None else float("nan")
+            # 非有限值参与 min/max 可能被误夹成满额；与面板/桌宠统一显示未知。
+            remaining = (
+                max(0.0, min(100.0, raw_remaining))
+                if math.isfinite(raw_remaining) and not isinstance(remaining_percent, bool)
+                else None
+            )
+        except (ValueError, TypeError, OverflowError):
+            remaining = None
         compact_reset = self._compact_reset_text(reset_text)
         compact_title = str(title).replace("每周额度", "周额度")[:8] or "周额度"
-        state = (remaining, compact_reset, compact_title)
+        # 文本额度仅在没有百分比时显示，保持液面为空，避免把“不限量”伪装成满额。
+        quota_text = str(value_text).strip() if remaining is None else ""
+        state = (remaining, compact_reset, compact_title, quota_text)
         if self._quota_mode and state == (
             self._quota_remaining,
             self._quota_reset_text,
             self._quota_title,
+            self._quota_value_text,
         ):
             return
         self._quota_mode = True
-        self._quota_remaining, self._quota_reset_text, self._quota_title = state
+        self._quota_remaining, self._quota_reset_text, self._quota_title, self._quota_value_text = state
         if remaining is None or remaining <= 0:
             # 空额度停止动画并清掉动量，避免下次恢复额度时复活旧余波。
             self._liquid_surface.reset()
@@ -638,8 +651,8 @@ class FloatingUsageBall(QWidget):
                 if self.realistic_motion_enabled
                 else self._idle_flow_speed(remaining / 100)
             )
-        remaining_text = "未知" if remaining is None else f"{remaining:.0f}%"
-        bind_text(self, "Codex 剩余额度", method='setAccessibleName')
+        remaining_text = quota_text or ("未知" if remaining is None else f"{remaining:.0f}%")
+        bind_text(self, compact_title, method='setAccessibleName')
         bind_text(self, remaining_text, method='setAccessibleDescription')
         bind_text(self, remaining_text, method='setToolTip')
         if self.isVisible():
@@ -654,6 +667,7 @@ class FloatingUsageBall(QWidget):
             return
         self._quota_mode = False
         self._quota_remaining = None
+        self._quota_value_text = ""
         self._quota_reset_text = ""
         self._wave_timer.stop()
         self._liquid_surface.reset()
@@ -1514,13 +1528,22 @@ class FloatingUsageBall(QWidget):
         painter.setPen(QPen(inner_rim, 1.2))
         painter.drawEllipse(inner.adjusted(0.7, 0.7, -0.7, -0.7))
 
-        percentage = "--" if self._quota_remaining is None else f"{self._quota_remaining:.0f}%"
+        percentage = self._quota_value_text or (
+            "--" if self._quota_remaining is None else f"{self._quota_remaining:.0f}%"
+        )
         value_size = 25 if len(percentage) <= 3 else 22 if len(percentage) <= 4 else 20
         value_font = self._quota_font_cache.get(value_size)
         if value_font is None:
             value_font = QFont("Microsoft YaHei UI", value_size, QFont.Weight.Bold)
             self._quota_font_cache[value_size] = value_font
         painter.setFont(value_font)
+        if self._quota_value_text:
+            # 翻译后的 Unlimited 等文本比数字宽，按实际字宽适配现有绘制区域。
+            text_width = painter.fontMetrics().horizontalAdvance(tr(percentage))
+            if text_width > 96:
+                fitted_font = QFont(value_font)
+                fitted_font.setPointSizeF(value_font.pointSizeF() * 96 / text_width)
+                painter.setFont(fitted_font)
         value_rect = QRectF(8, 36, 104, 48)
         empty_shadow = QColor("#000000" if theme.name == "dark" else "#FFFFFF")
         empty_shadow.setAlpha(130)

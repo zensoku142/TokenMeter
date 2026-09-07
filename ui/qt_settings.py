@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -58,6 +59,7 @@ from ui.i18n import (
     language_controller,
     tr,
 )
+from ui.provider_picker import ProviderPicker
 from ui.qt_theme import DARK_THEME, LIGHT_THEME, current_theme, fluent_icon, theme_controller
 from ui.qt_update import AppUpdateController, PetExtensionWorker
 from updater.client import (
@@ -305,20 +307,15 @@ class SettingsWindow(QDialog):
         title.setProperty("tone", "muted")
         title.setWordWrap(True)
 
-        # Provider picker — single dropdown.
+        # 与主面板共用品牌搜索入口，供应商增多时不再依赖长下拉。
         picker_row = QHBoxLayout()
         picker_row.setContentsMargins(0, 0, 0, 0)
         picker_row.setSpacing(8)
         picker_label = bind_text(QLabel(), "数据来源")
         picker_label.setStyleSheet("font-size: 13px; font-weight: 500;")
-        self.provider_combo = _SettingsComboBox()
+        self.provider_combo = ProviderPicker()
         for provider_id, provider_name in list_providers():
-            display_name = (
-                provider_name
-                if provider_id == "nayuto"
-                else f"{provider_name} ({provider_id})"
-            )
-            add_item(self.provider_combo, display_name, provider_id)
+            add_item(self.provider_combo, provider_name, provider_id)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         picker_row.addWidget(picker_label)
         picker_row.addWidget(self.provider_combo, 1)
@@ -552,15 +549,16 @@ class SettingsWindow(QDialog):
         bind_text(self.refresh_seconds, " 秒", method='setSuffix')
         runtime_form.addRow(bind_text(QLabel(), "刷新间隔"), self.refresh_seconds)
         background_provider_widget = QWidget()
-        background_provider_layout = QHBoxLayout(background_provider_widget)
+        # 供应商增多时按行排布，避免后台同步选项把设置窗口撑出屏幕。
+        background_provider_layout = QGridLayout(background_provider_widget)
         background_provider_layout.setContentsMargins(0, 0, 0, 0)
         background_provider_layout.setSpacing(10)
         self.background_provider_checks: dict[str, QCheckBox] = {}
-        for provider_id, provider_name in list_providers():
+        for index, (provider_id, provider_name) in enumerate(list_providers()):
             check = bind_text(QCheckBox(), provider_name)
             bind_text(check, "勾选后，即使不是当前数据来源也会在后台定时获取", method='setToolTip')
             self.background_provider_checks[provider_id] = check
-            background_provider_layout.addWidget(check)
+            background_provider_layout.addWidget(check, index // 3, index % 3)
         runtime_form.addRow(bind_text(QLabel(), "同时获取"), background_provider_widget)
         self.minute_usage_interval_minutes = QSpinBox()
         self.minute_usage_interval_minutes.setRange(1, 60)
@@ -1437,6 +1435,8 @@ class SettingsWindow(QDialog):
             widget = item.widget()
             if widget is not None:
                 widget.setParent(None)
+                # 切换供应商会反复重建凭据表单；脱离父控件后也要释放旧控件。
+                widget.deleteLater()
         self._provider_widgets = {}
         self._cookie_acquire_button = None
         self._cookie_finish_button = None
@@ -1445,7 +1445,6 @@ class SettingsWindow(QDialog):
         provider_cls = PROVIDERS.get(provider_id)
         if not provider_cls:
             return
-        provider_instance = provider_cls()
         # Read from the in-memory cache (already populated by a prior
         # `load_config()` call) to avoid touching Win32 credential APIs
         # from potentially non-main threads.
@@ -1453,11 +1452,28 @@ class SettingsWindow(QDialog):
         draft = self._provider_drafts.get(provider_id, {})
         upper_id = provider_id.upper()
 
-        header = bind_text(QLabel(), f"{provider_instance.name} 凭据")
+        # 字段和说明是类元数据；构建表单无需创建带网络会话的 Provider。
+        header = bind_text(QLabel(), f"{provider_cls.name} 凭据")
         header.setStyleSheet("font-size: 14px; font-weight: 600;")
         self.credentials_layout.addWidget(header)
 
-        for field, meta in (provider_instance.credential_fields or {}).items():
+        description = getattr(provider_cls, "support_description", "")
+        if description:
+            support_label = bind_text(QLabel(), description)
+            support_label.setObjectName("providerSupportDescription")
+            support_label.setWordWrap(True)
+            support_label.setProperty("tone", "muted")
+            self.credentials_layout.addWidget(support_label)
+        dashboard_url = getattr(provider_cls, "dashboard_url", "")
+        if dashboard_url:
+            dashboard_button = bind_text(QPushButton(), "打开官方用量页面")
+            dashboard_button.setObjectName("providerDashboardButton")
+            dashboard_button.clicked.connect(
+                lambda _checked=False, url=dashboard_url: QDesktopServices.openUrl(QUrl(url))
+            )
+            self.credentials_layout.addWidget(dashboard_button)
+
+        for field, meta in (provider_cls.credential_fields or {}).items():
             label = str(meta.get("label") or field)
             hint = str(meta.get("hint") or "")
             secret = bool(meta.get("secret"))
@@ -1490,7 +1506,7 @@ class SettingsWindow(QDialog):
             )
             if supports_cookie or supports_credential:
                 self._add_cookie_acquire_row(
-                    provider_instance.name,
+                    provider_cls.name,
                     str(getattr(provider_cls, "credential_acquisition_label", "Cookie")),
                     bool(
                         getattr(
@@ -1766,7 +1782,7 @@ class SettingsWindow(QDialog):
         for provider_id, _provider_name in list_providers():
             upper_id = provider_id.upper()
             provider_cls = PROVIDERS[provider_id]
-            fields = list((getattr(provider_cls(), "credential_fields", {}) or {}).keys())
+            fields = list((getattr(provider_cls, "credential_fields", {}) or {}).keys())
             for field in fields:
                 key = f"{upper_id}_{field.upper()}"
                 if key in values:

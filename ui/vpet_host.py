@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
+from api.providers import PROVIDERS
 from core.pet_extension import installed_executable
 from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown
 
@@ -41,28 +42,47 @@ def usage_message(
     data: TokenData, refreshing: bool, provider_id: str, pricing_peak: bool | None = None
 ) -> dict:
     provider = data.per_provider[0].provider_id if data.per_provider else provider_id
+    provider_cls = PROVIDERS.get(provider)
+    provider_name = getattr(provider_cls, "name", provider)
     loading = refreshing and data.last_success_at is None
     status = "正在刷新用量" if refreshing else ""
     warning = data.status not in {"ok", "partial", "loading"}
     if data.quota_windows:
         quota = data.quota_windows[0]
-        used = quota.used_percent
-        remaining = None if loading or not math.isfinite(used) else max(0, min(100, 100 - used))
+        try:
+            used = float(quota.used_percent)
+            valid = not isinstance(quota.used_percent, bool) and math.isfinite(used) and used >= 0
+        except (TypeError, ValueError, OverflowError):
+            used, valid = 0.0, False
+        # 无效缓存数值不能变成满额气泡，也不能中断主程序向桌宠发送后续状态。
+        remaining = None if loading or not valid else max(0, min(100, 100 - used))
         primary = "--" if remaining is None else f"剩余 {remaining:.0f}%"
         secondary = (
             format_codex_reset_time(quota.resets_at, compact=True)
             if provider == "codex"
             else format_reset_countdown(quota.resets_at)
         )
-        label = f"{provider} · {quota.title}"
+        label = f"{provider_name} · {quota.title}"
         if not refreshing and remaining is not None and remaining <= 10:
             status = "剩余额度不足，请留意用量。"
             warning = True
-    elif provider in {"codex", "cursor"}:
-        label, primary, secondary = provider, "--", "额度暂不可用"
+    elif provider_cls and provider_cls.supports_subscription_quota:
+        # 不限量是明确的文本额度，不能伪造 100% 或退回余额视图。
+        # 新指标通过语义识别无限额度，同时保留旧缓存中两种供应商文案的兼容。
+        unlimited = next((metric for metric in data.quota_metrics
+                          if metric.value_kind == "unlimited" or metric.value in {"不限量", "不限额"}), None)
+        if unlimited is not None:
+            label = f"{provider_name} · {unlimited.title}"
+            primary = "--" if loading else unlimited.value
+            secondary = unlimited.detail
+        else:
+            label, primary, secondary = provider_name, "--", "额度暂不可用"
     else:
-        label = provider
-        primary = "余额 " + ("--" if loading else format_money(data.balance_cny, data.currency))
+        label = provider_name
+        balance_label = getattr(provider_cls, "balance_label", "账户余额")
+        # 原有账户余额保留短标签；密钥支出限额必须沿用供应商声明的含义。
+        balance_label = "余额" if balance_label == "账户余额" else balance_label
+        primary = balance_label + " " + ("--" if loading else format_money(data.balance_cny, data.currency))
         secondary = "今日使用 " + (
             "--" if loading else format_money(data.today_cost_cny, data.currency)
         )
@@ -145,7 +165,7 @@ class VPetHost(QObject):
             self.process.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def _read_output(self) -> None:
-        self._consume_output(bytes(self.process.readAllStandardOutput()))
+        self._consume_output(bytes(self.process.readAllStandardOutput().data()))
 
     def _consume_output(self, chunk: bytes) -> None:
         self._buffer.extend(chunk)

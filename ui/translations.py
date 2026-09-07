@@ -3,10 +3,12 @@
 Source Chinese remains the stable display key, including named dynamic fields.
 """
 
+from ui.provider_translations import PROVIDER_MESSAGES
 from ui.translation_errors import ERROR_MESSAGES
 
 MESSAGES = {
     **ERROR_MESSAGES,
+    **PROVIDER_MESSAGES,
     "深浅模式使用相同主题色": (
         "Use the same accent in light and dark modes", "深淺模式使用相同主題色",
         "ライト・ダークモードで同じテーマカラーを使う", "라이트·다크 모드에서 같은 테마 색 사용",

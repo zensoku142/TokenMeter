@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+PROVIDER_IDS = (
+    "deepseek", "mimo", "codex", "cursor", "nayuto", "openrouter", "moonshot", "copilot", "claude",
+    "zai",
+    "kimi", "minimax", "elevenlabs", "gemini",
+)
+
 SECRET_KEYS = (
     "DEEPSEEK_API_KEY",
     "DEEPSEEK_AUTH",
@@ -12,12 +18,33 @@ SECRET_KEYS = (
     "MIMO_API_PLATFORM_PH",
     "MIMO_API_KEY",
     "NAYUTO_AUTH",
+    "OPENROUTER_API_KEY",
+    "MOONSHOT_API_KEY",
+    "COPILOT_TOKEN",
+    "ZAI_API_KEY",
+    "KIMI_API_KEY",
+    "MINIMAX_API_KEY",
+    "ELEVENLABS_API_KEY",
+    "GEMINI_ACCESS_TOKEN",
+    "CLAUDE_ACCESS_TOKEN",
 )
 OFFICIAL_HOSTS = {
     "platform.deepseek.com",
     "api.deepseek.com",
     "platform.xiaomimimo.com",
     "nayutoai.xyz",
+    "openrouter.ai",
+    "api.moonshot.cn",
+    "api.moonshot.ai",
+    "api.z.ai",
+    "open.bigmodel.cn",
+    "dev.bigmodel.cn",
+    "api.kimi.com",
+    "api.minimax.io",
+    "api.minimaxi.com",
+    "www.minimax.io",
+    "www.minimaxi.com",
+    "api.elevenlabs.io",
 }
 DEFAULT_CONFIG: dict[str, Any] = {
     "DEEPSEEK_API_KEY": "",
@@ -37,6 +64,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "NAYUTO_BASE": "https://nayutoai.xyz",
     "CODEX_HOME": "",
     "CURSOR_GLOBAL_STORAGE": "",
+    "OPENROUTER_API_KEY": "",
+    "OPENROUTER_BASE": "https://openrouter.ai/api/v1",
+    "MOONSHOT_API_KEY": "",
+    "MOONSHOT_BASE": "https://api.moonshot.cn/v1",
+    "COPILOT_TOKEN": "",
+    "CLAUDE_STATUSLINE_FILE": "",
+    "ZAI_API_KEY": "",
+    "ZAI_BASE": "https://api.z.ai",
+    "KIMI_API_KEY": "",
+    "KIMI_BASE": "https://api.kimi.com/coding/v1",
+    "MINIMAX_API_KEY": "",
+    "MINIMAX_BASE": "https://api.minimax.io/v1",
+    "ELEVENLABS_API_KEY": "",
+    "ELEVENLABS_BASE": "https://api.elevenlabs.io/v1",
+    "GEMINI_ACCESS_TOKEN": "",
+    "GEMINI_CREDENTIALS_FILE": "",
+    "GEMINI_PROJECT_ID": "",
+    "CLAUDE_ACCESS_TOKEN": "",
+    "CLAUDE_CREDENTIALS_FILE": "",
     "REFRESH_INTERVAL": 60_000,
     "WIDGET_COMPACT_SIZE": 88,
     "WIDGET_EXPANDED_SIZE": (820, 564),
@@ -83,7 +129,7 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "AUTO_START_ENABLED": {"kind": "bool"},
     "BACKGROUND_PROVIDER_IDS": {
         "kind": "provider_list",
-        "choices": ("deepseek", "mimo", "codex", "cursor", "nayuto"),
+        "choices": PROVIDER_IDS,
     },
     "UI_THEME": {"kind": "choice", "choices": ("system", "light", "dark")},
     "UI_LANGUAGE": {
@@ -101,4 +147,4 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "MINUTE_USAGE_RETENTION_DAYS": {"kind": "int", "min": 1, "max": 365},
 }
 
-__all__ = ["DEFAULT_CONFIG", "FIELD_META", "OFFICIAL_HOSTS", "SECRET_KEYS"]
+__all__ = ["DEFAULT_CONFIG", "FIELD_META", "OFFICIAL_HOSTS", "PROVIDER_IDS", "SECRET_KEYS"]

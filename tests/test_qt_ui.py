@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import runtime as config_manager
-from config.defaults import DEFAULT_CONFIG
+from config.defaults import DEFAULT_CONFIG, PROVIDER_IDS
 from api.providers.base import QuotaMetric, QuotaWindow
 from updater.client import CheckResult, ReleaseAsset, ReleaseInfo, SemVer
 from data.store import PerProviderData, TokenData
@@ -478,23 +478,21 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.update_data(data)
 
     assert panel.provider_quick_combo.currentData() == "codex"
-    assert panel.provider_quick_combo.size() == QSize(132, 28)
-    assert panel.provider_quick_combo.view().objectName() == "headerProviderView"
-    assert panel.provider_quick_combo.view().minimumWidth() == 132
+    assert panel.provider_quick_combo.size() == QSize(150, 28)
+    assert panel.provider_quick_combo.grid.objectName() == "providerPickerGrid"
     panel.show()
     combo_animation_enabled = APP.isEffectEnabled(Qt.UIEffect.UI_AnimateCombo)
     panel.provider_quick_combo.showPopup()
     APP.processEvents()
-    popup = panel.provider_quick_combo.view().window()
-    assert popup.size() == QSize(132, 208)
-    assert popup.minimumSize() == QSize(132, 208)
-    assert popup.maximumSize() == QSize(132, 208)
+    popup = panel.provider_quick_combo.popup
+    assert popup.width() == 560
+    assert popup.height() == 458
+    assert popup.minimumSize() == popup.size()
+    assert popup.maximumSize() == popup.size()
     assert popup.windowFlags() & Qt.WindowType.FramelessWindowHint
-    assert popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert popup.frameShape() == QFrame.Shape.NoFrame
-    assert panel.provider_quick_combo.view().frameShape() == QFrame.Shape.NoFrame
-    assert not popup.mask().contains(QPoint(0, 0))
-    assert popup.mask().contains(popup.rect().center())
+    assert panel.provider_quick_combo.search.isVisible()
+    assert panel.provider_quick_combo.filter_buttons["configured"].isVisible()
     assert APP.isEffectEnabled(Qt.UIEffect.UI_AnimateCombo) == combo_animation_enabled
     panel.provider_quick_combo.hidePopup()
     assert panel.today_card.title_label.text() == "每周额度"
@@ -576,9 +574,9 @@ def test_cursor_uses_existing_quota_panel_positions_and_empty_activity_states():
     panel = MainPanel()
     panel.update_data(data)
 
-    assert panel.provider_quick_combo.count() == 5
+    assert panel.provider_quick_combo.count() == len(PROVIDER_IDS)
     assert panel.provider_quick_combo.currentData() == "cursor"
-    assert panel.provider_quick_combo.size() == QSize(132, 28)
+    assert panel.provider_quick_combo.size() == QSize(150, 28)
     assert panel.today_card.title_label.text() == "每月额度"
     assert panel.today_card.value.text() == "已用 42%"
     assert "剩余 58%" in panel.today_card.detail.text()
@@ -725,7 +723,8 @@ def test_subscription_expiry_replaces_codex_placeholder_without_email():
     panel.close()
 
 
-def test_header_does_not_start_drag_from_provider_selector_events():
+@pytest.mark.parametrize("target", ["manager", "platform"])
+def test_header_does_not_start_drag_from_provider_buttons(target):
     panel = MainPanel()
     panel.show()
     APP.processEvents()
@@ -736,8 +735,9 @@ def test_header_does_not_start_drag_from_provider_selector_events():
     panel.header.dragged.connect(dragged.append)
     panel.header.released.connect(released.append)
 
-    combo_point = panel.provider_quick_combo.mapTo(
-        panel.header, panel.provider_quick_combo.rect().center()
+    button = panel.provider_manage_button if target == "manager" else next(iter(panel.provider_shortcuts.buttons.values()))
+    combo_point = button.mapTo(
+        panel.header, button.rect().center()
     )
 
     def mouse_event(event_point: QPoint, *, pressed_button: bool) -> Mock:
@@ -2156,7 +2156,7 @@ def test_panel_at_640px_keeps_full_heatmap_without_horizontal_scrolling():
     panel.close()
 
 
-def test_panel_ignores_legacy_layout_state_and_has_no_reorder_handles():
+def test_panel_ignores_legacy_reordering_but_reads_provider_shortcuts():
     saved_layout = {
         "sections": ["bottom", "top", "middle"],
         "top_cards": ["month", "today", "balance"],
@@ -2171,7 +2171,7 @@ def test_panel_ignores_legacy_layout_state_and_has_no_reorder_handles():
     ):
         panel = MainPanel()
 
-    load_layout.assert_not_called()
+    load_layout.assert_called_once()
     save_layout.assert_not_called()
     assert not hasattr(panel, "layout_state")
     assert not hasattr(panel, "_section_reorder")
@@ -2832,7 +2832,8 @@ def test_settings_deactivation_follows_panel_preference(auto_collapse):
                 assert widget.panel.content_stack.currentIndex() == 0
                 widget.expand_panel()
                 assert widget.panel.isVisible()
-                assert widget.panel.provider_quick_combo.isVisible()
+                assert widget.panel.provider_manage_button.isVisible()
+                assert widget.panel.provider_quick_combo.isHidden()
                 assert settings.isHidden()
                 assert widget.panel.content_stack.currentIndex() == 0
             else:
@@ -2900,6 +2901,8 @@ def test_settings_provider_dropdown_keeps_panel_open():
         try:
             widget.open_settings()
             combo = widget._settings_window.provider_combo
+            # Windows 激活是异步的；先达到用户可操作状态，避免迟到的激活事件关闭测试弹层。
+            assert QTest.qWaitForWindowActive(widget, 1000)
             combo.showPopup()
             APP.processEvents()
             assert QApplication.activePopupWidget() is not None

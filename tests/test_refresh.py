@@ -370,6 +370,12 @@ class RefreshTests(unittest.TestCase):
         assert widget._refreshing
         queue.assert_called_once()
 
+    def test_unscoped_claude_result_is_not_cached_for_provider_switches(self):
+        widget = widget_stub()
+        result = TokenData(account_key="", status="ok")
+        with patch("ui.qt_widget.config_manager.all_config", return_value={"ACTIVE_PROVIDER": "deepseek"}):
+            finish(widget, "claude", 1, result, active_provider="deepseek")
+        self.assertNotIn("claude", widget._provider_results)
 
     def test_repeated_refresh_runs_once_then_one_pending(self):
         widget = widget_stub()
@@ -763,6 +769,20 @@ class RefreshTests(unittest.TestCase):
         data = TokenData(status="ok", daily_usage=[])
         self.assertIn("暂无 Token 活动", MainPanel.status_summary(data)[0])
 
+    def test_unlimited_quota_ball_supports_semantic_kind_and_both_legacy_values(self):
+        for value, kind in (("不限额", ""), ("不限量", ""), ("Unlimited", "unlimited")):
+            with self.subTest(value=value, kind=kind):
+                widget = widget_stub()
+                widget.ball = Mock()
+                widget._sync_vpet_usage = Mock()
+                widget._data = TokenData(
+                    per_provider=[PerProviderData("minimax", "MiniMax")],
+                    quota_metrics=[QuotaMetric("Chat", value, "Provider policy", value_kind=kind)],
+                )
+                FloatingWidget._apply_update(widget)
+                widget.ball.set_quota_state.assert_called_once_with(
+                    None, "Provider policy", "Chat", value_text=value,
+                )
 
 
 

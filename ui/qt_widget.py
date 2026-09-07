@@ -1343,7 +1343,11 @@ class FloatingWidget(QWidget):
             # provider switch cache can safely share them instead of retaining a
             # second copy of all daily and minute history rows.
             if not stale_account:
-                self._provider_results[provider_id] = result
+                # 未指定账号 scope 的 statusline 只展示当前结果，不跨平台切换复用。
+                if provider_id == "claude" and not result.account_key:
+                    self._provider_results.pop(provider_id, None)
+                else:
+                    self._provider_results[provider_id] = result
             is_current = provider_id == str(
                 config_manager.get("ACTIVE_PROVIDER", "")
             ).strip().lower()
@@ -1570,17 +1574,35 @@ class FloatingWidget(QWidget):
                 else format_reset_countdown(primary.resets_at)
             )
             self.ball.set_quota_state(
-                None if loading else 100 - primary.used_percent,
+                None if loading or isinstance(primary.used_percent, bool)
+                else 100 - primary.used_percent,
                 "正在更新额度" if loading else reset_text,
                 primary.title,
             )
         elif quota_mode:
             # 订阅额度暂不可用时也不能回退成金额视图，否则会显示虚假的金额。
-            unavailable_title = "每月额度" if provider_id == "cursor" else "周额度"
-            self.ball.set_quota_state(None, "额度暂不可用", unavailable_title)
+            unlimited = next(
+                # 旧缓存没有 value_kind，仍兼容两种已发布的不限额文案。
+                (metric for metric in self._data.quota_metrics
+                 if metric.value_kind == "unlimited" or metric.value in {"不限量", "不限额"}), None
+            )
+            if unlimited is not None:
+                self.ball.set_quota_state(
+                    None, unlimited.detail, unlimited.title,
+                    value_text="" if loading else unlimited.value,
+                )
+            else:
+                unavailable_title = (
+                    "每月额度" if provider_id == "cursor"
+                    else "周额度" if provider_id in {"codex", "claude"}
+                    else "订阅额度"
+                )
+                self.ball.set_quota_state(None, "额度暂不可用", unavailable_title)
         else:
             self.ball.clear_quota_state()
-            self.ball.set_labels("今日使用", "余额")
+            balance_label = getattr(provider_cls, "balance_label", "账户余额")
+            balance_label = "余额" if balance_label == "账户余额" else balance_label
+            self.ball.set_labels("今日使用", balance_label)
             self.ball.set_values(
                 "--" if loading else format_money(self._data.today_cost_cny, self._data.currency),
                 "--" if loading else format_money(self._data.balance_cny, self._data.currency),

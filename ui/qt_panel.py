@@ -28,7 +28,6 @@ from PySide6.QtGui import (
     QPalette,
     QPen,
     QPixmap,
-    QRegion,
     QShortcut,
     QTextCharFormat,
 )
@@ -46,8 +45,6 @@ from PySide6.QtWidgets import (
     QSpacerItem,
     QStackedWidget,
     QStyle,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -72,6 +69,7 @@ from ui.formatting import (
 )
 from ui.i18n import add_item, bind_text, current_language, tr, ui_locale
 from ui.qt_heatmap import TokenActivityHeatmap
+from ui.provider_picker import ProviderManagerButton, ProviderPicker as ProviderQuickCombo, ProviderShortcuts
 from ui.qt_theme import (
     app_icon,
     current_theme,
@@ -518,245 +516,6 @@ class MinuteDateEdit(QWidget):
         super().closeEvent(event)
 
 
-class ProviderOptionDelegate(QStyledItemDelegate):
-    """Paint the header provider menu without changing its combo-box data model."""
-
-    ROW_HEIGHT = 34
-
-    def __init__(self, combo: QComboBox):
-        super().__init__(combo)
-        self._combo = combo
-
-    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
-        base = super().sizeHint(option, index)
-        return QSize(max(116, base.width()), self.ROW_HEIGHT)
-
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
-        tokens = current_theme()
-        is_current = index.row() == self._combo.currentIndex()
-        is_hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        row_rect = QRectF(option.rect.adjusted(3, 2, -3, -2))
-
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-        if is_current:
-            painter.setBrush(QColor(tokens.accent_soft))
-            painter.drawRoundedRect(row_rect, 8, 8)
-        elif is_hovered:
-            hover = QColor(tokens.text)
-            hover.setAlpha(14)
-            painter.setBrush(hover)
-            painter.drawRoundedRect(row_rect, 8, 8)
-
-        painter.setPen(QColor(tokens.value if is_current else tokens.text))
-        painter.setFont(option.font)
-        painter.drawText(
-            option.rect.adjusted(13, 0, -34, 0),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            tr(str(index.data(Qt.ItemDataRole.DisplayRole) or "")),
-        )
-
-        if is_current:
-            check = fluent_icon("check", size=13, active_color=tokens.accent)
-            if not check.isNull():
-                pixmap = check.pixmap(
-                    QSize(13, 13),
-                    QIcon.Mode.Active,
-                    QIcon.State.Off,
-                )
-                target = QRect(
-                    option.rect.right() - 25,
-                    option.rect.center().y() - 6,
-                    13,
-                    13,
-                )
-                painter.drawPixmap(target, pixmap)
-        painter.restore()
-
-
-class ProviderQuickCombo(QComboBox):
-    """Header provider selector styled as a lightweight title-bar pill."""
-
-    POPUP_WIDTH = 132
-    POPUP_RADIUS = 10
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._popup_open = False
-        self.setItemDelegate(ProviderOptionDelegate(self))
-        self.setMaxVisibleItems(6)
-        popup_view = self.view()
-        popup_view.setObjectName("headerProviderView")
-        popup_view.setMouseTracking(True)
-        popup_view.setMinimumWidth(self.POPUP_WIDTH)
-        popup_view.setFrameShape(QFrame.Shape.NoFrame)
-        popup_view.setLineWidth(0)
-        popup_view.setMidLineWidth(0)
-        popup_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        popup_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        popup = popup_view.window()
-        popup.setObjectName("headerProviderPopup")
-        popup.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        popup.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
-        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        popup.setAutoFillBackground(False)
-        self._remove_popup_frame(popup)
-
-    @staticmethod
-    def _remove_popup_frame(popup: QWidget) -> None:
-        if isinstance(popup, QFrame):
-            popup.setFrameShape(QFrame.Shape.NoFrame)
-            popup.setLineWidth(0)
-            popup.setMidLineWidth(0)
-        popup.setContentsMargins(0, 0, 0, 0)
-
-    @classmethod
-    def _rounded_popup_region(cls, rect: QRect) -> QRegion:
-        radius = cls.POPUP_RADIUS
-        diameter = radius * 2
-        region = QRegion(radius, 0, rect.width() - diameter, rect.height())
-        region += QRegion(0, radius, rect.width(), rect.height() - diameter)
-        region += QRegion(0, 0, diameter, diameter, QRegion.RegionType.Ellipse)
-        region += QRegion(
-            rect.width() - diameter,
-            0,
-            diameter,
-            diameter,
-            QRegion.RegionType.Ellipse,
-        )
-        region += QRegion(
-            0,
-            rect.height() - diameter,
-            diameter,
-            diameter,
-            QRegion.RegionType.Ellipse,
-        )
-        region += QRegion(
-            rect.width() - diameter,
-            rect.height() - diameter,
-            diameter,
-            diameter,
-            QRegion.RegionType.Ellipse,
-        )
-        return region
-
-    def paintEvent(self, _event) -> None:
-        tokens = current_theme()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        control_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        if not self.isEnabled():
-            text = tokens.disabled
-            background = QColor(Qt.GlobalColor.transparent)
-        elif self._popup_open or self.hasFocus():
-            text = tokens.value
-            background = QColor(tokens.accent_soft)
-        elif self.underMouse():
-            text = tokens.value
-            background = QColor(tokens.elevated)
-        else:
-            text = tokens.value
-            background = QColor(Qt.GlobalColor.transparent)
-
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(background)
-        painter.drawRoundedRect(control_rect, 9, 9)
-        painter.setPen(QColor(text))
-        painter.setFont(self.font())
-        painter.drawText(
-            self.rect().adjusted(11, 0, -34, 0),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            tr(self.currentText()),
-        )
-
-        arrow_center = QPointF(self.width() - 18, self.height() / 2)
-        arrow_color = QColor(
-            tokens.accent
-            if self._popup_open or self.hasFocus()
-            else tokens.subtext
-        )
-        arrow_pen = QPen(arrow_color)
-        arrow_pen.setWidthF(1.6)
-        arrow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        arrow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(arrow_pen)
-        direction = -1 if self._popup_open else 1
-        painter.drawLine(
-            QPointF(arrow_center.x() - 4, arrow_center.y() - 2 * direction),
-            QPointF(arrow_center.x(), arrow_center.y() + 2 * direction),
-        )
-        painter.drawLine(
-            QPointF(arrow_center.x(), arrow_center.y() + 2 * direction),
-            QPointF(arrow_center.x() + 4, arrow_center.y() - 2 * direction),
-        )
-        painter.end()
-
-    def showPopup(self) -> None:
-        self._popup_open = True
-        self.update()
-        self.view().setMinimumWidth(self.POPUP_WIDTH)
-        popup = self.view().window()
-        self._remove_popup_frame(popup)
-        visible_rows = min(self.count(), self.maxVisibleItems())
-        popup_height = visible_rows * ProviderOptionDelegate.ROW_HEIGHT + 38
-        popup.setFixedSize(self.POPUP_WIDTH, popup_height)
-        popup.setMask(self._rounded_popup_region(popup.rect()))
-        below = self.mapToGlobal(QPoint(0, self.height() + 4))
-        above = self.mapToGlobal(QPoint(0, -popup_height - 4))
-        screen = QGuiApplication.screenAt(below) or self.screen()
-        available = screen.availableGeometry()
-        x = max(available.left(), min(below.x(), available.right() - popup.width() + 1))
-        y = below.y()
-        if y + popup.height() - 1 > available.bottom() and above.y() >= available.top():
-            y = above.y()
-        popup_position = QPoint(x, max(available.top(), y))
-        popup.move(popup_position)
-
-        # QComboBox normally shows its private container before callers can
-        # style and resize it. Prepare the final frame, mask, size and position
-        # first so Windows never composites the unrounded intermediate frame.
-        app = QApplication.instance()
-        combo_animation = Qt.UIEffect.UI_AnimateCombo
-        animation_enabled = bool(app and app.isEffectEnabled(combo_animation))
-        if animation_enabled:
-            app.setEffectEnabled(combo_animation, False)
-        try:
-            super().showPopup()
-        finally:
-            if animation_enabled:
-                app.setEffectEnabled(combo_animation, True)
-        popup = self.view().window()
-        self._remove_popup_frame(popup)
-        popup.setFixedSize(self.POPUP_WIDTH, popup_height)
-        popup.setMask(self._rounded_popup_region(popup.rect()))
-        popup.move(popup_position)
-        popup.raise_()
-
-    def hidePopup(self) -> None:
-        super().hidePopup()
-        self._popup_open = False
-        self.update()
-
-    def enterEvent(self, event) -> None:
-        super().enterEvent(event)
-        self.update()
-
-    def leaveEvent(self, event) -> None:
-        super().leaveEvent(event)
-        self.update()
-
-    def focusInEvent(self, event) -> None:
-        super().focusInEvent(event)
-        self.update()
-
-    def focusOutEvent(self, event) -> None:
-        super().focusOutEvent(event)
-        self.update()
-
-
 class StatusDot(QWidget):
     """Small semantic status mark that follows live theme changes."""
 
@@ -809,6 +568,9 @@ class MetricCard(QFrame):
         self.detail.setObjectName("metricDetail")
         self.footer = QLabel()
         self.footer.setObjectName("muted")
+        # 套餐/模型名称与额度值可来自服务商，按原文展示而非解释为 HTML。
+        for label in (self.title_label, self.value, self.detail, self.footer):
+            label.setTextFormat(Qt.TextFormat.PlainText)
         # The third visual direction intentionally keeps the summary sparse.
         # Detail values remain populated for compatibility and accessibility.
         self.detail.hide()
@@ -1124,6 +886,7 @@ class TrendCard(QFrame):
         if model_mode:
             self._prepare_model_bars()
             bind_text(self.title, "近 7 天各模型 Token 使用量")
+            bind_text(self.empty_label, "近 7 天暂无模型用量")
             self.legend_scroll.show()
             self.empty_label.setVisible(not self._model_order)
         else:
@@ -1140,6 +903,11 @@ class TrendCard(QFrame):
             bind_text(self.title, "近 7 天 Token 使用量" if self._token_mode else "近 7 天使用金额")
             self.legend_scroll.hide()
             self.empty_label.hide()
+            provider_cls = PROVIDERS.get(self._provider_id)
+            if provider_cls and provider_cls.support_description and not self._standard_rows:
+                # 仅有额度或余额的平台没有历史明细，空图不能暗示真实用量为零。
+                bind_text(self.empty_label, "平台未提供历史明细")
+                self.empty_label.show()
         tokens = current_theme()
         self._series = pg.BarGraphItem(
             x=self._bar_positions,
@@ -2362,12 +2130,14 @@ class StatisticsCard(QFrame):
             column_layout.setSpacing(1)
             name = bind_text(QLabel(), label)
             name.setObjectName("statLabel")
+            name.setTextFormat(Qt.TextFormat.PlainText)
             name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             if label == "历史使用总金额":
                 # The provider has no lifetime total; this value is the local cache scope.
                 bind_text(name, "按本机已缓存账单累计，未同步的早期账单不计入", method='setToolTip')
             value = bind_text(QLabel(), "--")
             value.setObjectName("statValue")
+            value.setTextFormat(Qt.TextFormat.PlainText)
             value.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             column_layout.addWidget(name)
             column_layout.addWidget(value)
@@ -2490,11 +2260,12 @@ class MainPanel(QFrame):
         self._title_label = bind_text(QLabel(), APP_DISPLAY_NAME)
         self._title_label.setObjectName("panelTitle")
         provider_id = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
-        self.provider_quick_combo = ProviderQuickCombo()
+        # 保留选择模型和设置页复用的搜索面板，顶部仅通过图标入口访问。
+        self.provider_quick_combo = ProviderQuickCombo(self.header)
         self.provider_quick_combo.setObjectName("headerProviderCombo")
         bind_text(self.provider_quick_combo, "快速切换数据平台", method='setAccessibleName')
         bind_text(self.provider_quick_combo, "一键切换订阅或 API 数据平台", method='setToolTip')
-        self.provider_quick_combo.setFixedSize(132, 28)
+        self.provider_quick_combo.setFixedSize(150, 28)
         for item_id, item_name in list_providers():
             add_item(self.provider_quick_combo, item_name, item_id)
         self.provider_quick_combo.setCurrentIndex(
@@ -2525,8 +2296,15 @@ class MainPanel(QFrame):
         bind_text(self.settings_back_button, "返回面板", method='setAccessibleName')
         self.settings_back_button.hide()
         header_layout.addWidget(self.settings_back_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        header_layout.addWidget(self.provider_quick_combo)
-        header_layout.addWidget(self.pricing_badge)
+        self.provider_quick_combo.hide()
+        self.provider_shortcuts = ProviderShortcuts(current_provider=provider_id)
+        self.provider_shortcuts.selected.connect(self.provider_quick_combo.select_provider)
+        self.provider_quick_combo.pins_changed.connect(self.provider_shortcuts.refresh)
+        header_layout.addWidget(self.provider_shortcuts)
+        self.provider_manage_button = ProviderManagerButton()
+        self.provider_manage_button.clicked.connect(self.provider_quick_combo.showPopup)
+        self.provider_quick_combo.popup_anchor = self.provider_manage_button
+        header_layout.addWidget(self.provider_manage_button)
         header_layout.addStretch(1)
         self.settings_save_status = bind_text(QLabel(), "自动保存")
         self.settings_save_status.setObjectName("settingsSaveStatus")
@@ -2593,6 +2371,9 @@ class MainPanel(QFrame):
 
         self.today_card = MetricCard("今日使用金额", "usage")
         self.today_card.set_variant("hero")
+        # 峰谷提示属于用量信息；放到金额下方，避免挤占平台切换和窗口操作空间。
+        self.pricing_badge.setFixedHeight(20)
+        self.today_card.layout().insertWidget(2, self.pricing_badge, 0, Qt.AlignmentFlag.AlignLeft)
         self.balance_card = MetricCard("账户余额", "balance")
         self.balance_card.set_variant("compact")
         self.month_card = MetricCard("本月累计", "month")
@@ -2809,6 +2590,8 @@ class MainPanel(QFrame):
             self.content_stack.addWidget(settings)
         self.content_stack.setCurrentWidget(settings)
         self.provider_quick_combo.hide()
+        self.provider_shortcuts.hide()
+        self.provider_manage_button.hide()
         self.pricing_badge.hide()
         self.settings_button.hide()
         self.settings_back_button.show()
@@ -2818,9 +2601,12 @@ class MainPanel(QFrame):
         self.content_stack.setCurrentIndex(0)
         self.settings_back_button.hide()
         self.settings_save_status.hide()
-        self.provider_quick_combo.show()
+        self.provider_manage_button.show()
+        self.provider_shortcuts.refresh()
+        self._update_provider_shortcuts_visibility()
         self.pricing_badge.setVisible(bool(self.pricing_badge.text()))
         self.settings_button.show()
+
 
     def set_settings_save_status(self, message: str, tone: str) -> None:
         # 详细错误留在提示中，不能把共用标题栏撑宽并挤掉收起入口。
@@ -2844,10 +2630,17 @@ class MainPanel(QFrame):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        if hasattr(self, "provider_shortcuts"):
+            self._update_provider_shortcuts_visibility()
         if hasattr(self, "activity"):
             self._fit_activity_heatmap()
         if hasattr(self, "activity_summary"):
             self._update_activity_header_visibility()
+
+    def _update_provider_shortcuts_visibility(self) -> None:
+        # 峰谷提示已移入用量卡；窄窗口也保留图标切换，不再与提示争抢空间。
+        overview = hasattr(self, "content_stack") and self.content_stack.currentIndex() == 0
+        self.provider_shortcuts.setVisible(overview)
 
     def _fit_activity_heatmap(self) -> None:
         # At the supported 640 px minimum, the full 53-week calendar must stay
@@ -2900,7 +2693,9 @@ class MainPanel(QFrame):
             cost = row.get("cost_cny")
             token_count = row.get("tokens")
         else:
-            self.today_card.set_title("今日使用金额")
+            self.today_card.set_title(
+                "今日使用金额 (UTC)" if self._minute_provider_id == "openrouter" else "今日使用金额"
+            )
             cost = self._today_cost_cny
             token_count = self._today_tokens
         self.today_card.set_values(
@@ -3248,6 +3043,7 @@ class MainPanel(QFrame):
         self, enabled: bool, is_peak: bool = False, label: str = "", tooltip: str = ""
     ) -> None:
         self.pricing_badge.setVisible(enabled and self.content_stack.currentIndex() == 0)
+        self._update_provider_shortcuts_visibility()
         if not enabled:
             bind_text(self.pricing_badge, "")
             bind_text(self.pricing_badge, "", method='setToolTip')
@@ -3305,6 +3101,7 @@ class MainPanel(QFrame):
                 self.provider_quick_combo.setCurrentIndex(provider_index)
             del provider_blocker
         provider_cls = PROVIDERS.get(provider_id)
+        self.provider_shortcuts.set_current(provider_id)
         quota_mode = bool(
             data.quota_windows
             or data.quota_metrics
@@ -3399,6 +3196,8 @@ class MainPanel(QFrame):
             bind_text(self.activity_summary, activity_tooltip, method='setToolTip')
             self.activity_card.setFixedHeight(ANNUAL_ACTIVITY_SECTION_HEIGHT)
             self._set_annual_activity_data(data)
+            if provider_cls and provider_cls.support_description and not data.daily_usage:
+                bind_text(self.activity_summary, "平台未提供 Token 明细")
             self.statistics.set_quota_data(data)
             self.setFixedHeight(ANNUAL_PANEL_HEIGHT)
             self.activity_height_changed.emit(ANNUAL_PANEL_HEIGHT)
@@ -3435,11 +3234,12 @@ class MainPanel(QFrame):
         self._daily_usage_by_date = {
             str(row.get("date")): row for row in data.daily_usage if row.get("date")
         }
-        self.balance_card.set_title("账户余额")
-        self.month_card.set_title("本月累计")
+        self.balance_card.set_title(getattr(provider_cls, "balance_label", "账户余额"))
+        self.month_card.set_title("本月累计 (UTC)" if provider_id == "openrouter" else "本月累计")
         self.balance_card.set_values(
             money(data.balance_cny),
-            f"约 {tokens(data.balance_tokens)}" if data.balance_tokens else "账户可用余额",
+            f"约 {tokens(data.balance_tokens)}" if data.balance_tokens
+            else getattr(provider_cls, "balance_description", "账户可用余额"),
             "",
         )
         self.month_card.set_values(
@@ -3451,6 +3251,8 @@ class MainPanel(QFrame):
         self._set_annual_activity_data(data)
 
         self._update_minute_data(data, loading)
+        if provider_cls and provider_cls.support_description and not provider_cls.supports_daily_usage:
+            bind_text(self.activity_summary, "平台未提供 Token 明细")
         for button in self.minute_legend_buttons.values():
             button.setEnabled(data.minute_usage_status != "unavailable")
         self._refresh_minute_control_colors()
@@ -3539,6 +3341,7 @@ class MainPanel(QFrame):
             labels_by_source.setdefault(source or "unavailable", []).append(label)
         source_names = {
             "interface": "接口数据",
+            "local_snapshot": "本机快照",
             "cache": "缓存数据",
             "mixed": "接口 + 今日本机估算",
             "cache_mixed": "缓存 + 今日本机估算",
@@ -3566,6 +3369,12 @@ class MainPanel(QFrame):
             return "尚未配置 Token/Cookie，请前往设置", theme.warning
         if "AUTH_EXPIRED" in codes:
             return "认证信息已失效，请重新配置", theme.danger
+        if "STALE_DATA" in codes:
+            return "数据已过期，请更新来源", theme.warning
+        if "RATE_LIMITED" in codes:
+            return "请求过于频繁，请稍后重试", theme.warning
+        if "PERMISSION_DENIED" in codes:
+            return "令牌权限不足，请检查设置", theme.warning
         if codes & {"NETWORK_TIMEOUT", "NETWORK_ERROR"}:
             return "网络连接失败", theme.danger
         if "SERVER_ERROR" in codes:
@@ -3588,7 +3397,9 @@ class MainPanel(QFrame):
     def relative_update_time(data: TokenData) -> str:
         if not data.last_success_at:
             return "等待首次更新"
-        seconds = max(0, int((datetime.now() - data.last_success_at).total_seconds()))
+        # 持久快照可能带时区；统一到对应时钟，避免 aware/naive 时间相减失败。
+        now = datetime.now(data.last_success_at.tzinfo) if data.last_success_at.tzinfo else datetime.now()
+        seconds = max(0, int((now - data.last_success_at).total_seconds()))
         if seconds < 60:
             return "数据更新于刚刚"
         minutes = seconds // 60

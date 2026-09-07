@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from api.deepseek_pricing import configured_periods, parse_time_text
 from api.http import is_https_url
-from config.defaults import DEFAULT_CONFIG, FIELD_META, OFFICIAL_HOSTS, SECRET_KEYS
+from config.defaults import DEFAULT_CONFIG, FIELD_META, OFFICIAL_HOSTS, PROVIDER_IDS, SECRET_KEYS
 
 
 def validate_value(key: str, value: Any) -> Any:
@@ -100,8 +100,8 @@ def validate_config(values: dict[str, Any]) -> dict[str, Any]:
         merged["UI_LIGHT_ACCENT_COLOR"] = accent
         merged["UI_DARK_ACCENT_COLOR"] = accent
     active_provider = str(merged.get("ACTIVE_PROVIDER", "deepseek")).strip().lower()
-    if active_provider not in {"deepseek", "mimo", "codex", "cursor", "nayuto"}:
-        raise ValueError("ACTIVE_PROVIDER 必须是 deepseek、mimo、codex、cursor 或 nayuto")
+    if active_provider not in PROVIDER_IDS:
+        raise ValueError("ACTIVE_PROVIDER 包含未知数据来源")
     merged["ACTIVE_PROVIDER"] = active_provider
     update_channel = str(merged.get("UPDATE_CHANNEL", "stable")).strip().lower()
     if update_channel not in {"stable", "prerelease"}:
@@ -128,6 +128,12 @@ def is_official_base_url(value: str, provider_id: str = "") -> bool:
         "deepseek": {"platform.deepseek.com", "api.deepseek.com"},
         "mimo": {"platform.xiaomimimo.com"},
         "nayuto": {"nayutoai.xyz"},
+        "openrouter": {"openrouter.ai"},
+        "moonshot": {"api.moonshot.cn", "api.moonshot.ai"},
+        "zai": {"api.z.ai", "open.bigmodel.cn", "dev.bigmodel.cn"},
+        "kimi": {"api.kimi.com"},
+        "minimax": {"api.minimax.io", "api.minimaxi.com", "www.minimax.io", "www.minimaxi.com"},
+        "elevenlabs": {"api.elevenlabs.io"},
     }.get(provider_id, OFFICIAL_HOSTS if not provider_id else set())
     return parsed.port in (None, 443) and (parsed.hostname or "").lower() in hosts
 
