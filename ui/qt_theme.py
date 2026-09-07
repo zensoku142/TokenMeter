@@ -343,6 +343,37 @@ QDialog#settingsPage QComboBox:focus, QDialog#settingsPage QSpinBox:focus,
 QDialog#settingsPage QTimeEdit:focus {{ border-color: {tokens.accent}; }}
 QDialog#settingsPage QComboBox {{ padding-right: 28px; }}
 QDialog#settingsPage QComboBox::drop-down {{ border: 0; width: 24px; }}
+/* Qt 会自动扣除箭头按钮宽度，这里只留文字间距，避免重复预留导致百分比被裁切。 */
+QDialog#settingsPage QSpinBox {{ padding-right: 4px; }}
+QDialog#settingsPage QSpinBox::up-button,
+QDialog#settingsPage QSpinBox::down-button {{
+    subcontrol-origin: border;
+    width: 26px;
+    height: 14px;
+    margin-right: 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+}}
+QDialog#settingsPage QSpinBox::up-button {{
+    subcontrol-position: top right;
+    margin-top: 3px;
+}}
+QDialog#settingsPage QSpinBox::down-button {{
+    subcontrol-position: bottom right;
+    margin-bottom: 3px;
+}}
+QDialog#settingsPage QSpinBox::up-button:hover,
+QDialog#settingsPage QSpinBox::down-button:hover {{ background: {tokens.accent_soft}; }}
+QDialog#settingsPage QSpinBox::up-button:pressed,
+QDialog#settingsPage QSpinBox::down-button:pressed {{ background: {tokens.selection}; }}
+QDialog#settingsPage QSpinBox::up-button:disabled,
+QDialog#settingsPage QSpinBox::down-button:disabled,
+QDialog#settingsPage QSpinBox::up-button:off,
+QDialog#settingsPage QSpinBox::down-button:off {{ background: transparent; }}
+/* 箭头由设置数字框按主题绘制，避免原生立体按钮和字体差异。 */
+QDialog#settingsPage QSpinBox::up-arrow,
+QDialog#settingsPage QSpinBox::down-arrow {{ width: 0; height: 0; }}
 QFrame#settingsSwitchRow {{
     background: transparent;
     border: 0;

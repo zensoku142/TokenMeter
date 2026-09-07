@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyleOptionFrame,
     QToolButton,
     QWidget,
 )
@@ -4692,6 +4694,30 @@ def test_settings_custom_colors_save_failure_is_visible(custom_color_settings):
     assert custom_color_settings.save_feedback.property("tone") == "danger"
     assert custom_color_settings.accent_color_edit.text() == "#D14C2F"
     assert not config_manager.CONFIG_PATH.exists()
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_settings_quota_threshold_has_room_for_complete_percentage(mode):
+    controller = configure_theme(APP, mode)
+    window = SettingsWindow()
+    try:
+        window.tabs.setCurrentIndex(4)
+        window.show()
+        APP.processEvents()
+        spin = window.quota_alert_threshold
+        editor = spin.lineEdit()
+        option = QStyleOptionFrame()
+        editor.initStyleOption(option)
+        content = editor.style().subElementRect(QStyle.SubElement.SE_LineEditContents, option, editor)
+        margins = editor.textMargins()
+        # 检查真实编辑区域，防止按钮宽度和样式留白重复扣除后裁掉数字或百分号。
+        available = content.width() - margins.left() - margins.right() - 4
+        for value in (spin.minimum(), 10, spin.maximum()):
+            spin.setValue(value)
+            assert editor.fontMetrics().horizontalAdvance(spin.text()) <= available
+    finally:
+        window.close()
+        controller.set_mode("dark")
 
 
 def test_settings_groups_configuration_into_scrolling_pages_with_separate_pet_page():

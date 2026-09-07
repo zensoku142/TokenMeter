@@ -14,7 +14,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Union
 
-from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, QThread, QTime, QTimer, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, QSize, Qt, QThread, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStyle,
+    QStyleOptionSpinBox,
     QTabBar,
     QTabWidget,
     QTimeEdit,
@@ -67,6 +68,37 @@ from updater.client import (
 )
 
 _CARD_PADDING = 18
+
+
+class _SettingsSpinBox(QSpinBox):
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        # 只替换箭头绘制，命中区域仍由原生样式提供，保留长按、键盘及数值边界行为。
+        option = QStyleOptionSpinBox()
+        self.initStyleOption(option)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        tokens = current_theme()
+        for control, step, direction in (
+            (QStyle.SubControl.SC_SpinBoxUp, self.StepEnabledFlag.StepUpEnabled, -1),
+            (QStyle.SubControl.SC_SpinBoxDown, self.StepEnabledFlag.StepDownEnabled, 1),
+        ):
+            rect = self.style().subControlRect(QStyle.ComplexControl.CC_SpinBox, option, control, self)
+            center = QRectF(rect).center()
+            enabled = self.isEnabled() and bool(option.stepEnabled & step)
+            hovered = bool(option.activeSubControls & control)
+            pressed = hovered and bool(option.state & QStyle.StateFlag.State_Sunken)
+            painter.setOpacity(1.0 if enabled else 0.35)
+            color = tokens.on_accent if enabled and pressed else (
+                tokens.accent_text if enabled and hovered else tokens.subtext
+            )
+            pen = QPen(QColor(color), 1.5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            tip = center + QPointF(0, direction * 2)
+            painter.drawLine(center + QPointF(-3.5, -direction * 1.5), tip)
+            painter.drawLine(tip, center + QPointF(3.5, -direction * 1.5))
 
 
 class _SettingsComboBox(QComboBox):
@@ -547,7 +579,7 @@ class SettingsWindow(QDialog):
         runtime_form.setContentsMargins(_CARD_PADDING, 14, _CARD_PADDING, 14)
         runtime_form.setHorizontalSpacing(16)
         runtime_form.setVerticalSpacing(10)
-        self.refresh_seconds = QSpinBox()
+        self.refresh_seconds = _SettingsSpinBox()
         self.refresh_seconds.setRange(5, 3600)
         bind_text(self.refresh_seconds, " 秒", method='setSuffix')
         runtime_form.addRow(bind_text(QLabel(), "刷新间隔"), self.refresh_seconds)
@@ -568,10 +600,10 @@ class SettingsWindow(QDialog):
         alert_layout.setContentsMargins(0, 0, 0, 0)
         alert_layout.setSpacing(8)
         self.quota_alert_check = bind_text(QCheckBox(), "低额度提醒")
-        self.quota_alert_threshold = QSpinBox()
+        self.quota_alert_threshold = _SettingsSpinBox()
         self.quota_alert_threshold.setRange(1, 50)
         self.quota_alert_threshold.setSuffix("%")
-        self.quota_alert_threshold.setFixedWidth(76)
+        self.quota_alert_threshold.setFixedWidth(96)
         bind_text(self.quota_alert_threshold, "提醒阈值", method="setAccessibleName")
         self.quota_alert_threshold.setEnabled(False)
         self.quota_alert_check.toggled.connect(self.quota_alert_threshold.setEnabled)
@@ -581,7 +613,7 @@ class SettingsWindow(QDialog):
         alert_layout.addWidget(bind_text(QLabel(), "剩余不高于"))
         alert_layout.addWidget(self.quota_alert_threshold)
         runtime_form.addRow(bind_text(QLabel(), "订阅额度"), alert_row)
-        self.minute_usage_interval_minutes = QSpinBox()
+        self.minute_usage_interval_minutes = _SettingsSpinBox()
         self.minute_usage_interval_minutes.setRange(1, 60)
         bind_text(self.minute_usage_interval_minutes, " 分钟", method='setSuffix')
         bind_text(self.minute_usage_interval_minutes, "仅合并分时图的展示粒度，底层分钟数据和刷新频率保持不变", method='setToolTip')
@@ -601,7 +633,7 @@ class SettingsWindow(QDialog):
         storage_form.setHorizontalSpacing(16)
         storage_form.setVerticalSpacing(14)
         storage_layout.addLayout(storage_form)
-        self.minute_usage_retention_days = QSpinBox()
+        self.minute_usage_retention_days = _SettingsSpinBox()
         self.minute_usage_retention_days.setRange(1, 365)
         bind_text(self.minute_usage_retention_days, " 天", method='setSuffix')
         bind_text(self.minute_usage_retention_days, "界面展示最近 N 天分时估算数据；本地数据保留双倍宽限期，超过 2N 天后才自动清理", method='setToolTip')
