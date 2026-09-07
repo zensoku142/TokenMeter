@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, ClassVar
+from math import isfinite
+from typing import Any, Callable, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import api.deepseek as ds  # noqa: F401  # 兼容 v1.0 中对 data.store.ds 的测试和扩展引用。
@@ -32,6 +33,15 @@ _TRANSIENT_QUOTA_ERROR_CODES = {
     "SERVER_ERROR",
     "UNKNOWN_ERROR",
 }
+
+
+def _unexpected_fetch_error(provider_id: str, source: str, exc: Exception) -> FetchError:
+    # requests 等库的异常可能包含请求头/凭据；各查询分支只记录类型与固定步骤，不回显异常正文。
+    config_manager.logger().error(
+        "Provider fetch failed: provider=%s source=%s exception=%s",
+        provider_id, source, type(exc).__name__,
+    )
+    return FetchError("UNKNOWN_ERROR", source, "查询发生异常，请稍后重试。")
 
 
 def top_model_stats(
@@ -108,12 +118,13 @@ _months_for_activity = months_for_activity
 
 
 def _sum_from_payloads(
-    payloads: list[dict[str, Any]], today: date
-) -> tuple[int, int, Decimal, Decimal]:
+    payloads: list[dict[str, Any]], today: date, *, preserve_missing_cost: bool = False,
+) -> tuple[int, int, Decimal | None, Decimal | None]:
     today_tokens = 0
     week_tokens = 0
     today_cost = Decimal("0")
     week_cost = Decimal("0")
+    found_today_cost = found_week_cost = False
     week_start = today - timedelta(days=today.weekday())
     for payload in payloads:
         days = payload.get("days", [])
@@ -145,16 +156,25 @@ def _sum_from_payloads(
                         config_manager.logger().warning("Skipped malformed provider usage")
                         continue
                     if usage_type == "cost_cny":
+                        if preserve_missing_cost and usage.get("amount") in (None, ""):
+                            continue
                         if usage_date == today:
                             today_cost += amount
+                            found_today_cost = True
                         if week_start <= usage_date <= today:
                             week_cost += amount
+                            found_week_cost = True
                     elif usage_type in TOKEN_TYPES:
                         if usage_date == today:
                             today_tokens += int(amount)
                         if week_start <= usage_date <= today:
                             week_tokens += int(amount)
-    return today_tokens, week_tokens, today_cost, week_cost
+    # 采集器需区分未知与零，避免缺失明细覆盖已验证的费用摘要；默认行为保留原聚合接口。
+    return (
+        today_tokens, week_tokens,
+        today_cost if found_today_cost or not preserve_missing_cost else None,
+        week_cost if found_week_cost or not preserve_missing_cost else None,
+    )
 
 
 def _monthly_totals_from_payloads(
@@ -492,12 +512,16 @@ class TokenData:
         return copy.deepcopy(data, memo)
 
     @classmethod
-    def test_connection(cls, config: Mapping[str, Any]) -> "TokenData":
+    def test_connection(
+        cls, config: Mapping[str, Any], *, should_stop: Callable[[], bool] | None = None,
+    ) -> "TokenData":
         """Test one provider from an isolated configuration snapshot.
 
         The test deliberately avoids history and snapshot writes so a settings draft
         cannot affect the normal refresh path even when both operations overlap.
         """
+        if should_stop and should_stop():
+            return cls(status="error", errors=[FetchError("CANCELLED", "连接测试", "连接测试已取消。")])
         providers = list(active_providers(config))
         if not providers:
             return cls(
@@ -510,14 +534,16 @@ class TokenData:
             reset_cache = getattr(provider, "reset_refresh_cache", None)
             if reset_cache is not None:
                 reset_cache()
-            return cls._test_connection_with_provider(provider)
+            return cls._test_connection_with_provider(provider, should_stop=should_stop)
         finally:
             close = getattr(provider, "close", None)
             if close is not None:
                 close()
 
     @classmethod
-    def _test_connection_with_provider(cls, provider) -> "TokenData":
+    def _test_connection_with_provider(
+        cls, provider, *, should_stop: Callable[[], bool] | None = None,
+    ) -> "TokenData":
         per = PerProviderData(provider.id, provider.name, status="loading")
         successes = 0
         if not provider.is_configured():
@@ -531,26 +557,26 @@ class TokenData:
                 ("账户余额", provider.fetch_balance),
                 ("账户摘要", provider.fetch_summary),
             ):
+                if should_stop and should_stop():
+                    break
                 try:
                     value, error = fetcher()
                 except Exception as exc:
-                    config_manager.logger().exception(
-                        "Connection test failed for %s: %s", provider.id, source
-                    )
-                    value, error = None, FetchError("UNKNOWN_ERROR", source, str(exc))
+                    value, error = None, _unexpected_fetch_error(provider.id, source, exc)
                 if value is not None:
                     successes += 1
                 if error:
                     per.errors.append(error)
-            try:
-                payloads, errors = provider.fetch_payloads(
-                    months_for_week(provider_usage_day(provider.id, datetime.now().astimezone()))
-                )
-            except Exception as exc:
-                config_manager.logger().exception(
-                    "Connection test payload fetch failed for %s", provider.id
-                )
-                payloads, errors = [], [FetchError("UNKNOWN_ERROR", "用量明细", str(exc))]
+            if should_stop and should_stop():
+                # 当前请求有超时上限；取消后不再开始其余接口或历史分页，缩短退出等待。
+                payloads, errors = [], [FetchError("CANCELLED", "连接测试", "连接测试已取消。")]
+            else:
+                try:
+                    payloads, errors = provider.fetch_payloads(
+                        months_for_week(provider_usage_day(provider.id, datetime.now().astimezone()))
+                    )
+                except Exception as exc:
+                    payloads, errors = [], [_unexpected_fetch_error(provider.id, "用量明细", exc)]
             if payloads:
                 successes += 1
             per.errors.extend(errors)
@@ -566,7 +592,7 @@ class TokenData:
     @classmethod
     def _base_snapshot(cls, provider_id: str = "", account_key: str | None = None) -> "TokenData":
         # Claude statusline 不包含账号身份；未指定 scope 时不能假定两次快照来自同一账号。
-        if provider_id == "claude" and not account_key:
+        if provider_id in {"claude", "antigravity"} and not account_key:
             return cls()
         with cls._cache_lock:
             snapshot = cls._provider_snapshots.get(provider_id) if provider_id else cls._last_snapshot
@@ -577,7 +603,7 @@ class TokenData:
     @classmethod
     def cached_snapshot(cls, provider_id: str, account_key: str | None = None) -> "TokenData | None":
         """Return an isolated successful snapshot for one provider, if available."""
-        if provider_id == "claude" and not account_key:
+        if provider_id in {"claude", "antigravity"} and not account_key:
             return None
         with cls._cache_lock:
             snapshot = cls._provider_snapshots.get(provider_id)
@@ -645,7 +671,7 @@ class TokenData:
         payload, saved_at = record
         try:
             snapshot_version = int(payload.get("version") or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             snapshot_version = 0
 
         def parsed_datetime(value: Any) -> datetime | None:
@@ -680,16 +706,20 @@ class TokenData:
                     if not isinstance(item, dict):
                         continue
                     minutes = item.get("window_minutes")
-                    windows.append(
-                        QuotaWindow(
-                            str(item.get("id") or ""),
-                            str(item.get("title") or ""),
-                            max(0.0, min(100.0, float(item.get("used_percent") or 0))),
+                    try:
+                        used = float(item.get("used_percent"))
+                        if isinstance(item.get("used_percent"), bool) or not isfinite(used) or used < 0:
+                            continue
+                        window = QuotaWindow(
+                            str(item.get("id") or ""), str(item.get("title") or ""), used,
                             resets_at=parsed_datetime(item.get("resets_at")),
                             window_minutes=None if minutes is None else int(minutes),
                             detail=str(item.get("detail") or ""),
                         )
-                    )
+                    except (TypeError, ValueError, OverflowError):
+                        # 一条坏窗口不能丢弃其余有效缓存；缺失读数不能补成零用量并伪装满额。
+                        continue
+                    windows.append(window)
             metrics = parsed_metrics("metrics")
             statistics = parsed_metrics("statistics")
 
@@ -743,7 +773,7 @@ class TokenData:
                     daily_usage = []
                     weekly_usage = []
             active_until = parsed_datetime(payload.get("account_plan_active_until"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             config_manager.logger().warning(
                 "Skipped invalid persisted quota snapshot: provider=%s", provider.id
             )
@@ -1009,10 +1039,7 @@ class TokenData:
             try:
                 quota, quota_error = provider.fetch_quota()
             except Exception as exc:
-                config_manager.logger().exception("Quota fetch failed for %s", provider.id)
-                quota, quota_error = None, FetchError(
-                    "UNKNOWN_ERROR", "订阅额度", str(exc)
-                )
+                quota, quota_error = None, _unexpected_fetch_error(provider.id, "订阅额度", exc)
             quota_refresh_failed = bool(
                 quota_error
                 and getattr(provider, "supports_subscription_quota", False)
@@ -1141,8 +1168,7 @@ class TokenData:
             try:
                 balance, balance_error = provider.fetch_balance()
             except Exception as exc:
-                config_manager.logger().exception("Balance fetch failed for %s", provider.id)
-                balance, balance_error = None, FetchError("UNKNOWN_ERROR", "账户余额", str(exc))
+                balance, balance_error = None, _unexpected_fetch_error(provider.id, "账户余额", exc)
             if balance is not None:
                 per.balance_cny = float(balance.amount) if balance.amount is not None else None
                 per.balance_tokens = int(balance.token_estimate)
@@ -1154,8 +1180,7 @@ class TokenData:
             try:
                 summary, summary_error = provider.fetch_summary()
             except Exception as exc:
-                config_manager.logger().exception("Summary fetch failed for %s", provider.id)
-                summary, summary_error = None, FetchError("UNKNOWN_ERROR", "账户摘要", str(exc))
+                summary, summary_error = None, _unexpected_fetch_error(provider.id, "账户摘要", exc)
             if summary is not None:
                 per.monthly_cost_cny = (
                     float(summary.month_cost) if summary.month_cost is not None else None
@@ -1200,8 +1225,7 @@ class TokenData:
             try:
                 fetched_payloads, payload_errors = provider.fetch_payloads(request_months)
             except Exception as exc:
-                config_manager.logger().exception("Payload fetch failed for %s", provider.id)
-                fetched_payloads, payload_errors = [], [FetchError("UNKNOWN_ERROR", "用量明细", str(exc))]
+                fetched_payloads, payload_errors = [], [_unexpected_fetch_error(provider.id, "用量明细", exc)]
             per.errors.extend(payload_errors)
             payloads = list(fetched_payloads)
             for month, year in months_for_week(current_day):
@@ -1224,12 +1248,19 @@ class TokenData:
                     payloads.append(cached_payload)
             if payloads:
                 today_tokens, week_tokens, today_cost, week_cost = _sum_from_payloads(
-                    payloads, current_day
+                    payloads, current_day, preserve_missing_cost=True,
                 )
                 per.today_tokens = today_tokens
                 per.weekly_tokens = week_tokens
-                per.today_cost_cny = float(today_cost)
-                per.weekly_cost_cny = float(week_cost)
+                if today_cost is not None:
+                    per.today_cost_cny = float(today_cost)
+                elif summary is None or summary.today_cost is None:
+                    # 明细与本轮摘要都缺失时保持未知，不能沿用上一自然日的“今日”缓存。
+                    per.today_cost_cny = None
+                if week_cost is not None:
+                    per.weekly_cost_cny = float(week_cost)
+                else:
+                    per.weekly_cost_cny = None
                 month_tokens, month_cost, per_model = _monthly_totals_from_payloads(
                     payloads, current_day
                 )
@@ -1254,6 +1285,7 @@ class TokenData:
                         fetched_payloads,
                         completed,
                         history_provider,
+                        costs_are_normalized=True,
                     )
                 except Exception:
                     config_manager.logger().exception("History save failed for %s", provider.id)
@@ -1452,7 +1484,7 @@ class TokenData:
             data.status = "partial" if per.errors else "ok"
             data.is_stale = per.is_stale
             with cls._cache_lock:
-                if provider.id != "claude" or account_key:
+                if provider.id not in {"claude", "antigravity"} or account_key:
                     cls._provider_snapshots[provider.id] = cls._copy_for_cache(data)
                 else:
                     cls._provider_snapshots.pop(provider.id, None)

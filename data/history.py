@@ -23,6 +23,13 @@ MINUTE_TOKEN_TYPES = (
     "RESPONSE_TOKEN",
 )
 
+# 同日同模型的新格式总费用优先；兼容已有混合缓存，不能把旧 Token 分项再计一次。
+_EFFECTIVE_COST_SQL = """CASE WHEN d.token_type = 'cost_cny' OR NOT EXISTS (
+    SELECT 1 FROM daily_usage AS normalized
+    WHERE normalized.provider = d.provider AND normalized.usage_date = d.usage_date
+      AND normalized.model = d.model AND normalized.token_type = 'cost_cny'
+) THEN d.cost_cny ELSE '0' END"""
+
 _DAILY_USAGE_DDL = """
 CREATE TABLE daily_usage (
     usage_date TEXT NOT NULL,
@@ -75,8 +82,10 @@ def _connect() -> Iterator[sqlite3.Connection]:
             # 版本仅在建表/迁移成功后写入；普通查询不再反复执行整套 DDL。
             if connection.execute("PRAGMA user_version").fetchone()[0] < 1:
                 connection.execute("PRAGMA journal_mode=WAL")
+                # SQLite DDL 不会由 Python 自动开启事务；先显式开启，旧表迁移失败时才能整体回滚。
+                connection.execute("BEGIN IMMEDIATE")
                 _ensure_daily_usage_schema(connection)
-                connection.executescript(
+                statements = (
                     """
                     CREATE TABLE IF NOT EXISTS sync_state (
                         provider TEXT PRIMARY KEY,
@@ -146,6 +155,10 @@ def _connect() -> Iterator[sqlite3.Connection]:
                         ON minute_cost_snapshot(provider, usage_date);
                     """
                 )
+                # 此处只有固定建表/索引语句；逐条执行，避免 executescript 隐式提交前面的迁移。
+                for statement in statements.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
                 connection.execute("PRAGMA user_version = 1")
         with connection:
             yield connection
@@ -398,11 +411,13 @@ def save_usage(
     cost_payloads: list[dict[str, Any]],
     synced_months: list[tuple[int, int]] | None = None,
     provider: str = "deepseek",
+    *,
+    costs_are_normalized: bool = False,
 ) -> None:
     fetched_at = datetime.now().isoformat(timespec="seconds")
     amount_rows = list(_aggregated_rows(amount_payloads))
     cost_rows = list(_aggregated_rows(cost_payloads))
-    normalized_costs = any(row[2] == "cost_cny" for row in cost_rows)
+    normalized_models = {(row[0], row[1]) for row in cost_rows if row[2] == "cost_cny"}
     with _connect() as connection:
         for usage_date, model, token_type, amount in amount_rows:
             if token_type == "cost_cny":
@@ -416,8 +431,15 @@ def save_usage(
                        fetched_at = excluded.fetched_at""",
                 (usage_date, model, token_type, int(amount), fetched_at, provider),
             )
+        for usage_date, model in normalized_models:
+            # 新格式是该日该模型的完整费用；清掉旧 Token 分项费用，保留 Token 数避免升级后重复计费。
+            connection.execute(
+                "UPDATE daily_usage SET cost_cny = '0' WHERE provider = ? AND usage_date = ? AND model = ? AND token_type != 'cost_cny'",
+                (provider, usage_date, model),
+            )
         for usage_date, model, token_type, amount in cost_rows:
-            if normalized_costs and token_type != "cost_cny":
+            # 采集器传入的是混合用量，缺失 cost_cny 不能把 Token 当费用；旧版独立金额载荷仍兼容。
+            if (costs_are_normalized or normalized_models) and token_type != "cost_cny":
                 continue
             connection.execute(
                 """INSERT INTO daily_usage
@@ -1065,7 +1087,7 @@ def minute_usage_dates(provider: str, *, populated_only: bool = False) -> list[s
 
 
 def total_cost(provider: str | None = None) -> Decimal:
-    query = "SELECT cost_cny FROM daily_usage"
+    query = f"SELECT {_EFFECTIVE_COST_SQL} FROM daily_usage AS d"
     params: tuple[Any, ...] = ()
     if provider:
         query += " WHERE provider = ?"
@@ -1075,7 +1097,11 @@ def total_cost(provider: str | None = None) -> Decimal:
         # 保留 Decimal 累加精度，同时流式读取以免大历史表产生额外结果列表。
         for (cost,) in connection.execute(query, params):
             try:
-                total += Decimal(str(cost or "0"))
+                amount = Decimal(str(cost or "0"))
+                # 旧版或损坏缓存仍可能含 NaN/Infinity；新写入校验不能替代读取时保护。
+                if not amount.is_finite():
+                    raise ValueError("Non-finite cached cost")
+                total += amount
             except (InvalidOperation, ValueError):
                 config_manager.logger().warning("Skipped malformed cached cost")
     return total
@@ -1083,8 +1109,8 @@ def total_cost(provider: str | None = None) -> Decimal:
 
 def recent_daily(days: int = 371, provider: str | None = None) -> list[dict[str, Any]]:
     start = (date.today() - timedelta(days=max(1, days) - 1)).isoformat()
-    query = """SELECT usage_date, token_amount, cost_cny
-               FROM daily_usage WHERE usage_date >= ?"""
+    query = f"""SELECT usage_date, token_amount, {_EFFECTIVE_COST_SQL}
+               FROM daily_usage AS d WHERE usage_date >= ?"""
     params: list[Any] = [start]
     if provider:
         query += " AND provider = ?"
@@ -1099,7 +1125,10 @@ def recent_daily(days: int = 371, provider: str | None = None) -> list[dict[str,
             )
             item["tokens"] += int(tokens or 0)
             try:
-                item["cost_cny"] += Decimal(str(cost or "0"))
+                amount = Decimal(str(cost or "0"))
+                if not amount.is_finite():
+                    raise ValueError("Non-finite cached daily cost")
+                item["cost_cny"] += amount
             except (InvalidOperation, ValueError):
                 config_manager.logger().warning("Skipped malformed cached daily cost")
     return list(daily.values())
@@ -1117,8 +1146,8 @@ def recent_daily_model_usage(
     }
     with _connect() as connection:
         rows = connection.execute(
-            """SELECT usage_date, model, token_type, token_amount, cost_cny
-                 FROM daily_usage
+            f"""SELECT usage_date, model, token_type, token_amount, {_EFFECTIVE_COST_SQL}
+                 FROM daily_usage AS d
                 WHERE provider = ? AND usage_date BETWEEN ? AND ?
                 ORDER BY usage_date, model, token_type""",
             (provider, start.isoformat(), current_day.isoformat()),
@@ -1146,13 +1175,13 @@ def recent_daily_model_usage(
                 amount = int(token_amount or 0)
                 values[field] += amount
                 values["total_tokens"] += amount
-            if str(token_type) == "cost_cny":
-                try:
-                    values["cost_cny"] += Decimal(str(raw_cost or "0"))
-                except (InvalidOperation, ValueError):
-                    config_manager.logger().warning(
-                        "Skipped malformed cached daily model cost"
-                    )
+            try:
+                amount = Decimal(str(raw_cost or "0"))
+                if not amount.is_finite():
+                    raise ValueError("Non-finite cached model cost")
+                values["cost_cny"] += amount
+            except (InvalidOperation, ValueError):
+                config_manager.logger().warning("Skipped malformed cached daily model cost")
     return [
         {
             "date": usage_day.isoformat(),
@@ -1168,8 +1197,8 @@ def recent_daily_model_usage(
 def provider_daily_payloads(provider: str, start: date, end: date) -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute(
-            """SELECT usage_date, model, token_type, token_amount, cost_cny
-                 FROM daily_usage
+            f"""SELECT usage_date, model, token_type, token_amount, {_EFFECTIVE_COST_SQL}
+                 FROM daily_usage AS d
                 WHERE provider = ? AND usage_date BETWEEN ? AND ?
                 ORDER BY usage_date""",
             (provider, start.isoformat(), end.isoformat()),

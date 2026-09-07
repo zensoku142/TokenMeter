@@ -595,6 +595,25 @@ class StoreTests(unittest.TestCase):
             [error.code for error in different_account.errors], ["NETWORK_ERROR"]
         )
 
+    def test_invalid_persisted_windows_do_not_become_full_quota_or_discard_valid_windows(self):
+        provider = FakeProvider()
+        bad_windows = [
+            {"id": "bad"},
+            *({"id": "bad", "used_percent": value} for value in (
+                None, True, False, -1, "bad", float("nan"), float("inf"), float("-inf"), 10**400,
+            )),
+            {"id": "bad", "used_percent": 25, "resets_at": "broken-date"},
+        ]
+        for bad in bad_windows:
+            with self.subTest(bad=bad), patch.object(history, "load_provider_quota_snapshot", return_value=({
+                "version": 3, "windows": [bad, {"id": "valid", "used_percent": 125}],
+                "metrics": [{"title": "Plan", "value": "Pro"}],
+            }, datetime.now())):
+                restored = TokenData._load_persisted_quota_snapshot(provider)
+                self.assertIsNotNone(restored)
+                self.assertEqual([(window.id, window.used_percent) for window in restored.quota_windows], [("valid", 125)])
+                self.assertEqual(restored.quota_metrics[0].value, "Pro")
+
     def test_legacy_codex_snapshot_does_not_restore_unverified_statistics(self):
         class QuotaProvider(FakeProvider):
             id = "codex"

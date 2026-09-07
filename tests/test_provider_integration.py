@@ -1,6 +1,7 @@
 """Configuration and visible data contracts for the expanded provider registry."""
 
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pytest
@@ -8,12 +9,12 @@ import requests
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton
 
 from api.providers import PROVIDERS, get_provider
-from api.providers.base import _decimal, safe_int
+from api.providers.base import Provider, ProviderSummary, _decimal, safe_int
 from config import runtime as config_manager
 from config.defaults import DEFAULT_CONFIG, FIELD_META, PROVIDER_IDS, SECRET_KEYS
 from config.store import public_values, validate_config
 from data import history
-from data.store import TokenData
+from data.store import PerProviderData, TokenData
 from scripts.claude_statusline import make_snapshot, write_snapshot
 from ui.i18n import configure_language
 from ui.qt_panel import MainPanel
@@ -34,6 +35,37 @@ def isolated(tmp_path, monkeypatch):
     configure_language(app, "zh-cn")
     configure_theme(app, "dark")
     return app
+
+
+@pytest.mark.parametrize("detail_cost", [None, 0, 2])
+def test_live_aggregation_does_not_persist_missing_cost_as_token_amount(isolated, detail_cost):
+    class TokenOnlyProvider(Provider):
+        id = "token-only"
+        name = "Token only"
+        supports_daily_usage = True
+        supports_cost = True
+
+        def is_configured(self):
+            return True
+
+        def fetch_payloads(self, _months):
+            usages = [{"type": "RESPONSE_TOKEN", "amount": 700}]
+            if detail_cost is not None:
+                usages.append({"type": "cost_cny", "amount": detail_cost})
+            return [{"days": [{"date": "2026-09-07", "data": [{"model": "model", "usage": usages}]}]}], []
+
+    provider = TokenOnlyProvider({})
+    TokenData._provider_snapshots["token-only"] = TokenData(
+        last_success_at=datetime(2026, 9, 6),
+        per_provider=[PerProviderData("token-only", "Token only", today_cost_cny=9, weekly_cost_cny=9)],
+    )
+    provider.fetch_summary = Mock(return_value=(ProviderSummary(today_cost=Decimal("5")), None))
+    data = TokenData._fetch_with_provider(provider, date(2026, 9, 7))
+    assert data.status == "ok"
+    assert data.today_tokens == 700
+    assert data.today_cost_cny == (5 if detail_cost is None else detail_cost)
+    assert data.weekly_cost_cny == detail_cost
+    assert history.total_cost("token-only") == Decimal(detail_cost or 0)
 
 
 def test_registry_configuration_and_secret_storage_are_in_sync():

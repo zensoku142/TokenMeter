@@ -90,6 +90,91 @@ class HistoryTests(unittest.TestCase):
                         self.assertEqual(rows[0]["cost_cny"], Decimal(".25"))
                         self.assertEqual(history.total_cost("synthetic"), Decimal(".25"))
 
+    def test_nonfinite_legacy_cached_costs_do_not_poison_aggregated_views(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                cost = payload("2099-01-01", ".25")
+                cost["days"][0]["data"][0]["usage"][0]["type"] = "cost_cny"
+                history.save_usage([payload("2099-01-01", 7)], [cost])
+                with history._connect() as connection:
+                    for index, value in enumerate(("NaN", "Infinity", "-Infinity", "sNaN")):
+                        connection.execute(
+                            "INSERT INTO daily_usage VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            ("2099-01-01", f"old-{index}", "cost_cny", 0, value, "2099-01-01", "deepseek"),
+                        )
+                self.assertEqual(history.total_cost("deepseek"), Decimal(".25"))
+                rows = history.recent_daily(30_000, "deepseek")
+                self.assertEqual(rows[0]["tokens"], 7)
+                self.assertEqual(rows[0]["cost_cny"], Decimal(".25"))
+                models = history.recent_daily_model_usage("deepseek", date(2099, 1, 1), 1)[0]["models"]
+                self.assertEqual(sum(row["cost_cny"] for row in models), Decimal(".25"))
+
+    def test_normalized_cost_replaces_legacy_token_cost_without_double_counting(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                history.save_usage([payload("2099-01-01", 7)], [payload("2099-01-01", ".25")])
+                cost = payload("2099-01-01", ".3")
+                cost["days"][0]["data"][0]["usage"][0]["type"] = "cost_cny"
+                history.save_usage([], [cost])
+                self.assertEqual(history.total_cost("deepseek"), Decimal(".3"))
+                rows = history.recent_daily(30_000, "deepseek")
+                self.assertEqual(rows[0]["tokens"], 7)
+                self.assertEqual(rows[0]["cost_cny"], Decimal(".3"))
+
+    def test_existing_mixed_cost_rows_are_read_once_before_resync(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                history.save_usage([payload("2099-01-01", 7)], [payload("2099-01-01", ".25")])
+                with history._connect() as connection:
+                    connection.execute(
+                        "INSERT INTO daily_usage VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        ("2099-01-01", "deepseek-test", "cost_cny", 0, ".3", "2099-01-01", "deepseek"),
+                    )
+                self.assertEqual(history.total_cost("deepseek"), Decimal(".3"))
+                self.assertEqual(history.recent_daily(30_000, "deepseek")[0]["cost_cny"], Decimal(".3"))
+                models = history.recent_daily_model_usage("deepseek", date(2099, 1, 1), 1)[0]["models"]
+                self.assertEqual(models[0]["cost_cny"], Decimal(".3"))
+                exported = history.provider_daily_payloads("deepseek", date(2099, 1, 1), date(2099, 1, 1))
+                history.save_usage([{"days": exported}], [{"days": exported}], provider="copy")
+                self.assertEqual(history.total_cost("copy"), Decimal(".3"))
+
+    def test_failed_normalized_cost_write_preserves_previous_cost_and_tokens(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                history.save_usage([payload("2099-01-01", 7)], [payload("2099-01-01", ".25")])
+                with history._connect() as connection:
+                    connection.execute("""CREATE TRIGGER reject_normalized BEFORE INSERT ON daily_usage
+                        WHEN NEW.token_type = 'cost_cny' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END""")
+                cost = payload("2099-01-01", ".3")
+                cost["days"][0]["data"][0]["usage"][0]["type"] = "cost_cny"
+                with self.assertRaises(sqlite3.DatabaseError):
+                    history.save_usage([], [cost])
+                self.assertEqual(history.total_cost("deepseek"), Decimal(".25"))
+                self.assertEqual(history.recent_daily(30_000, "deepseek")[0]["tokens"], 7)
+
+    def test_normalized_payload_never_counts_tokens_as_money_when_cost_is_missing(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                combined = [payload("2099-01-01", 700)]
+                history.save_usage(combined, combined, costs_are_normalized=True)
+                self.assertEqual(history.total_cost("deepseek"), Decimal("0"))
+                self.assertEqual(history.recent_daily(30_000, "deepseek")[0]["tokens"], 700)
+
+    def test_mixed_normalized_models_do_not_turn_missing_model_cost_into_tokens(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                combined = payload("2099-01-01", 700)
+                combined["days"][0]["data"].append({"model": "priced", "usage": [{"type": "cost_cny", "amount": ".25"}]})
+                history.save_usage([combined], [combined])
+                self.assertEqual(history.total_cost("deepseek"), Decimal(".25"))
+
+    def test_daily_models_preserve_legacy_costs_without_normalized_rows(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            with patch.object(history, "DB_PATH", Path(directory) / "usage.db"):
+                history.save_usage([payload("2099-01-01", 7)], [payload("2099-01-01", ".25")])
+                models = history.recent_daily_model_usage("deepseek", date(2099, 1, 1), 1)[0]["models"]
+                self.assertEqual(models[0]["cost_cny"], Decimal(".25"))
+
     def test_legacy_database_is_migrated_without_deleting_history(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
             db_path = Path(directory) / "usage.db"
@@ -141,6 +226,40 @@ class HistoryTests(unittest.TestCase):
                         ],
                         ["provider", "usage_date", "minute_index", "token_type"],
                     )
+
+    def test_failed_schema_upgrade_rolls_back_legacy_data_and_can_retry(self):
+        with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
+            db_path = Path(directory) / "usage.db"
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.executescript("""
+                    CREATE TABLE daily_usage (
+                        usage_date TEXT, model TEXT, token_type TEXT, token_amount INTEGER,
+                        cost_cny TEXT, fetched_at TEXT,
+                        PRIMARY KEY (usage_date, model, token_type)
+                    );
+                    INSERT INTO daily_usage VALUES ('2099-01-01', 'model', 'RESPONSE_TOKEN', 12, '.125', '2099-01-01');
+                """)
+            connect = sqlite3.connect
+
+            def fail_late_in_upgrade(*args, **kwargs):
+                connection = connect(*args, **kwargs)
+                connection.set_authorizer(lambda action, name, *_rest: (
+                    sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_CREATE_INDEX
+                    and name == "idx_minute_usage_provider_date" else sqlite3.SQLITE_OK
+                ))
+                return connection
+
+            with patch.object(history, "DB_PATH", db_path):
+                with patch.object(history.sqlite3, "connect", side_effect=fail_late_in_upgrade):
+                    with self.assertRaises(sqlite3.DatabaseError):
+                        history.recent_daily(30_000)
+                with closing(connect(db_path)) as connection:
+                    self.assertNotIn("provider", [row[1] for row in connection.execute("PRAGMA table_info(daily_usage)")])
+                    self.assertEqual(connection.execute("SELECT token_amount FROM daily_usage").fetchone()[0], 12)
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                rows = history.recent_daily(30_000)
+                self.assertEqual(rows[0]["tokens"], 12)
+                self.assertEqual(rows[0]["cost_cny"], Decimal(".125"))
 
     def test_backup_usage_database_creates_verified_pre_update_snapshot(self):
         with tempfile.TemporaryDirectory(dir=self.temp_root()) as directory:
