@@ -12,6 +12,7 @@ from api.providers.base import QuotaMetric, QuotaWindow
 from data.store import PerProviderData, TokenData
 from ui.i18n import configure_language, language_controller
 from ui.qt_ball import FloatingUsageBall
+from ui.qt_panel import MainPanel
 from ui.qt_theme import theme_controller
 from ui.qt_widget import FloatingWidget
 from ui.vpet_host import usage_message
@@ -51,6 +52,32 @@ def test_invalid_ball_quota_is_unknown_without_animating(app, remaining):
     ball.set_quota_state(remaining, "", "订阅额度")
     assert ball._quota_remaining is None
     assert not ball._wave_timer.isActive()
+
+
+@pytest.mark.parametrize("used", [None, "invalid", True, -1, float("nan"), float("inf"), float("-inf")])
+def test_invalid_used_quota_is_unknown_across_surfaces(app, used):
+    data = provider_data("codex", status="ok", last_success_at=datetime.now(),
+                         quota_windows=[QuotaWindow("week", "Weekly", used)])
+    ball = update_ball(data)
+    assert ball._quota_remaining is None
+    assert not ball._wave_timer.isActive()
+    panel = MainPanel()
+    panel.update_data(data)
+    assert panel.today_card.value.text() == "--"
+    assert "100%" not in panel.today_card.detail.text()
+    assert usage_message(data, False, "codex")["primary"] == "--"
+
+
+@pytest.mark.parametrize("used,remaining", [("25", 75), (125, 0)])
+def test_numeric_and_overage_quota_stay_consistent_across_surfaces(app, used, remaining):
+    data = provider_data("codex", status="ok", last_success_at=datetime.now(),
+                         quota_windows=[QuotaWindow("week", "Weekly", used)])
+    ball = update_ball(data)
+    assert ball._quota_remaining == remaining
+    panel = MainPanel()
+    panel.update_data(data)
+    assert f"剩余 {remaining}%" in panel.today_card.detail.text()
+    assert usage_message(data, False, "codex")["primary"] == f"剩余 {remaining}%"
 
 
 @pytest.mark.parametrize("stale", [False, True])

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QStyle,
     QStyledItemDelegate,
     QToolButton,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from api.providers import PROVIDERS, configured_provider_ids
 from config import runtime as config_manager
+from config.defaults import DEFAULT_CONFIG, SECRET_KEYS
 from ui.i18n import bind_text, language_controller, tr
 from ui.provider_branding import (
     provider_icon,
@@ -41,7 +43,8 @@ def pinned_provider_ids() -> list[str]:
     values = config_manager.load_panel_layout_state().get("pinned_providers", _DEFAULT_PINS)
     if not isinstance(values, (list, tuple)):
         values = _DEFAULT_PINS
-    return list(dict.fromkeys(value for value in values if isinstance(value, str) and value in PROVIDERS))
+    disabled = config_manager.get("DISABLED_PROVIDER_IDS", [])
+    return list(dict.fromkeys(value for value in values if isinstance(value, str) and value in PROVIDERS and value not in disabled))
 
 
 class _ProviderCardDelegate(QStyledItemDelegate):
@@ -78,7 +81,7 @@ class _ProviderCardDelegate(QStyledItemDelegate):
             provider_short_name(provider_id), Qt.TextElideMode.ElideRight, int(rect.width()) - 24
         )
         painter.drawText(rect.adjusted(12, 44, -12, -24), Qt.AlignmentFlag.AlignLeft, name)
-        label = tr("已配置" if connected else "未配置")
+        label = index.data(Qt.ItemDataRole.StatusTipRole) or tr("已配置" if connected else "未配置")
         painter.setPen(QColor(tokens.success if connected else tokens.subtext))
         painter.drawText(rect.adjusted(12, 67, -8, 0), Qt.AlignmentFlag.AlignLeft, label)
         painter.restore()
@@ -96,11 +99,14 @@ class ProviderPicker(QComboBox):
     """Keep the existing combo data/signals while replacing its long native menu."""
 
     pins_changed = Signal()
+    configuration_changed = Signal(str, bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._popup_open = False
         self._configured: set[str] = set()
+        self._disabled: set[str] = set()
+        self.remove_buttons: dict[str, QToolButton] = {}
         self._pins: list[str] = []
         self._filter = "all"
         self.popup_anchor: QWidget = self
@@ -163,6 +169,7 @@ class ProviderPicker(QComboBox):
         self.search.installEventFilter(self)
         self.grid.installEventFilter(self)
         self._grid_viewport.installEventFilter(self)
+        self.grid.verticalScrollBar().valueChanged.connect(self._position_remove_buttons)
         layout.addWidget(self.grid, 1)
         self.empty_label = bind_text(QLabel(), "没有匹配的平台，试试其他名称或查看全部平台")
         self.empty_label.setWordWrap(True)
@@ -194,6 +201,10 @@ class ProviderPicker(QComboBox):
             # 搜索面向所有可接入平台，不能因默认的已配置筛选而隐藏用户正在找的品牌。
             self._filter = "all"
             self.filter_buttons["all"].setChecked(True)
+        for button in self.remove_buttons.values():
+            button.hide()
+            button.deleteLater()
+        self.remove_buttons.clear()
         self.grid.clear()
         indices = list(range(self.count()))
         # 已连接和收藏项优先，顺序稳定；搜索只读内存，不能每次按键探测凭据或网络。
@@ -215,10 +226,24 @@ class ProviderPicker(QComboBox):
             item = QListWidgetItem(provider_short_name(provider_id))
             item.setData(Qt.ItemDataRole.UserRole, (provider_id, connected, pinned))
             item.setSizeHint(self.grid.gridSize())
-            status = tr("已配置" if connected else "未配置")
+            status = tr("已移除" if provider_id in self._disabled else "已配置" if connected else "未配置")
+            item.setData(Qt.ItemDataRole.StatusTipRole, status)
             item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{self.itemText(index)} · {status}")
             item.setToolTip(f"{self.itemText(index)}\n{tr(PROVIDERS[provider_id].support_description)}")
+            if provider_id in self._disabled:
+                item.setToolTip(item.toolTip() + "\n" + tr("选择此平台可重新启用监控；已删除的凭据需重新配置。"))
             self.grid.addItem(item)
+            if connected:
+                button = bind_text(QToolButton(self._grid_viewport), "删除")
+                button.setObjectName("providerRemoveButton")
+                button.setFixedSize(52, 24)
+                button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.installEventFilter(self)
+                bind_text(button, lambda current=provider_id: tr("删除 {provider} 配置", provider=PROVIDERS[current].name), method="setAccessibleName")
+                bind_text(button, "删除配置", method="setToolTip")
+                button.clicked.connect(lambda _checked=False, current=provider_id: self._remove_provider(current))
+                self.remove_buttons[provider_id] = button
             if provider_id == self.currentData():
                 self.grid.setCurrentItem(item)
         if self.grid.currentRow() < 0 and self.grid.count():
@@ -226,6 +251,58 @@ class ProviderPicker(QComboBox):
         self.empty_label.setVisible(self.grid.count() == 0)
         self.grid.setVisible(self.grid.count() > 0)
         bind_text(self.count_label, f"{self.grid.count()} 个平台")
+        self.grid.doItemsLayout()
+        self._position_remove_buttons()
+
+    def _position_remove_buttons(self, *_args) -> None:
+        # 按卡片的实际视口位置摆放独立按钮；滚动或筛选后不能覆盖到另一平台的卡片。
+        for row in range(self.grid.count()):
+            item = self.grid.item(row)
+            button = self.remove_buttons.get(item.data(Qt.ItemDataRole.UserRole)[0])
+            if button is not None:
+                rect = self.grid.visualItemRect(item)
+                button.move(rect.right() - button.width() - 10, rect.bottom() - button.height() - 6)
+                button.show()
+                button.raise_()
+
+    def _remove_selected(self) -> None:
+        item = self.grid.currentItem()
+        if item is None or not item.data(Qt.ItemDataRole.UserRole)[1]:
+            return
+        self._remove_provider(item.data(Qt.ItemDataRole.UserRole)[0])
+
+    def _remove_provider(self, provider_id: str) -> None:
+        if provider_id not in self._configured:
+            return
+        self.hidePopup()
+        answer = QMessageBox.question(
+            self.window(), tr("删除平台配置"),
+            tr("删除 {provider} 的配置并停止监控？本机 CLI 登录和历史记录会保留。", provider=PROVIDERS[provider_id].name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        captured = config_manager.all_config()
+        prefix = provider_id.upper() + "_"
+        credential_keys = {
+            prefix + name.upper() for name in PROVIDERS[provider_id].credential_fields
+        } | {key for key in SECRET_KEYS if key.startswith(prefix)}
+        # 清除凭据及登录路径，也覆盖旧版凭据字段；计价时段等平台偏好仍可供重新配置时使用。
+        values = {key: DEFAULT_CONFIG.get(key, "") for key in credential_keys}
+        values["DISABLED_PROVIDER_IDS"] = list(dict.fromkeys([*captured.get("DISABLED_PROVIDER_IDS", []), provider_id]))
+        values["BACKGROUND_PROVIDER_IDS"] = [value for value in captured.get("BACKGROUND_PROVIDER_IDS", []) if value != provider_id]
+        if captured.get("ACTIVE_PROVIDER") == provider_id:
+            remaining = configured_provider_ids({**captured, **values})
+            fallback = next((value for value in PROVIDERS if value not in values["DISABLED_PROVIDER_IDS"]), provider_id)
+            values["ACTIVE_PROVIDER"] = next(iter(remaining), fallback)
+        try:
+            config_manager.save_config(values)
+        except Exception:
+            QMessageBox.warning(self.window(), tr("删除平台配置"), tr("配置删除失败，请检查数据目录后重试。"))
+            return
+        self.configuration_changed.emit(provider_id, True)
+        self.pins_changed.emit()
 
     def _activate_item(self, item: QListWidgetItem) -> None:
         if not self._popup_open:
@@ -238,12 +315,29 @@ class ProviderPicker(QComboBox):
             return
         # 先关闭弹层再通知设置页重建表单，避免删除仍持有焦点的弹层子控件。
         self.hidePopup()
+        disabled = config_manager.all_config().get("DISABLED_PROVIDER_IDS", [])
+        if provider_id in disabled:
+            try:
+                # 重新启用与选中属于同一次操作；一次保存避免先刷新旧平台、再切到目标平台。
+                config_manager.save_config({
+                    "DISABLED_PROVIDER_IDS": [value for value in disabled if value != provider_id],
+                    "ACTIVE_PROVIDER": provider_id,
+                })
+            except Exception:
+                QMessageBox.warning(self.window(), tr("管理平台"), tr("平台启用失败，请检查数据目录后重试。"))
+                return
+            self.configuration_changed.emit(provider_id, False)
+            self.pins_changed.emit()
         self.setCurrentIndex(index)
         self.activated.emit(index)
         self.textActivated.emit(self.currentText())
 
     def _toggle_pin(self, item: QListWidgetItem) -> None:
         provider_id = item.data(Qt.ItemDataRole.UserRole)[0]
+        if provider_id in config_manager.get("DISABLED_PROVIDER_IDS", []):
+            # 删除后的快捷入口保持关闭；收藏不应隐式恢复监控，也不能误报为落盘失败。
+            bind_text(self.hint, "请先在全部平台中重新启用此平台。")
+            return
         pins = pinned_provider_ids()
         if provider_id in pins:
             pins.remove(provider_id)
@@ -265,6 +359,17 @@ class ProviderPicker(QComboBox):
         # Qt 在构造/释放子控件时也会同步发事件，不能回调尚未建立或已销毁的列表。
         if not hasattr(self, "_grid_viewport"):
             return super().eventFilter(watched, event)
+        if event.type() == QEvent.Type.FocusIn and watched in self.remove_buttons.values():
+            # 独立按钮不是列表索引控件；键盘聚焦时主动滚到所属卡片，避免焦点落在视口外。
+            for row in range(self.grid.count()):
+                item = self.grid.item(row)
+                if self.remove_buttons.get(item.data(Qt.ItemDataRole.UserRole)[0]) is watched:
+                    self.grid.setCurrentItem(item)
+                    self.grid.scrollToItem(item)
+                    break
+        if watched is self._grid_viewport and event.type() == QEvent.Type.Resize:
+            self.grid.doItemsLayout()
+            self._position_remove_buttons()
         if watched is self._grid_viewport and event.type() in (
             QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
         ) and event.button() == Qt.MouseButton.LeftButton:
@@ -277,6 +382,9 @@ class ProviderPicker(QComboBox):
                         self._toggle_pin(item)
                     return True
         if event.type() == QEvent.Type.KeyPress:
+            if (watched is self.grid or watched in self.remove_buttons.values()) and event.key() == Qt.Key.Key_Delete:
+                self._remove_selected()
+                return True
             if event.key() == Qt.Key.Key_Escape:
                 self.hidePopup()
                 return True
@@ -288,7 +396,7 @@ class ProviderPicker(QComboBox):
                     else:
                         self._activate_item(self.grid.item(0))
                 return True
-            if watched is self.grid and event.key() == Qt.Key.Key_D and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if watched in (self.grid, self.search) and event.key() == Qt.Key.Key_D and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 if self.grid.currentItem() is not None:
                     self._toggle_pin(self.grid.currentItem())
                 return True
@@ -298,7 +406,9 @@ class ProviderPicker(QComboBox):
         if self._popup_open:
             self.hidePopup()
             return
-        self._configured = set(configured_provider_ids(config_manager.all_config()))
+        captured_config = config_manager.all_config()
+        self._configured = set(configured_provider_ids(captured_config))
+        self._disabled = set(captured_config.get("DISABLED_PROVIDER_IDS", []))
         self._pins = pinned_provider_ids()
         bind_text(self.hint, "Enter 切换 · Ctrl+D 收藏 · Esc 关闭")
         self.search.clear()
@@ -319,6 +429,7 @@ class ProviderPicker(QComboBox):
         self.popup.move(x, y)
         self._popup_open = True
         self.popup.show()
+        self._position_remove_buttons()
         self.search.setFocus(Qt.FocusReason.PopupFocusReason)
         self.update()
 
@@ -375,6 +486,10 @@ QLineEdit#providerPickerSearch:focus {{ border-color: {tokens.accent}; }}
 QToolButton#providerPickerFilter {{ background: transparent; color: {tokens.subtext}; border: 0; border-radius: 7px; padding: 0 12px; min-height: 0; }}
 QToolButton#providerPickerFilter:checked {{ background: {tokens.accent_soft}; color: {tokens.accent_text}; }}
 QToolButton#providerPickerFilter:hover {{ color: {tokens.accent}; }}
+QToolButton#providerRemoveButton {{ color: {tokens.subtext}; background: transparent; border: 0; padding: 0; font-size: 11px; min-width: 0; min-height: 0; }}
+QToolButton#providerRemoveButton:hover {{ color: {tokens.danger}; background: {tokens.surface}; border-radius: 5px; }}
+QToolButton#providerRemoveButton:disabled {{ color: {tokens.subtext}; }}
+QToolButton#providerRemoveButton:focus {{ border: 1px solid {tokens.accent}; border-radius: 6px; }}
 QListWidget#providerPickerGrid {{ background: transparent; border: none; outline: none; padding: 0; }}
 QListWidget#providerPickerGrid::item {{ border: none; }}
 """)
@@ -420,7 +535,7 @@ class ProviderShortcuts(QWidget):
         # 用量刷新只更新选中态；收藏变化时才重新读文件，主题变化只重新绘制图标。
         provider_ids = self._pins[:5]
         # 移除常驻下拉后，当前平台即使未收藏也必须有可见且高亮的入口。
-        if self._current in PROVIDERS and self._current not in provider_ids:
+        if self._current in PROVIDERS and self._current not in provider_ids and self._current not in config_manager.get("DISABLED_PROVIDER_IDS", []):
             provider_ids = [self._current, *provider_ids[:4]]
         if self._provider_ids != provider_ids:
             while self._layout.count():

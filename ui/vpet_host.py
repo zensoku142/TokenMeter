@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 from pathlib import Path
@@ -13,7 +12,7 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from api.providers import PROVIDERS
 from core.pet_extension import installed_executable
-from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown
+from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown, quota_used_percent
 
 if TYPE_CHECKING:
     from data.store import TokenData
@@ -49,13 +48,9 @@ def usage_message(
     warning = data.status not in {"ok", "partial", "loading"}
     if data.quota_windows:
         quota = data.quota_windows[0]
-        try:
-            used = float(quota.used_percent)
-            valid = not isinstance(quota.used_percent, bool) and math.isfinite(used) and used >= 0
-        except (TypeError, ValueError, OverflowError):
-            used, valid = 0.0, False
+        used = quota_used_percent(quota.used_percent)
         # 无效缓存数值不能变成满额气泡，也不能中断主程序向桌宠发送后续状态。
-        remaining = None if loading or not valid else max(0, min(100, 100 - used))
+        remaining = None if loading or used is None else max(0, 100 - used)
         primary = "--" if remaining is None else f"剩余 {remaining:.0f}%"
         secondary = (
             format_codex_reset_time(quota.resets_at, compact=True)
@@ -141,7 +136,12 @@ class VPetHost(QObject):
         if not executable.is_file():
             self._fail("未安装桌宠扩展包，请在“设置 → 桌宠”下载；当前继续使用悬浮球。")
             return
-        data_directory.mkdir(parents=True, exist_ok=True)
+        try:
+            data_directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # 目录被文件占用或不可写时保留主程序可用，不让启动异常越过 Qt 槽回调。
+            self._fail("无法创建桌宠数据目录，已返回悬浮球。")
+            return
         self.process.setProgram(str(executable))
         self.process.setArguments(
             ["--data-dir", str(data_directory), "--parent-pid", str(os.getpid())]
@@ -179,11 +179,14 @@ class VPetHost(QObject):
             self._buffer = bytearray(tail)
             try:
                 message = json.loads(raw)
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError, RecursionError):
                 continue
             if not isinstance(message, dict) or self._stopping or self._reported_failure:
                 continue
             event = message.get("event")
+            if not isinstance(event, str):
+                # JSON 合法不代表事件有效；容器值不能进入集合查找并阻断后续完整帧。
+                continue
             if event == "ready" and not self.active:
                 self._startup_timer.stop()
                 self.active = True

@@ -1,6 +1,61 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "连接测试已取消。": ("Connection test cancelled.", "連線測試已取消。", "接続テストをキャンセルしました。", "연결 테스트가 취소되었습니다."),
+    "请先在全部平台中重新启用此平台。": ("Re-enable this provider under All providers first.", "請先在全部平台中重新啟用此平台。", "先に「すべてのプロバイダー」でこのプロバイダーを有効にしてください。", "먼저 모든 공급자에서 이 공급자를 다시 활성화하세요."),
+    "配置已变化，请重新测试连接。": ("Configuration changed. Please test the connection again.", "設定已變更，請重新測試連線。", "設定が変更されました。接続を再テストしてください。", "설정이 변경되었습니다. 연결을 다시 테스트하세요."),
+    "查询发生异常，请稍后重试。": ("The query failed unexpectedly. Please try again later.", "查詢發生異常，請稍後重試。", "問い合わせ中にエラーが発生しました。しばらくしてから再試行してください。", "조회 중 오류가 발생했습니다. 잠시 후 다시 시도하세요."),
+    "读取 Antigravity CLI 官方状态栏额度快照；需配置 antigravity_statusline.py，超过 15 分钟未更新则过期。": (
+        "Reads official Antigravity CLI statusline quota snapshots. Configure antigravity_statusline.py; snapshots expire after 15 minutes.",
+        "讀取 Antigravity CLI 官方狀態列額度快照；需設定 antigravity_statusline.py，超過 15 分鐘未更新則過期。",
+        "Antigravity CLI 公式ステータスラインの利用枠スナップショットを読み取ります。antigravity_statusline.py の設定が必要です。15 分で期限切れになります。",
+        "Antigravity CLI 공식 상태줄 한도 스냅샷을 읽습니다. antigravity_statusline.py 설정이 필요하며 15분 후 만료됩니다.",
+    ),
+    "默认 ~/.gemini/antigravity-cli/tokenmeter-usage.json；仅显示 CLI 实际提供的模型额度": (
+        "Defaults to ~/.gemini/antigravity-cli/tokenmeter-usage.json. Only shows model quotas supplied by the CLI.",
+        "預設 ~/.gemini/antigravity-cli/tokenmeter-usage.json；僅顯示 CLI 實際提供的模型額度",
+        "既定は ~/.gemini/antigravity-cli/tokenmeter-usage.json。CLI が提供するモデル利用枠のみ表示します。",
+        "기본값은 ~/.gemini/antigravity-cli/tokenmeter-usage.json입니다. CLI가 제공하는 모델 한도만 표시합니다.",
+    ),
+    "未找到 Antigravity 快照，请先配置 antigravity_statusline.py": (
+        "Antigravity snapshot not found. Configure antigravity_statusline.py first.", "未找到 Antigravity 快照，請先設定 antigravity_statusline.py",
+        "Antigravity スナップショットがありません。antigravity_statusline.py を設定してください。", "Antigravity 스냅샷이 없습니다. antigravity_statusline.py를 먼저 설정하세요.",
+    ),
+    "无法读取 Antigravity 状态栏快照文件": ("Cannot read the Antigravity statusline snapshot.", "無法讀取 Antigravity 狀態列快照檔案", "Antigravity スナップショットを読み取れません。", "Antigravity 상태줄 스냅샷을 읽을 수 없습니다."),
+    "Antigravity 状态栏快照格式或额度字段无效": ("Invalid Antigravity snapshot format or quota fields.", "Antigravity 狀態列快照格式或額度欄位無效", "Antigravity スナップショット形式または利用枠が無効です。", "Antigravity 스냅샷 형식 또는 한도 필드가 잘못되었습니다."),
+    "Antigravity 尚未提供额度，请在 CLI 中使用 /usage 后刷新": ("Antigravity has not supplied quotas yet. Run /usage in the CLI, then refresh.", "Antigravity 尚未提供額度，請在 CLI 中使用 /usage 後重新整理", "利用枠がまだありません。CLI で /usage を実行してから更新してください。", "한도가 아직 없습니다. CLI에서 /usage 실행 후 새로고침하세요."),
+    "Antigravity 状态栏超过 15 分钟未更新，请在 CLI 中使用 /usage 后刷新": ("Antigravity snapshot is over 15 minutes old. Run /usage in the CLI, then refresh.", "Antigravity 狀態列超過 15 分鐘未更新，請在 CLI 中使用 /usage 後重新整理", "スナップショットが 15 分以上前のものです。CLI で /usage を実行してから更新してください。", "스냅샷이 15분 이상 지났습니다. CLI에서 /usage 실행 후 새로고침하세요."),
+    "无法创建桌宠数据目录，已返回悬浮球。": (
+        "Could not create the pet data directory. Returned to the floating ball.",
+        "無法建立桌寵資料目錄，已返回懸浮球。",
+        "デスクトップペットのデータフォルダーを作成できません。フローティングボールに戻りました。",
+        "데스크톱 펫 데이터 폴더를 만들 수 없습니다. 플로팅 볼로 돌아갔습니다.",
+    ),
+    "删除": ("Remove", "刪除", "削除", "삭제"),
+    "删除 {provider} 配置": ("Remove {provider} configuration", "刪除 {provider} 設定", "{provider} の設定を削除", "{provider} 설정 삭제"),
+    "已移除": ("Removed", "已移除", "削除済み", "삭제됨"),
+    "选择此平台可重新启用监控；已删除的凭据需重新配置。": (
+        "Select this provider to enable monitoring again. Removed credentials must be configured again.",
+        "選擇此平台可重新啟用監控；已刪除的憑據需重新設定。",
+        "このプロバイダーを選択すると監視を再開できます。削除した認証情報は再設定が必要です。",
+        "이 공급자를 선택하면 모니터링을 다시 활성화합니다. 삭제된 자격 증명은 다시 설정해야 합니다.",
+    ),
+    "删除配置": ("Remove config", "刪除設定", "設定を削除", "설정 삭제"),
+    "删除平台配置": ("Remove provider configuration", "刪除平台設定", "プロバイダー設定を削除", "공급자 설정 삭제"),
+    "删除 {provider} 的配置并停止监控？本机 CLI 登录和历史记录会保留。": (
+        "Remove {provider} configuration and stop monitoring? Local CLI logins and history will be kept.",
+        "刪除 {provider} 的設定並停止監控？本機 CLI 登入和歷史記錄會保留。",
+        "{provider} の設定を削除して監視を停止しますか？ローカル CLI のログインと履歴は保持されます。",
+        "{provider} 설정을 삭제하고 모니터링을 중지할까요? 로컬 CLI 로그인과 기록은 유지됩니다.",
+    ),
+    "配置删除失败，请检查数据目录后重试。": (
+        "Could not remove configuration. Check the data directory and retry.", "設定刪除失敗，請檢查資料目錄後重試。",
+        "設定を削除できませんでした。データフォルダーを確認して再試行してください。", "설정을 삭제하지 못했습니다. 데이터 폴더를 확인하고 다시 시도하세요.",
+    ),
+    "平台启用失败，请检查数据目录后重试。": (
+        "Could not enable provider. Check the data directory and retry.", "平台啟用失敗，請檢查資料目錄後重試。",
+        "プロバイダーを有効にできませんでした。データフォルダーを確認して再試行してください。", "공급자를 활성화하지 못했습니다. 데이터 폴더를 확인하고 다시 시도하세요.",
+    ),
     "低额度提醒": ("Low quota alerts", "低額度提醒", "残り利用枠の通知", "한도 부족 알림"),
     "提醒阈值": ("Alert threshold", "提醒門檻", "通知しきい値", "알림 임계값"),
     "剩余不高于": ("Remaining at most", "剩餘不高於", "残りが以下", "남은 한도가 이하"),

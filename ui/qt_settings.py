@@ -162,12 +162,13 @@ class ConnectionWorker(QThread):
 
     def run(self) -> None:
         try:
-            result = TokenData.test_connection(self._config)
+            result = TokenData.test_connection(self._config, should_stop=self.isInterruptionRequested)
         except Exception as exc:
-            config_manager.logger().exception("Connection test failed")
+            # 最外层也可能遇到带请求凭据的初始化/清理异常；不记录原始正文或 traceback。
+            config_manager.logger().error("Connection test failed: %s", type(exc).__name__)
             result = TokenData(
                 status="error",
-                errors=[FetchError("UNKNOWN_ERROR", "连接测试", str(exc))],
+                errors=[FetchError("UNKNOWN_ERROR", "连接测试", "查询发生异常，请稍后重试。")],
             )
         self.finished_with_data.emit(result)
 
@@ -256,6 +257,7 @@ class SettingsWindow(QDialog):
         QApplication.instance().aboutToQuit.connect(self.stop_pet_task)
         self._worker: ConnectionWorker | None = None
         self._cookie_acquire_worker: "_CookieAcquireWorker | None" = None
+        QApplication.instance().aboutToQuit.connect(self.stop_connection_tasks)
         self._cookie_acquire_provider_id = ""
         self._credential_acquire_label = "Cookie"
         self._credential_acquire_automatic = False
@@ -317,6 +319,7 @@ class SettingsWindow(QDialog):
         for provider_id, provider_name in list_providers():
             add_item(self.provider_combo, provider_name, provider_id)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        self.provider_combo.configuration_changed.connect(self._on_provider_configuration_changed)
         picker_row.addWidget(picker_label)
         picker_row.addWidget(self.provider_combo, 1)
 
@@ -990,6 +993,20 @@ class SettingsWindow(QDialog):
         super().showEvent(event)
         self._sync_window_size()
 
+    def stop_connection_tasks(self) -> None:
+        # 结果信号可能早于线程 finished；从 QObject 子对象收集，不能只依赖已清空的 _worker 指针。
+        workers: list[QThread] = [worker for worker in self.findChildren(ConnectionWorker)]
+        for worker in workers:
+            worker.requestInterruption()
+        cookie_worker = self._cookie_acquire_worker
+        if cookie_worker is not None:
+            cookie_worker.stop_and_collect()
+            workers.append(cookie_worker)
+        # 不强杀 Python/Qt 线程；等待当前有限时查询或浏览器收尾，避免销毁仍运行的 QThread。
+        for worker in workers:
+            if worker.isRunning():
+                worker.wait()
+
     def _bind_update_controller(self) -> None:
         if self.update_controller is None:
             bind_text(self.current_version_label, "v开发模式")
@@ -1019,6 +1036,34 @@ class SettingsWindow(QDialog):
         self._remember_visible_credentials()
         provider_id = self.provider_combo.currentData()
         self._render_credentials(provider_id)
+
+    def reload_provider_configuration(self, provider_id: str, removed: bool) -> None:
+        # 删除后清掉对应草稿与延迟保存，避免一次失焦把刚删除的密钥写回凭据库。
+        self._save_timer.stop()
+        self._save_pending = False
+        if self._rendered_provider_id != provider_id:
+            self._remember_visible_credentials()
+        self._provider_drafts.pop(provider_id, None)
+        if removed and self._cookie_acquire_provider_id == provider_id and self._cookie_acquire_worker is not None:
+            # 停止本次采集，避免删除后仍等待浏览器；禁用检查会丢弃收尾阶段返回的凭据。
+            self._cookie_acquire_worker.stop_and_collect()
+        check = self.background_provider_checks.get(provider_id)
+        if check is not None:
+            blocker = QSignalBlocker(check)
+            if removed:
+                check.setChecked(False)
+            check.setEnabled(not removed)
+            bind_text(check, "请先在全部平台中重新启用此平台。" if removed else "", method="setToolTip")
+            del blocker
+        blocker = QSignalBlocker(self.provider_combo)
+        self.provider_combo.setCurrentIndex(max(0, self.provider_combo.findData(config_manager.get("ACTIVE_PROVIDER", "deepseek"))))
+        del blocker
+        self._render_credentials(self.provider_combo.currentData())
+
+    def _on_provider_configuration_changed(self, provider_id: str, removed: bool) -> None:
+        self.reload_provider_configuration(provider_id, removed)
+        if self.on_saved:
+            self.on_saved()
 
     @staticmethod
     def _peak_time_edit() -> QTimeEdit:
@@ -1313,6 +1358,9 @@ class SettingsWindow(QDialog):
         provider_id: str,
         acquired: _AcquiredCookie | str,
     ) -> None:
+        # 用户可能在采集线程结束前删除平台；迟到的浏览器结果不能恢复已删除的配置。
+        if provider_id in config_manager.get("DISABLED_PROVIDER_IDS", []):
+            return
         provider_cls = PROVIDERS.get(provider_id)
         if not provider_cls:
             return
@@ -1557,6 +1605,11 @@ class SettingsWindow(QDialog):
                         else:
                             ph_widget.setText(ph_in_cookie)
         self._rendered_provider_id = provider_id
+        enabled = provider_id not in cached.get("DISABLED_PROVIDER_IDS", [])
+        # 已移除平台的草稿不会保存；禁用表单并给出恢复入口，避免允许输入后静默丢弃。
+        self.credentials_card.setEnabled(enabled)
+        self.test_button.setEnabled(enabled and self._worker is None)
+        self._set_feedback(self.connection_feedback, "" if enabled else "请先在全部平台中重新启用此平台。", "muted")
         self.deepseek_peak_pricing_card.setVisible(provider_id == "deepseek")
         for editor in self._provider_widgets.values():
             if isinstance(editor, QPlainTextEdit):
@@ -1677,6 +1730,9 @@ class SettingsWindow(QDialog):
         self.quota_alert_threshold.setValue(int(values.get("QUOTA_ALERT_THRESHOLD", 10)))
         for provider_id, check in self.background_provider_checks.items():
             check.setChecked(provider_id in background_provider_ids)
+            enabled = provider_id not in values.get("DISABLED_PROVIDER_IDS", [])
+            check.setEnabled(enabled)
+            bind_text(check, "" if enabled else "请先在全部平台中重新启用此平台。", method="setToolTip")
         self.set_theme_mode(
             str(values.get("UI_THEME", "dark")), theme_controller().resolved
         )
@@ -1809,7 +1865,9 @@ class SettingsWindow(QDialog):
                 key = f"{upper_id}_{field.upper()}"
                 if key in values:
                     continue
-                if field in self._provider_drafts.get(provider_id, {}):
+                if provider_id in existing.get("DISABLED_PROVIDER_IDS", []):
+                    values[key] = str(existing.get(key, ""))
+                elif field in self._provider_drafts.get(provider_id, {}):
                     values[key] = self._provider_drafts[provider_id][field]
                 else:
                     values[key] = str(existing.get(key, ""))
@@ -1959,11 +2017,26 @@ class SettingsWindow(QDialog):
         # validation has already produced an independent merged configuration copy.
         self._worker = ConnectionWorker(MappingProxyType(candidate), self)
         self._worker.finished_with_data.connect(self._connection_result)
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     def _connection_result(self, data: TokenData) -> None:
-        self.test_button.setEnabled(True)
+        self.test_button.setEnabled(self.credentials_card.isEnabled())
         bind_text(self.test_button, "测试连接")
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            tested = worker._config
+            provider_id = str(tested.get("ACTIVE_PROVIDER", ""))
+            current = self._values()
+            # 编辑保持可用，但旧测试成功不能替当前新凭据背书；无关外观设置不影响判断。
+            if (
+                current.get("ACTIVE_PROVIDER") != provider_id
+                or provider_id in config_manager.get("DISABLED_PROVIDER_IDS", [])
+                or any(current.get(key) != value for key, value in tested.items() if key.startswith(provider_id.upper() + "_"))
+            ):
+                self._set_feedback(self.connection_feedback, "配置已变化，请重新测试连接。", "muted")
+                return
         if data.status in {"ok", "partial"}:
             if data.status == "ok":
                 self._set_feedback(self.connection_feedback, "连接成功。", "success")
@@ -1980,7 +2053,6 @@ class SettingsWindow(QDialog):
         else:
             message = data.errors[0].message if data.errors else "连接失败"
             self._set_feedback(self.connection_feedback, message, "danger")
-        self._worker = None
 
 
 def _normalize_cookie(raw: str) -> str:

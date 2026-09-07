@@ -60,6 +60,14 @@ def visible_ids(picker):
     ]
 
 
+def test_search_focused_shortcut_can_pin_the_visible_result(picker, picker_state):
+    picker.showPopup()
+    picker.search.setText("elevenlabs")
+    QTest.keyClick(picker.search, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    assert "elevenlabs" in provider_picker.pinned_provider_ids()
+    assert picker.search.text() == "elevenlabs"
+
+
 def test_failed_pin_save_keeps_persisted_state_and_reports_error(picker, picker_state, monkeypatch):
     saved = picker_state[0].read_text(encoding="utf-8")
     monkeypatch.setattr(provider_picker.config_manager, "save_panel_layout_state", Mock())

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import threading
 import time
 from datetime import datetime
@@ -33,7 +32,7 @@ from config import runtime as config_manager
 from core import pet_extension
 from core.identity import APP_DISPLAY_NAME
 from data.store import PerProviderData, TokenData
-from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown
+from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown, quota_used_percent
 from ui.geometry import (
     WorkArea,
     clamp_window,
@@ -60,8 +59,11 @@ BALL_SIZE_STEP = 4
 BALL_SIZE_SAVE_DELAY_MS = 300
 BACKGROUND_PROVIDER_INTERVAL_MS = 60_000
 MAX_REFRESH_BACKOFF_SECONDS = 15 * 60
+AUTH_RECHECK_INTERVAL_SECONDS = 15 * 60
 _REFRESH_BACKOFF_ERROR_CODES = {
     "RATE_LIMITED", "NETWORK_ERROR", "NETWORK_TIMEOUT", "SERVER_ERROR",
+    # 网关返回 HTML 或接口结构变化时，频繁重试也不能恢复解析，应与网络故障一起退避。
+    "INVALID_RESPONSE", "UNKNOWN_ERROR",
 }
 
 
@@ -221,7 +223,7 @@ class FloatingWidget(QWidget):
         self._provider_last_started: dict[str, float] = {}
         self._provider_task_started: dict[str, float] = {}
         self._provider_refresh_backoff: dict[tuple[str, str], tuple[int, float]] = {}
-        self._quota_alerted_windows: set[tuple[str, str, str]] = set()
+        self._quota_alerted_windows: dict[tuple[str, str, str], datetime | None] = {}
         self._closed = False
         self._vpet = VPetHost(self)
         self._vpet_updating = False
@@ -233,6 +235,7 @@ class FloatingWidget(QWidget):
         self._auth_notified_providers: set[str] = set()
         self._auth_expired_provider_id: str | None = None
         self._mimo_renewal_task: MiMoRenewalTask | None = None
+        self._mimo_renewal_account_key: str | None = None
         self._mimo_renewal_attempted = False
         self._transitioning = False
         self._expand_horizontal = "right"
@@ -365,6 +368,8 @@ class FloatingWidget(QWidget):
         if not self._expanded:
             self.show()
         if self.tray is not None:
+            # 托盘共享点击回调；新的普通提示不能继承上一条认证通知的登录动作。
+            self._auth_expired_provider_id = None
             self.tray.showMessage(APP_DISPLAY_NAME, message, QSystemTrayIcon.MessageIcon.Warning, 6000)
 
     def _on_vpet_action(self, action: str) -> None:
@@ -409,6 +414,7 @@ class FloatingWidget(QWidget):
         panel.settings_requested.connect(self.open_settings)
         panel.refresh_requested.connect(self.refresh)
         panel.provider_selected.connect(self._switch_provider)
+        panel.provider_configuration_changed.connect(self._on_provider_configuration_changed)
         panel.close_requested.connect(self.collapse_panel)
         if hasattr(panel, "theme_requested"):
             panel.theme_requested.connect(self._request_theme_change)
@@ -1146,6 +1152,20 @@ class FloatingWidget(QWidget):
 
     def _on_config_saved(self) -> None:
         config_manager.load_config()
+        active = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
+        disabled = config_manager.get("DISABLED_PROVIDER_IDS", [])
+        if "mimo" in disabled and self._mimo_renewal_task is not None:
+            # 删除平台同时结束本程序发起的续期任务；迟到结果仍由完成回调的禁用检查兜底。
+            self._mimo_renewal_task.cancel()
+        if active in disabled or (self._data.per_provider and self._data.per_provider[0].provider_id != active):
+            self._data = TokenData(per_provider=[PerProviderData(active, PROVIDERS[active].name)])
+            self._refreshing = False
+            if active in disabled:
+                self._data.status = "error"
+                self._data.errors = [FetchError("NOT_CONFIGURED", "平台", "没有可用的数据平台")]
+            self._apply_update()
+        if self.panel is not None:
+            self.panel.provider_shortcuts.refresh()
         self._sync_vpet()
         # 设置保存后允许所有失效 Provider 各验证一次；验证成功后恢复定时采集，
         # 仍然失效则只重新进入一次通知周期。
@@ -1156,6 +1176,20 @@ class FloatingWidget(QWidget):
         self._update_controller.schedule_startup_check()
         self._reschedule_refresh()
         self.refresh()
+
+    def _on_provider_configuration_changed(self, provider_id: str, removed: bool) -> None:
+        self._provider_results.pop(provider_id, None)
+        self._pending_refreshes.pop(provider_id, None)
+        if self._settings_window is not None:
+            self._settings_window.reload_provider_configuration(provider_id, removed)
+        active = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
+        self._data = TokenData(per_provider=[PerProviderData(active, PROVIDERS[active].name)])
+        if active in config_manager.get("DISABLED_PROVIDER_IDS", []):
+            self._data.status = "error"
+            self._data.errors = [FetchError("NOT_CONFIGURED", "平台", "没有可用的数据平台")]
+        self._refreshing = False
+        self._apply_update()
+        self._on_config_saved()
 
     def _start_pet_update(self, release) -> None:
         if self._closed:
@@ -1240,22 +1274,37 @@ class FloatingWidget(QWidget):
         reason: str,
     ) -> bool:
         provider_id = provider_id.strip().lower()
-        if not provider_id:
+        if not provider_id or self._closed:
             return False
-        if reason in {"periodic_current", "periodic_background"} and provider_id in (
-            self._auth_expired_providers
+        if provider_id in config_snapshot.get("DISABLED_PROVIDER_IDS", []):
+            return False
+        captured_config = dict(config_snapshot)
+        captured_config["ACTIVE_PROVIDER"] = provider_id
+        account_key = TokenData.account_key_for_config(captured_config)
+        cached = self._provider_results.get(provider_id)
+        if cached is not None and cached.account_key != account_key:
+            # CLI 登录可在设置页之外更新凭据；旧账号的认证暂停不能阻止新凭据首次验证。
+            self._auth_expired_providers.discard(provider_id)
+            self._auth_notified_providers.discard(provider_id)
+            if self._auth_expired_provider_id == provider_id:
+                self._auth_expired_provider_id = None
+            if provider_id == "mimo":
+                self._mimo_renewal_attempted = False
+        now = time.monotonic()
+        if (
+            reason in {"periodic_current", "periodic_background"}
+            and provider_id in self._auth_expired_providers
+            and now - self._provider_last_started.get(provider_id, now) < AUTH_RECHECK_INTERVAL_SECONDS
         ):
+            # 同账号重新登录可能保持稳定缓存标识；低频重验可恢复外部登录，又不会按秒重试失效凭据。
             config_manager.logger().debug(
                 "Provider collection skipped: provider=%s reason=auth_expired",
                 provider_id,
             )
             return False
-        captured_config = dict(config_snapshot)
-        captured_config["ACTIVE_PROVIDER"] = provider_id
         is_current = provider_id == str(
             config_manager.get("ACTIVE_PROVIDER", "")
         ).strip().lower()
-        account_key = TokenData.account_key_for_config(captured_config)
         backoff = self._provider_refresh_backoff.get((provider_id, account_key))
         if (
             reason in {"periodic_current", "periodic_background"}
@@ -1264,7 +1313,6 @@ class FloatingWidget(QWidget):
         ):
             # 手动刷新/换凭据仍可主动重试；自动请求按账号隔离，避免限流持续恶化。
             return False
-        cached = self._provider_results.get(provider_id)
         if cached is not None and cached.account_key != account_key:
             self._provider_results.pop(provider_id, None)
         if is_current and self._data.account_key != account_key:
@@ -1321,7 +1369,13 @@ class FloatingWidget(QWidget):
         provider_id: str,
         pending: tuple[dict[str, object], bool, str],
     ) -> None:
-        captured_config, lightweight, reason = pending
+        if self._closed:
+            return
+        _captured_config, lightweight, reason = pending
+        # singleShot 排队后用户仍可能换号；执行时读取最新凭据，避免旧重试清掉新账号缓存。
+        # 保留原目标 Provider，后台待刷新不能随当前页面切换到另一平台。
+        captured_config = dict(config_manager.all_config())
+        captured_config["ACTIVE_PROVIDER"] = provider_id
         self._start_provider_refresh(
             provider_id,
             captured_config,
@@ -1352,6 +1406,10 @@ class FloatingWidget(QWidget):
             self._in_flight_requests.pop(provider_id, None)
             started_at = self._provider_task_started.pop(provider_id, None)
             pending = self._pending_refreshes.pop(provider_id, None)
+            if provider_id in current_config.get("DISABLED_PROVIDER_IDS", []):
+                # 删除时已发出的请求可完成资源清理，但不得再展示、通知或排队恢复被删除的平台。
+                self._provider_results.pop(provider_id, None)
+                return
             if stale_account:
                 # 旧请求可完成清理，但不能显示、通知或覆盖新账号的界面缓存。
                 self._provider_results.pop(provider_id, None)
@@ -1361,7 +1419,7 @@ class FloatingWidget(QWidget):
             # second copy of all daily and minute history rows.
             if not stale_account:
                 # 未指定账号 scope 的 statusline 只展示当前结果，不跨平台切换复用。
-                if provider_id == "claude" and not result.account_key:
+                if provider_id in {"claude", "antigravity"} and not result.account_key:
                     self._provider_results.pop(provider_id, None)
                 else:
                     self._provider_results[provider_id] = result
@@ -1431,25 +1489,31 @@ class FloatingWidget(QWidget):
         threshold = config_manager.get("QUOTA_ALERT_THRESHOLD", 10)
         if type(threshold) is not int or not 1 <= threshold <= 50:
             threshold = 10
-        low_windows: dict[tuple[str, str, str], tuple[str, float]] = {}
+        low_windows: dict[tuple[str, str, str], tuple[str, float, datetime | None]] = {}
         for window in result.quota_windows:
-            try:
-                used = float(window.used_percent)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if isinstance(window.used_percent, bool) or not math.isfinite(used) or used < 0:
+            used = quota_used_percent(window.used_percent)
+            if used is None:
                 continue
             if window.resets_at is not None and window.resets_at <= datetime.now(window.resets_at.tzinfo):
                 # 已结束的旧周期不能触发告警；等平台返回新周期，避免重置边界的虚假低额度。
                 continue
             remaining = max(0.0, 100 - used)
             scope = (provider_id, result.account_key, window.id)
+            alerted_reset = self._quota_alerted_windows.get(scope)
+            if (
+                window.resets_at is not None
+                and alerted_reset is not None
+                and alerted_reset <= datetime.now(alerted_reset.tzinfo)
+            ):
+                # 休眠可能错过满额读数；旧周期结束后允许新周期提醒。
+                # 等旧截止时间真正过去再解除去重，避免平台修正重置估计时重复通知。
+                self._quota_alerted_windows.pop(scope, None)
             if remaining > threshold + 5:
                 # 留出 5 个百分点的恢复区间，防止接口舍入或边界抖动反复打扰用户。
-                self._quota_alerted_windows.discard(scope)
+                self._quota_alerted_windows.pop(scope, None)
             elif remaining <= threshold and scope not in self._quota_alerted_windows:
                 title = " ".join(window.title.split()) or tr("订阅额度")
-                low_windows[scope] = (title, remaining)
+                low_windows[scope] = (title, remaining, window.resets_at)
         if not low_windows:
             return
         # 同一平台的多模型窗口合并一条；通知不包含账号标签、指纹或任何原始响应明细。
@@ -1459,12 +1523,12 @@ class FloatingWidget(QWidget):
             tr("{app}：{provider} 额度不足", app=APP_DISPLAY_NAME, provider=provider.name),
             "\n".join(
                 tr("{window}：剩余 {remaining}%", window=title, remaining=f"{remaining:g}")
-                for title, remaining in low_windows.values()
+                for title, remaining, _reset in low_windows.values()
             ),
             QSystemTrayIcon.MessageIcon.Warning,
             10_000,
         )
-        self._quota_alerted_windows.update(low_windows)
+        self._quota_alerted_windows.update({scope: value[2] for scope, value in low_windows.items()})
 
     def _notify_auth_expired(
         self, result: TokenData, provider_id: str, *, is_current: bool
@@ -1480,9 +1544,14 @@ class FloatingWidget(QWidget):
                 "RATE_LIMITED",
                 "UNKNOWN_ERROR",
             }
-            codes = {error.code for error in result.errors}
-            if result.status in {"ok", "partial"} and not codes & remote_failures:
+            codes = {error.code for error in result.errors} | set(result.refresh_error_codes)
+            if (
+                result.status in {"ok", "partial"}
+                and not result.is_stale
+                and not codes & remote_failures
+            ):
                 # 只有该 Provider 实际恢复成功后才解除熔断并重新开放通知。
+                # 静默保留缓存仍会标记 ok；必须同时检查本轮错误，不能把离线读数当作恢复。
                 self._auth_expired_providers.discard(provider_id)
                 self._auth_notified_providers.discard(provider_id)
                 if self._auth_expired_provider_id == provider_id:
@@ -1526,6 +1595,9 @@ class FloatingWidget(QWidget):
     def _start_mimo_cookie_renewal(self) -> None:
         if self._closed or getattr(self, "_mimo_renewal_task", None) is not None:
             return
+        captured_config = dict(config_manager.all_config())
+        captured_config["ACTIVE_PROVIDER"] = "mimo"
+        self._mimo_renewal_account_key = TokenData.account_key_for_config(captured_config)
         task = MiMoRenewalTask()
         self._mimo_renewal_task = task
         self._mimo_renewal_attempted = True
@@ -1535,8 +1607,19 @@ class FloatingWidget(QWidget):
     @Slot(str, str)
     def _finish_mimo_cookie_renewal(self, cookie_text: str, error_code: str) -> None:
         self._mimo_renewal_task = None
+        renewal_account_key = self._mimo_renewal_account_key
+        self._mimo_renewal_account_key = None
         if self._closed:
             return
+        if "mimo" in config_manager.get("DISABLED_PROVIDER_IDS", []):
+            return
+        if renewal_account_key is not None:
+            current_config = dict(config_manager.all_config())
+            current_config["ACTIVE_PROVIDER"] = "mimo"
+            if renewal_account_key != TokenData.account_key_for_config(current_config):
+                # 浏览器续期可能持续数分钟；手动换凭据后旧结果不能覆盖配置或报告新账号失效。
+                self._mimo_renewal_attempted = False
+                return
         if cookie_text and error_code != "BROWSER_CONTEXT_ONLY":
             values = MiMoProvider.acquired_cookie_values(cookie_text)
             try:
@@ -1566,6 +1649,8 @@ class FloatingWidget(QWidget):
                 self._auth_expired_provider_id = None
             tray = getattr(self, "tray", None)
             if tray is not None:
+                # 当前显示的是会话验证结果，点击时不应打开其他平台遗留的认证入口。
+                self._auth_expired_provider_id = None
                 tray.showMessage(
                     tr(f"{APP_DISPLAY_NAME}：MiMo 浏览器会话已验证"),
                     tr("网页会话仍有效；TokenMeter 将在 Cookie 直连失败时使用专用浏览器查询。"),
@@ -1660,14 +1745,14 @@ class FloatingWidget(QWidget):
         )
         if self._data.quota_windows:
             primary = self._data.quota_windows[0]
+            used = quota_used_percent(primary.used_percent)
             reset_text = (
                 format_codex_reset_time(primary.resets_at, compact=True)
                 if provider_id == "codex"
                 else format_reset_countdown(primary.resets_at)
             )
             self.ball.set_quota_state(
-                None if loading or isinstance(primary.used_percent, bool)
-                else 100 - primary.used_percent,
+                None if loading or used is None else max(0, 100 - used),
                 "正在更新额度" if loading else reset_text,
                 primary.title,
             )
@@ -1771,6 +1856,8 @@ class FloatingWidget(QWidget):
             and current.is_peak
             and self.tray is not None
         ):
+            # 峰时提示没有认证动作，清除共享托盘回调中上一条通知的目标。
+            self._auth_expired_provider_id = None
             self.tray.showMessage(
                 tr(f"{APP_DISPLAY_NAME}：DeepSeek 已进入高峰计价"),
                 tr("当前所有计费项按平时价格 2 倍计费，"

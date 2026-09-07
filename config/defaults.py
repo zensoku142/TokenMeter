@@ -93,6 +93,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "TEXT_COLOR": "#edf4ff",
     "ACTIVE_PROVIDER": "deepseek",
     "BACKGROUND_PROVIDER_IDS": [],
+    "DISABLED_PROVIDER_IDS": [],
     "EDGE_HIDE_ENABLED": True,
     "VPET_ENABLED": False,
     "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": True,
@@ -135,6 +136,7 @@ FIELD_META: dict[str, dict[str, Any]] = {
         "kind": "provider_list",
         "choices": PROVIDER_IDS,
     },
+    "DISABLED_PROVIDER_IDS": {"kind": "provider_list", "choices": PROVIDER_IDS},
     "UI_THEME": {"kind": "choice", "choices": ("system", "light", "dark")},
     "UI_LANGUAGE": {
         "kind": "choice", "choices": ("system", "zh-cn", "zh-tw", "en", "ja", "ko"),

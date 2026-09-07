@@ -66,6 +66,7 @@ from ui.formatting import (
     format_reset_countdown,
     format_token_axis,
     is_codex_spark_quota,
+    quota_used_percent,
 )
 from ui.i18n import add_item, bind_text, current_language, tr, ui_locale
 from ui.qt_heatmap import TokenActivityHeatmap
@@ -2212,6 +2213,7 @@ class MainPanel(QFrame):
     close_requested = Signal()
     theme_requested = Signal(str)
     provider_selected = Signal(str)
+    provider_configuration_changed = Signal(str, bool)
     activity_height_changed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None):
@@ -2303,6 +2305,7 @@ class MainPanel(QFrame):
         self.provider_shortcuts = ProviderShortcuts(current_provider=provider_id)
         self.provider_shortcuts.selected.connect(self.provider_quick_combo.select_provider)
         self.provider_quick_combo.pins_changed.connect(self.provider_shortcuts.refresh)
+        self.provider_quick_combo.configuration_changed.connect(self.provider_configuration_changed)
         header_layout.addWidget(self.provider_shortcuts)
         self.provider_manage_button = ProviderManagerButton()
         self.provider_manage_button.clicked.connect(self.provider_quick_combo.showPopup)
@@ -3154,13 +3157,14 @@ class MainPanel(QFrame):
                 if not (provider_id == "codex" and is_codex_spark_quota(window.title))
             ]
             for window in visible_windows[:3]:
+                used = quota_used_percent(window.used_percent)
                 reset_text = (
                     format_codex_reset_time(window.resets_at)
                     if provider_id == "codex"
                     else format_reset_countdown(window.resets_at)
                 )
                 detail_parts = [
-                    f"剩余 {100 - window.used_percent:.0f}%",
+                    "--" if used is None or loading else f"剩余 {max(0, 100 - used):.0f}%",
                     reset_text,
                 ]
                 if window.detail:
@@ -3168,7 +3172,7 @@ class MainPanel(QFrame):
                 summaries.append(
                     (
                         window.title,
-                        "--" if loading else f"已用 {window.used_percent:.0f}%",
+                        "--" if loading or used is None else f"已用 {used:.0f}%",
                         " · ".join(detail_parts),
                     )
                 )

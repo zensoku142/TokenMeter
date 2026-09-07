@@ -38,7 +38,7 @@ def widget_stub():
     widget._provider_last_started = {}
     widget._provider_task_started = {}
     widget._provider_refresh_backoff = {}
-    widget._quota_alerted_windows = set()
+    widget._quota_alerted_windows = {}
     widget._closed = False
     widget._vpet = Mock(active=False)
     widget._vpet_updating = False
@@ -57,6 +57,7 @@ def widget_stub():
     widget._auth_notified_providers = set()
     widget._auth_expired_provider_id = None
     widget._mimo_renewal_task = None
+    widget._mimo_renewal_account_key = None
     widget._mimo_renewal_attempted = False
     return widget
 
@@ -137,6 +138,7 @@ class RefreshTests(unittest.TestCase):
             widget.tray.showMessage.assert_not_called()
 
             widget._pricing_state = offpeak
+            widget._auth_expired_provider_id = "mimo"
             widget._sync_pricing_state(notify_transition=True)
             widget._sync_pricing_state(notify_transition=True)
 
@@ -150,6 +152,16 @@ class RefreshTests(unittest.TestCase):
             True, True, peak.label, peak.tooltip
         )
         widget.ball.set_peak_highlight.assert_called_with(True)
+        self.assertIsNone(widget._auth_expired_provider_id)
+
+    def test_pet_failure_notification_does_not_open_stale_authentication_action(self):
+        widget = widget_stub()
+        widget._expanded = True
+        widget._set_theme_feedback = Mock()
+        widget._auth_expired_provider_id = "mimo"
+        widget._on_vpet_failed("synthetic pet failure")
+        widget.handle_auth_expired_notification_click()
+        widget.open_settings.assert_not_called()
 
     def test_peak_pricing_stops_and_clears_ui_when_disabled_or_provider_changes(self):
         widget = pricing_widget_stub()
@@ -588,6 +600,22 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(widget._thread_pool.start.call_count, 1)
         self.assertEqual(widget._thread_pool.start.call_args.args[0].provider_id, "mimo")
 
+    def test_cached_or_silent_failed_refresh_cannot_rearm_auth_notification(self):
+        for values in (
+            {"is_stale": True},
+            {"refresh_error_codes": ("NETWORK_TIMEOUT",)},
+            {"refresh_error_codes": ("RATE_LIMITED",)},
+            {"refresh_error_codes": ("SERVER_ERROR",)},
+        ):
+            with self.subTest(values=values):
+                widget = widget_stub()
+                expired = TokenData(errors=[FetchError("AUTH_EXPIRED", "额度", "登录已失效")])
+                widget._notify_auth_expired(expired, "codex", is_current=True)
+                widget._notify_auth_expired(TokenData(status="ok", **values), "codex", is_current=True)
+                self.assertIn("codex", widget._auth_expired_providers)
+                widget._notify_auth_expired(expired, "codex", is_current=True)
+                widget.tray.showMessage.assert_called_once()
+
     def test_auth_expired_allows_manual_retry(self):
         widget = widget_stub()
         widget._auth_expired_providers.add("deepseek")
@@ -691,6 +719,25 @@ class RefreshTests(unittest.TestCase):
         self.assertNotIn("mimo", widget._auth_expired_providers)
         self.assertIsNone(widget._mimo_renewal_task)
 
+    def test_mimo_renewal_cannot_overwrite_credentials_changed_while_browser_runs(self):
+        for cookie, error in (("old-browser-cookie", ""), ("session", "BROWSER_CONTEXT_ONLY"), ("", "AUTH_EXPIRED")):
+            with self.subTest(error=error):
+                widget = widget_stub()
+                widget._refresh_mimo_after_renewal = Mock()
+                account = "A"
+                with (
+                    patch.object(TokenData, "account_key_for_config", side_effect=lambda config: account),
+                    patch("ui.qt_widget.config_manager.all_config", return_value={"ACTIVE_PROVIDER": "codex"}),
+                    patch("ui.qt_widget.config_manager.save_config") as save,
+                ):
+                    widget._start_mimo_cookie_renewal()
+                    account = "B"
+                    widget._finish_mimo_cookie_renewal(cookie, error)
+                save.assert_not_called()
+                widget._refresh_mimo_after_renewal.assert_not_called()
+                widget.tray.showMessage.assert_not_called()
+                self.assertIsNone(widget._mimo_renewal_task)
+
     @patch("ui.qt_widget.config_manager.save_config", side_effect=OSError("failed"))
     def test_failed_mimo_renewal_save_keeps_manual_recovery_available(self, _save_config):
         widget = widget_stub()
@@ -746,6 +793,7 @@ class RefreshTests(unittest.TestCase):
         widget = widget_stub()
         widget._mimo_renewal_task = Mock()
         widget._refresh_mimo_after_renewal = Mock()
+        widget._auth_expired_provider_id = "deepseek"
 
         widget._finish_mimo_cookie_renewal(
             "session=browser-only",
@@ -755,6 +803,7 @@ class RefreshTests(unittest.TestCase):
         save_config.assert_not_called()
         widget._refresh_mimo_after_renewal.assert_called_once_with()
         self.assertNotIn("mimo", widget._auth_expired_providers)
+        self.assertIsNone(widget._auth_expired_provider_id)
 
     def test_status_summary_distinguishes_configuration_and_request_errors(self):
         cases = (
@@ -843,6 +892,16 @@ class RefreshBackoffTests(unittest.TestCase):
                 self.now += 25
                 self.assertTrue(self.start())
 
+    def test_schema_and_unexpected_failures_back_off_but_allow_manual_retry(self):
+        for code in ("INVALID_RESPONSE", "UNKNOWN_ERROR"):
+            with self.subTest(code=code):
+                self.widget = widget_stub()
+                self.assertTrue(self.start())
+                self.complete(code)
+                self.now += 5
+                self.assertFalse(self.start())
+                self.assertTrue(self.start(reason="manual"))
+
     def test_silent_cached_quota_failure_still_backs_off(self):
         self.assertTrue(self.start())
         result = self.complete("RATE_LIMITED", silent=True)
@@ -903,6 +962,53 @@ class RefreshBackoffTests(unittest.TestCase):
         self.assertEqual(self.widget._thread_pool.start.call_count, 2)
         self.assertEqual(self.widget._thread_pool.start.call_args.args[0]._config["TEST_ACCOUNT"], "B")
 
+    def test_pending_retry_uses_credentials_saved_before_timer_callback(self):
+        self.assertTrue(self.start())
+        self.widget.refresh()
+        with patch("ui.qt_widget.QTimer.singleShot") as queue:
+            self.complete()
+        self.config["TEST_ACCOUNT"] = "B"
+        queue.call_args.args[1]()
+        self.assertEqual(self.widget._thread_pool.start.call_args.args[0]._config["TEST_ACCOUNT"], "B")
+
+    def test_pending_retry_cannot_clear_new_account_view_or_cache(self):
+        self.assertTrue(self.start())
+        self.widget.refresh()
+        with patch("ui.qt_widget.QTimer.singleShot") as queue:
+            self.complete()
+        self.config["TEST_ACCOUNT"] = "B"
+        self.assertTrue(self.start(reason="manual"))
+        current = TokenData(account_key="B", today_tokens=123, status="ok")
+        self.widget._data = current
+        self.widget._provider_results["deepseek"] = current
+        queue.call_args.args[1]()
+        self.assertIs(self.widget._data, current)
+        self.assertIs(self.widget._provider_results["deepseek"], current)
+        self.assertEqual(self.widget._thread_pool.start.call_count, 2)
+
+    def test_pending_retry_keeps_original_provider_after_view_switch(self):
+        self.assertTrue(self.start())
+        self.widget.refresh()
+        with patch("ui.qt_widget.QTimer.singleShot") as queue:
+            self.complete()
+        self.config.update(ACTIVE_PROVIDER="codex", TEST_ACCOUNT="B")
+        current = TokenData(account_key="B", today_tokens=123)
+        self.widget._data = current
+        queue.call_args.args[1]()
+        task = self.widget._thread_pool.start.call_args.args[0]
+        self.assertEqual(task.provider_id, "deepseek")
+        self.assertEqual(task._config["TEST_ACCOUNT"], "B")
+        self.assertIs(self.widget._data, current)
+
+    def test_pending_retry_after_close_does_not_read_config_or_change_view(self):
+        current = self.widget._data
+        self.widget._closed = True
+        with patch("ui.qt_widget.config_manager.all_config") as read_config:
+            self.widget._schedule_pending_refresh("deepseek", (self.config, True, "manual"))
+        read_config.assert_not_called()
+        self.widget._thread_pool.start.assert_not_called()
+        self.assertIs(self.widget._data, current)
+
     def test_background_backoff_skips_only_failed_provider(self):
         self.config["ACTIVE_PROVIDER"] = "codex"
         self.config["BACKGROUND_PROVIDER_IDS"] = ["deepseek", "mimo"]
@@ -921,6 +1027,54 @@ class RefreshBackoffTests(unittest.TestCase):
         self.complete("LOCAL_STORAGE")
         self.now += 5
         self.assertTrue(self.start())
+
+    def test_external_account_change_reopens_paused_auth_collection(self):
+        self.assertTrue(self.start())
+        self.complete("AUTH_EXPIRED")
+        self.assertFalse(self.start())
+        self.config["TEST_ACCOUNT"] = "B"
+        self.assertTrue(self.start())
+        self.assertNotIn("deepseek", self.widget._auth_expired_providers)
+        self.assertNotIn("deepseek", self.widget._auth_notified_providers)
+        self.complete("NETWORK_TIMEOUT")
+        self.now += 30
+        self.assertTrue(self.start())
+
+    def test_same_account_relogin_can_recover_via_infrequent_auth_recheck(self):
+        self.assertTrue(self.start())
+        self.complete("AUTH_EXPIRED")
+        self.now += 899
+        self.assertFalse(self.start())
+        self.now += 1
+        self.assertTrue(self.start())
+        self.complete()
+        self.now += 5
+        self.assertTrue(self.start())
+
+    def test_failed_auth_recheck_keeps_notifications_deduplicated_and_waits_again(self):
+        self.assertTrue(self.start())
+        self.complete("AUTH_EXPIRED")
+        self.now += 900
+        self.assertTrue(self.start())
+        self.complete("AUTH_EXPIRED")
+        self.now += 5
+        self.assertFalse(self.start())
+        self.widget.tray.showMessage.assert_called_once()
+
+    def test_removal_discards_running_result_and_pending_retry(self):
+        self.assertTrue(self.start())
+        self.widget.refresh()
+        self.config["DISABLED_PROVIDER_IDS"] = ["deepseek"]
+        current = self.widget._data
+        with patch("ui.qt_widget.QTimer.singleShot") as queue:
+            self.complete("AUTH_EXPIRED")
+        queue.assert_not_called()
+        self.assertFalse(self.widget._in_flight_requests)
+        self.assertFalse(self.widget._pending_refreshes)
+        self.assertNotIn("deepseek", self.widget._provider_results)
+        self.assertIs(self.widget._data, current)
+        self.widget.tray.showMessage.assert_not_called()
+        self.assertFalse(self.start(reason="manual"))
 
 
 class QuotaAlertTests(unittest.TestCase):
@@ -1008,6 +1162,43 @@ class QuotaAlertTests(unittest.TestCase):
         message = self.widget.tray.showMessage.call_args.args[1]
         self.assertIn("Session", message)
         self.assertNotIn("Weekly", message)
+
+    def test_new_cycle_alerts_even_when_recovery_was_not_observed(self):
+        for zone in (None, timezone.utc):
+            with self.subTest(zone=zone):
+                self.widget._quota_alerted_windows.clear()
+                self.widget.tray.reset_mock()
+                reset = self.now.replace(tzinfo=zone) + timedelta(hours=1)
+                self.notify(self.result(quota_windows=[QuotaWindow("week", "Weekly", 95, reset)]))
+                self.now += timedelta(hours=2)
+                next_cycle = self.result(quota_windows=[QuotaWindow(
+                    "week", "Weekly", 95, reset + timedelta(days=7),
+                )])
+                self.notify(next_cycle)
+                self.notify(next_cycle)
+                self.assertEqual(self.widget.tray.showMessage.call_count, 2)
+
+    def test_reset_estimate_changes_do_not_repeat_alert_before_previous_cycle_ends(self):
+        reset = self.now + timedelta(hours=1)
+        for offset in (0, 1, 2):
+            self.notify(self.result(quota_windows=[QuotaWindow(
+                "week", "Weekly", 95, reset + timedelta(minutes=offset),
+            )]))
+        self.widget.tray.showMessage.assert_called_once()
+
+    def test_stale_or_expired_next_cycle_does_not_consume_new_cycle_alert(self):
+        reset = self.now + timedelta(hours=1)
+        first = self.result(quota_windows=[QuotaWindow("week", "Weekly", 95, reset)])
+        self.notify(first)
+        self.now += timedelta(hours=2)
+        self.notify(first)
+        next_cycle = self.result(quota_windows=[QuotaWindow(
+            "week", "Weekly", 95, reset + timedelta(days=7),
+        )])
+        self.notify(replace(next_cycle, is_stale=True))
+        self.widget.tray.showMessage.assert_called_once()
+        self.notify(next_cycle)
+        self.assertEqual(self.widget.tray.showMessage.call_count, 2)
 
     def test_scopes_are_isolated_by_account_and_provider(self):
         self.notify()

@@ -2359,6 +2359,33 @@ def test_vpet_pipe_buffers_frames_and_accepts_only_fixed_ui_actions():
         assert actions == ["open_panel", "quit"]
 
 
+@pytest.mark.parametrize("invalid", [b'{"event":[]}', b'{"event":{}}', b'[' * 10000 + b']' * 10000])
+def test_vpet_malformed_event_does_not_block_following_valid_frame(invalid):
+    host = VPetHost()
+    actions = []
+    host.action_requested.connect(actions.append)
+    host.active = True
+    host._consume_output(invalid + b'\n{"event":"open_panel"}\n')
+    assert actions == ["open_panel"]
+    assert not host._buffer
+
+
+def test_vpet_state_directory_failure_returns_to_ball_without_starting_process(tmp_path):
+    host = VPetHost()
+    errors = []
+    host.failed.connect(errors.append)
+    executable = tmp_path / "pet.exe"
+    executable.touch()
+    state = tmp_path / "state"
+    state.write_text("existing file", encoding="utf-8")
+    with patch("ui.vpet_host.host_executable", return_value=executable), patch.object(host.process, "start") as start:
+        host.start(state)
+    assert len(errors) == 1
+    assert not host.active
+    assert not host._startup_timer.isActive()
+    start.assert_not_called()
+
+
 def test_vpet_pricing_outline_is_optional_and_only_for_deepseek_balance():
     data = TokenData(status="ok", last_success_at=datetime.now(), balance_cny=12.8)
     assert "pricing_peak" not in usage_message(data, False, "deepseek")
@@ -2871,6 +2898,39 @@ def test_settings_activation_ignores_child_dialog_but_not_other_windows(modal):
                 assert widget.panel.content_stack.currentIndex() == 0
         finally:
             other.close()
+            widget._closed = True
+            widget.hide()
+
+
+@pytest.mark.skipif(APP.platformName() != "windows", reason="Requires native Windows focus handling")
+def test_provider_delete_confirmation_keeps_settings_open_when_cancelled():
+    from PySide6.QtCore import QTimer
+
+    config_manager.save_config({"ACTIVE_PROVIDER": "deepseek", "DEEPSEEK_API_KEY": "synthetic"})
+    with patch.object(FloatingWidget, "refresh"), patch("ui.provider_picker.configured_provider_ids", return_value=["deepseek"]):
+        widget = FloatingWidget()
+        widget.open_settings()
+        picker = widget._settings_window.provider_combo
+        seen = []
+
+        def cancel_dialog():
+            dialog = APP.activeModalWidget()
+            seen.append(isinstance(dialog, QMessageBox))
+            if isinstance(dialog, QMessageBox):
+                dialog.done(QMessageBox.StandardButton.No)
+
+        try:
+            assert QTest.qWaitForWindowActive(widget, 1000)
+            picker.showPopup()
+            APP.processEvents()
+            QTimer.singleShot(100, cancel_dialog)
+            QTest.mouseClick(picker.remove_buttons["deepseek"], Qt.MouseButton.LeftButton)
+            APP.processEvents()
+            assert seen == [True]
+            assert widget._expanded
+            assert widget._settings_window.isVisible()
+            assert config_manager.get("DEEPSEEK_API_KEY") == "synthetic"
+        finally:
             widget._closed = True
             widget.hide()
 
@@ -3402,6 +3462,72 @@ def test_connection_test_passes_read_only_snapshot_without_changing_global_confi
     worker_cls.return_value.start.assert_called_once()
     assert config_manager.all_config() == original
     window.close()
+
+
+def test_settings_shutdown_interrupts_and_waits_for_connection_worker():
+    import threading
+    import time
+
+    started, interrupted = threading.Event(), threading.Event()
+
+    def waiting_query(_config, *, should_stop=None):
+        started.set()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if should_stop and should_stop():
+                interrupted.set()
+                break
+            time.sleep(.005)
+        return TokenData(status="error")
+
+    window = SettingsWindow()
+    with patch.object(TokenData, "test_connection", side_effect=waiting_query):
+        window._test_connection()
+        worker = window._worker
+        try:
+            assert started.wait(1)
+            window.stop_connection_tasks()
+            assert interrupted.is_set()
+            assert not worker.isRunning()
+        finally:
+            worker.requestInterruption()
+            worker.wait(4000)
+    APP.processEvents()
+    APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_completed_connection_worker_is_released_after_delivering_result():
+    from shiboken6 import isValid
+
+    window = SettingsWindow()
+    with patch.object(TokenData, "test_connection", return_value=TokenData(status="ok")):
+        window._test_connection()
+        worker = window._worker
+        assert worker.wait(1000)
+        APP.processEvents()
+        APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert window._worker is None
+    assert not isValid(worker)
+    assert window.connection_feedback.text() == "连接成功。"
+
+
+@pytest.mark.parametrize("change", ["credential", "provider", "none"])
+def test_connection_result_applies_only_to_inputs_that_were_tested(change):
+    window = SettingsWindow()
+    window.provider_combo.setCurrentIndex(window.provider_combo.findData("deepseek"))
+    with patch("ui.qt_settings.ConnectionWorker.start"):
+        window._test_connection()
+    if change == "credential":
+        window._provider_widgets["AUTH"].setText("new-draft-auth")
+    elif change == "provider":
+        window.provider_combo.setCurrentIndex(window.provider_combo.findData("cursor"))
+    window._connection_result(TokenData(status="ok"))
+    assert window.test_button.isEnabled()
+    if change == "none":
+        assert window.connection_feedback.text() == "连接成功。"
+    else:
+        assert "已变化" in window.connection_feedback.text()
+        assert "连接成功" not in window.connection_feedback.text()
 
 
 def test_settings_exposes_deepseek_peak_pricing_and_keeps_unsaved_times():

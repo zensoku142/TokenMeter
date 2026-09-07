@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 
 from PySide6.QtCore import QSize, Qt
@@ -23,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from api.providers import PROVIDERS
 from data.store import TokenData
-from ui.formatting import format_quota_metric, format_reset_countdown
+from ui.formatting import format_quota_metric, format_reset_countdown, quota_used_percent
 from ui.i18n import bind_text, tr
 from ui.provider_branding import provider_icon
 from ui.qt_theme import ThemeTokens, current_theme, theme_controller
@@ -197,12 +196,8 @@ class QuotaDetailsDialog(QDialog):
         content_layout.setContentsMargins(0, 0, 4, 0)
         content_layout.setSpacing(8)
         for window in data.quota_windows:
-            try:
-                used = float(window.used_percent)
-                valid = math.isfinite(used) and used >= 0 and not isinstance(window.used_percent, bool)
-            except (TypeError, ValueError, OverflowError):
-                used, valid = 0.0, False
-            value = f"已用 {used:g}%" if valid else "--"
+            used = quota_used_percent(window.used_percent)
+            value = f"已用 {used:g}%" if used is not None else "--"
             # 保留原始窗口作动态绑定；切换语言时重算每段文字，避免拼接后的半翻译状态。
             def detail(current=window) -> str:
                 return " · ".join(filter(None, (
@@ -211,7 +206,7 @@ class QuotaDetailsDialog(QDialog):
                     else tr("平台未提供重置时间"),
                 )))
             row = self._new_card(content_layout, window.title, value, detail)
-            if valid:
+            if used is not None:
                 progress = QProgressBar()
                 progress.setRange(0, 1000)
                 progress.setValue(round(max(0, min(100, used)) * 10))

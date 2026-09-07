@@ -4,12 +4,23 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from math import ceil
+from math import ceil, isfinite
 
 from ui.activity import compact_tokens
 from ui.i18n import current_language, tr
 
 _SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
+
+
+def quota_used_percent(value) -> float | None:
+    # 各展示面及提醒共用校验；未知值不能参与减法或被夹成满额，超过 100% 则保留真实超用量。
+    if isinstance(value, bool):
+        return None
+    try:
+        used = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return used if isfinite(used) and used >= 0 else None
 
 
 def format_quota_metric(metric) -> str:

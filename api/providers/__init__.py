@@ -71,6 +71,8 @@ def configured_provider_ids(config: Mapping[str, Any] | None = None) -> list[str
     captured = dict(config) if config is not None else config_manager.all_config()
     configured: list[str] = []
     for provider_id, provider_cls in PROVIDERS.items():
+        if provider_id in captured.get("DISABLED_PROVIDER_IDS", []):
+            continue
         provider: Provider | None = None
         try:
             provider = provider_cls(captured)
@@ -108,6 +110,13 @@ def active_providers(config: Mapping[str, Any] | None = None) -> Iterator[Provid
         else config_manager.get("ACTIVE_PROVIDER", "")
     ).strip().lower()
     registry = PROVIDERS
+    disabled = (
+        config.get("DISABLED_PROVIDER_IDS", []) if config is not None
+        else config_manager.get("DISABLED_PROVIDER_IDS", [])
+    )
+    # 删除配置不应删除 CLI 自己的登录文件；显式禁用可阻止自动发现再次启动监控。
+    if selected in disabled:
+        return
     if not selected:
         # Pick the first available provider; useful for first-run where the
         # user has not yet opened the settings dialog.
