@@ -613,6 +613,22 @@ class SettingsWindow(QDialog):
         alert_layout.addWidget(bind_text(QLabel(), "剩余不高于"))
         alert_layout.addWidget(self.quota_alert_threshold)
         runtime_form.addRow(bind_text(QLabel(), "订阅额度"), alert_row)
+        self.quota_recovery_check = bind_text(QCheckBox(), "额度恢复时提醒")
+        self.quota_alert_check.toggled.connect(self.quota_recovery_check.setEnabled)
+        self.quota_recovery_check.setEnabled(False)
+        bind_text(self.quota_recovery_check, "需先启用低额度提醒；只在成功获取恢复后的额度时通知。", method="setToolTip")
+        runtime_form.addRow("", self.quota_recovery_check)
+        self.quota_forecast_check = bind_text(QCheckBox(), "显示额度消耗预测")
+        bind_text(self.quota_forecast_check, "至少积累 10 分钟有效样本后显示估计；不会推算剩余请求数。", method="setToolTip")
+        runtime_form.addRow("", self.quota_forecast_check)
+        self.quota_quiet_check = bind_text(QCheckBox(), "额度通知静默时段")
+        runtime_form.addRow("", self.quota_quiet_check)
+        self.quota_quiet_start = self._peak_time_edit()
+        self.quota_quiet_end = self._peak_time_edit()
+        quiet_row = self._peak_period_row(self.quota_quiet_start, self.quota_quiet_end)
+        self.quota_quiet_check.toggled.connect(quiet_row.setEnabled)
+        quiet_row.setEnabled(False)
+        runtime_form.addRow(bind_text(QLabel(), "静默时间"), quiet_row)
         self.minute_usage_interval_minutes = _SettingsSpinBox()
         self.minute_usage_interval_minutes.setRange(1, 60)
         bind_text(self.minute_usage_interval_minutes, " 分钟", method='setSuffix')
@@ -1760,6 +1776,11 @@ class SettingsWindow(QDialog):
         background_provider_ids = set(values.get("BACKGROUND_PROVIDER_IDS", []))
         self.quota_alert_check.setChecked(bool(values.get("QUOTA_ALERT_ENABLED", False)))
         self.quota_alert_threshold.setValue(int(values.get("QUOTA_ALERT_THRESHOLD", 10)))
+        self.quota_recovery_check.setChecked(bool(values.get("QUOTA_RECOVERY_ALERT_ENABLED", False)))
+        self.quota_forecast_check.setChecked(bool(values.get("QUOTA_FORECAST_ENABLED", False)))
+        self.quota_quiet_check.setChecked(bool(values.get("QUOTA_QUIET_ENABLED", False)))
+        self.quota_quiet_start.setTime(QTime.fromString(str(values.get("QUOTA_QUIET_START", "22:00")), "HH:mm"))
+        self.quota_quiet_end.setTime(QTime.fromString(str(values.get("QUOTA_QUIET_END", "08:00")), "HH:mm"))
         for provider_id, check in self.background_provider_checks.items():
             check.setChecked(provider_id in background_provider_ids)
             enabled = provider_id not in values.get("DISABLED_PROVIDER_IDS", [])
@@ -1858,6 +1879,11 @@ class SettingsWindow(QDialog):
             "ACTIVE_PROVIDER": str(self.provider_combo.currentData() or ""),
             "QUOTA_ALERT_ENABLED": self.quota_alert_check.isChecked(),
             "QUOTA_ALERT_THRESHOLD": self.quota_alert_threshold.value(),
+            "QUOTA_RECOVERY_ALERT_ENABLED": self.quota_recovery_check.isChecked(),
+            "QUOTA_FORECAST_ENABLED": self.quota_forecast_check.isChecked(),
+            "QUOTA_QUIET_ENABLED": self.quota_quiet_check.isChecked(),
+            "QUOTA_QUIET_START": self.quota_quiet_start.time().toString("HH:mm"),
+            "QUOTA_QUIET_END": self.quota_quiet_end.time().toString("HH:mm"),
             "BACKGROUND_PROVIDER_IDS": [
                 provider_id
                 for provider_id, check in self.background_provider_checks.items()

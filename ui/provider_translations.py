@@ -1,6 +1,16 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "额度恢复时提醒": ("Notify when quota recovers", "額度恢復時提醒", "利用枠回復時に通知", "한도 회복 시 알림"),
+    "需先启用低额度提醒；只在成功获取恢复后的额度时通知。": ("Requires low-quota alerts. Notify only after a successful refresh confirms recovery.", "需先啟用低額度提醒；只在成功取得恢復後的額度時通知。", "低残量通知の有効化が必要です。更新で回復を確認した場合のみ通知します。", "낮은 한도 알림을 먼저 켜세요. 업데이트로 회복을 확인한 경우에만 알립니다."),
+    "显示额度消耗预测": ("Show quota burn-rate estimates", "顯示額度消耗預測", "利用枠消費の予測を表示", "한도 소모 예측 표시"),
+    "至少积累 10 分钟有效样本后显示估计；不会推算剩余请求数。": ("Estimates require at least 10 minutes of valid samples. Remaining requests are not inferred.", "至少累積 10 分鐘有效樣本後顯示估計；不會推算剩餘請求數。", "10分以上の有効なサンプルから推定します。残りのリクエスト数は推測しません。", "유효한 샘플이 10분 이상 쌓이면 추정합니다. 남은 요청 수는 추정하지 않습니다."),
+    "额度通知静默时段": ("Quiet hours for quota alerts", "額度通知靜默時段", "利用枠通知の休止時間", "한도 알림 방해 금지 시간"),
+    "静默时间": ("Quiet hours", "靜默時間", "休止時間", "방해 금지 시간"),
+    "近期无明显消耗": ("No recent measurable consumption", "近期無明顯消耗", "最近の明確な消費はありません", "최근 뚜렷한 소모 없음"),
+    "有效样本不足，暂无法估计": ("Not enough valid samples to estimate yet", "有效樣本不足，暫無法估計", "有効なサンプルが不足しています", "유효한 샘플이 부족하여 아직 추정할 수 없음"),
+    "按近期速度估计还可持续使用约 {minutes} 分钟，实际消耗会变化": ("About {minutes} minutes at the recent rate; actual consumption varies", "按近期速度估計還可持續使用約 {minutes} 分鐘，實際消耗會變化", "最近のペースでは約 {minutes} 分。実際の消費は変動します", "최근 속도 기준 약 {minutes}분 더 사용 가능하며 실제 소모는 달라집니다"),
+    "{app}：{provider} 额度恢复": ("{app}: {provider} quota recovered", "{app}：{provider} 額度恢復", "{app}：{provider} の利用枠が回復", "{app}: {provider} 한도 회복"),
     "尚未采集，等待自动更新": ("Not collected yet. Waiting for automatic refresh.", "尚未採集，等待自動更新", "未取得です。自動更新を待っています。", "아직 수집되지 않았습니다. 자동 업데이트를 기다리는 중입니다."),
     "导出 Excel": ("Export Excel", "匯出 Excel", "Excel にエクスポート", "Excel 내보내기"),
     "正在导出 Excel": ("Exporting Excel", "正在匯出 Excel", "Excel を出力中", "Excel 내보내는 중"),

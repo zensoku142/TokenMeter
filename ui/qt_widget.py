@@ -164,7 +164,17 @@ def _fetch_tokens_safely(
     try:
         # 异常回退也必须绑定请求开始时的账号；请求期间换号时由完成回调丢弃旧结果。
         account_key = TokenData.account_key_for_config(config)
-        return TokenData.fetch(lightweight=lightweight, config=config, include_minute_history=False)
+        data = TokenData.fetch(lightweight=lightweight, config=config, include_minute_history=False)
+        if config.get("QUOTA_FORECAST_ENABLED", False) is True:
+            from data.quota_history import record_quota
+
+            data.quota_forecast_enabled = True
+            try:
+                # 可选分析在采集线程内读写；预测失败不能让已经成功的额度退回缓存。
+                data.quota_forecasts = record_quota(provider_id, data)
+            except Exception:
+                config_manager.logger().warning("Quota forecast unavailable: provider=%s", provider_id)
+        return data
     except Exception as exc:
         # 第三方异常可能包含请求凭据，只记录异常类型并向用户展示固定的安全消息。
         config_manager.logger().error("Background refresh failed: %s", type(exc).__name__)
@@ -1582,10 +1592,22 @@ class FloatingWidget(QWidget):
             or result.quota_source not in {"interface", "local_snapshot"}
         ):
             return
+        from data.quota_history import in_quiet_hours, load_alerts
+
+        if in_quiet_hours(config_manager.all_config(), datetime.now()):
+            return
+        if not self.__dict__.get("_quota_alerts_loaded", False):
+            try:
+                self._quota_alerted_windows.update(load_alerts())
+            except Exception:
+                config_manager.logger().warning("Quota notification history unavailable")
+            self._quota_alerts_loaded = True
+        previous_alerts = dict(self._quota_alerted_windows)
         threshold = config_manager.get("QUOTA_ALERT_THRESHOLD", 10)
         if type(threshold) is not int or not 1 <= threshold <= 50:
             threshold = 10
         low_windows: dict[tuple[str, str, str], tuple[str, float, datetime | None]] = {}
+        recovered_windows: dict[tuple[str, str, str], tuple[str, float, datetime | None]] = {}
         for window in result.quota_windows:
             used = quota_used_percent(window.used_percent)
             if used is None:
@@ -1595,6 +1617,7 @@ class FloatingWidget(QWidget):
                 continue
             remaining = max(0.0, 100 - used)
             scope = (provider_id, result.account_key, window.id)
+            was_alerted = scope in self._quota_alerted_windows
             alerted_reset = self._quota_alerted_windows.get(scope)
             if (
                 window.resets_at is not None
@@ -1607,24 +1630,39 @@ class FloatingWidget(QWidget):
             if remaining > threshold + 5:
                 # 留出 5 个百分点的恢复区间，防止接口舍入或边界抖动反复打扰用户。
                 self._quota_alerted_windows.pop(scope, None)
+                if was_alerted and config_manager.get("QUOTA_RECOVERY_ALERT_ENABLED", False) is True:
+                    recovered_windows[scope] = (" ".join(window.title.split()), remaining, window.resets_at)
             elif remaining <= threshold and scope not in self._quota_alerted_windows:
                 title = " ".join(window.title.split()) or tr("订阅额度")
                 low_windows[scope] = (title, remaining, window.resets_at)
-        if not low_windows:
-            return
+        if low_windows:
+            self._show_quota_notification(provider_id, low_windows, recovered=False)
+            self._quota_alerted_windows.update({scope: value[2] for scope, value in low_windows.items()})
+        elif recovered_windows:
+            self._show_quota_notification(provider_id, recovered_windows, recovered=True)
+        if previous_alerts != self._quota_alerted_windows:
+            from data.quota_history import save_alerts
+
+            try:
+                save_alerts(self._quota_alerted_windows)
+            except Exception:
+                config_manager.logger().warning("Quota notification history could not be saved")
+
+    def _show_quota_notification(self, provider_id: str, windows: dict, *, recovered: bool) -> None:
+        provider = PROVIDERS[provider_id]
         # 同一平台的多模型窗口合并一条；通知不包含账号标签、指纹或任何原始响应明细。
         # 额度提醒不能沿用上一条认证通知的点击动作，否则会误启动其他平台的 Cookie 获取。
         self._auth_expired_provider_id = None
+        self._quota_notification_provider_id = provider_id
         self.tray.showMessage(
-            tr("{app}：{provider} 额度不足", app=APP_DISPLAY_NAME, provider=provider.name),
+            tr("{app}：{provider} 额度恢复" if recovered else "{app}：{provider} 额度不足", app=APP_DISPLAY_NAME, provider=provider.name),
             "\n".join(
                 tr("{window}：剩余 {remaining}%", window=title, remaining=f"{remaining:g}")
-                for title, remaining, _reset in low_windows.values()
+                for title, remaining, _reset in windows.values()
             ),
-            QSystemTrayIcon.MessageIcon.Warning,
+            QSystemTrayIcon.MessageIcon.Information if recovered else QSystemTrayIcon.MessageIcon.Warning,
             10_000,
         )
-        self._quota_alerted_windows.update({scope: value[2] for scope, value in low_windows.items()})
 
     def _notify_auth_expired(
         self, result: TokenData, provider_id: str, *, is_current: bool
@@ -1674,6 +1712,7 @@ class FloatingWidget(QWidget):
             return
         self._auth_notified_providers.add(provider_id)
         self._auth_expired_provider_id = provider_id
+        self._quota_notification_provider_id = None
         if provider_id == "mimo":
             message = (
                 f"{auth_error.message}\n请切换到小米 MiMo 或打开设置重新登录；"
@@ -1795,6 +1834,12 @@ class FloatingWidget(QWidget):
     def handle_auth_expired_notification_click(self) -> None:
         provider_id = getattr(self, "_auth_expired_provider_id", None)
         if not provider_id:
+            quota_provider = self.__dict__.get("_quota_notification_provider_id")
+            self._quota_notification_provider_id = None
+            if quota_provider and quota_provider not in config_manager.get("DISABLED_PROVIDER_IDS", []):
+                self._ensure_panel().show_overview()
+                self._switch_provider(quota_provider)
+                self.expand_panel()
             return
         # A tray click applies only to the notification that supplied this provider.
         self._auth_expired_provider_id = None

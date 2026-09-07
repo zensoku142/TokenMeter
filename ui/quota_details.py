@@ -181,6 +181,8 @@ class QuotaDetailsDialog(QDialog):
             tuple((window, isinstance(window.used_percent, bool)) for window in data.quota_windows),
             tuple(data.quota_metrics),
             data.account_plan, data.account_label, tuple(data.quota_statistics), data.statistics_source,
+            data.quota_forecast_enabled, tuple(data.quota_forecasts.items()),
+            bool(data.is_stale or data.errors or data.refresh_error_codes or data.quota_source not in {"interface", "local_snapshot"}) if data.quota_forecast_enabled else False,
         )
         if signature == self._rows_signature:
             # 未变额度保留滚动位置和文字选择，但倒计时仍随本轮刷新重新计算。
@@ -204,10 +206,17 @@ class QuotaDetailsDialog(QDialog):
             value = f"已用 {used:g}%" if used is not None else "--"
             # 保留原始窗口作动态绑定；切换语言时重算每段文字，避免拼接后的半翻译状态。
             def detail(current=window) -> str:
+                forecast = ""
+                if data.quota_forecast_enabled and not data.is_stale and not data.errors and not data.refresh_error_codes and data.quota_source in {"interface", "local_snapshot"}:
+                    seconds = data.quota_forecasts.get(current.id)
+                    forecast = (tr("近期无明显消耗") if seconds == 0 else
+                                tr("按近期速度估计还可持续使用约 {minutes} 分钟，实际消耗会变化", minutes=max(1, round(seconds / 60))) if seconds is not None else
+                                tr("有效样本不足，暂无法估计"))
                 return " · ".join(filter(None, (
                     tr(current.detail),
                     tr(format_reset_countdown(current.resets_at)) if current.resets_at
                     else tr("平台未提供重置时间"),
+                    forecast,
                 )))
             row = self._new_card(content_layout, window.title, value, detail)
             if used is not None:

@@ -1300,11 +1300,13 @@ class QuotaAlertTests(unittest.TestCase):
         self.assertEqual(len(self.widget.tray.showMessage.call_args.args[1].splitlines()), 1)
 
     def test_quota_notification_click_does_not_reuse_previous_authentication_action(self):
+        self.widget.expand_panel = Mock()
         self.widget._auth_expired_provider_id = "mimo"
         self.widget._auth_expired_providers.add("mimo")
         self.notify()
         self.widget.handle_auth_expired_notification_click()
         self.widget.open_settings.assert_not_called()
+        self.widget.expand_panel.assert_called_once_with()
         self.assertIn("mimo", self.widget._auth_expired_providers)
 
     def test_notification_translates_without_altering_provider_or_percentage(self):

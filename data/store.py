@@ -472,6 +472,8 @@ class TokenData:
     minute_history_complete: bool = True
     # 缓存降级会隐藏界面错误；调度器仍需本轮错误码退避，不能沿用旧快照的状态。
     refresh_error_codes: tuple[str, ...] = ()
+    quota_forecast_enabled: bool = False
+    quota_forecasts: dict[str, float] = field(default_factory=dict)
 
     _last_snapshot: ClassVar["TokenData | None"] = None
     _provider_snapshots: ClassVar[dict[str, "TokenData"]] = {}
