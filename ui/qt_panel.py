@@ -2570,6 +2570,10 @@ class MainPanel(QFrame):
         self.overview_button = bind_text(QToolButton(), "平台总览")
         self.overview_button.clicked.connect(self.overview_requested)
         footer.addWidget(self.overview_button)
+        self.local_analytics_button = bind_text(QToolButton(), "本机统计")
+        self.local_analytics_button.clicked.connect(self._open_local_analytics)
+        footer.addWidget(self.local_analytics_button)
+        self._local_analytics_dialog = None
         content.addWidget(footer_widget)
         # 概览和设置共用面板主体，保留顶部拖动、主题切换和收起入口。
         self.content_stack = QStackedWidget()
@@ -2649,6 +2653,14 @@ class MainPanel(QFrame):
         available = self.screen().availableGeometry()
         self._quota_details_dialog.resize(min(560, available.width() - 32), min(590, available.height() - 64))
         self._quota_details_dialog.show()
+
+    def _open_local_analytics(self) -> None:
+        if self._local_analytics_dialog is None:
+            from ui.local_analytics import LocalAnalyticsDialog
+
+            self._local_analytics_dialog = LocalAnalyticsDialog(self)
+        self._local_analytics_dialog.show()
+        self._local_analytics_dialog.raise_()
 
     def set_settings_save_status(self, message: str, tone: str) -> None:
         # 详细错误留在提示中，不能把共用标题栏撑宽并挤掉收起入口。
