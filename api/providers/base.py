@@ -41,7 +41,7 @@ class ModelUsage:
 @dataclass
 class ProviderSummary:
     month_cost: Decimal | None = None
-    month_tokens: int = 0
+    month_tokens: int | None = 0
     remaining_tokens: int = 0
     today_cost: Decimal | None = None
     today_tokens: int | None = None
@@ -92,13 +92,18 @@ class ProviderQuota:
     weekly_activity: tuple[tuple[str, int], ...] = ()
     weekly_activity_source: str = ""
     statistics_source: str = ""
+    source: str = "interface"
 
 
 def _decimal(value: Any) -> Decimal:
     if value in (None, ""):
         return Decimal("0")
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+        # Decimal 接受 NaN/Infinity，但它们会使 Token 转换或金额比较崩溃。
+        if not result.is_finite():
+            raise ValueError
+        return result
     except (InvalidOperation, ValueError, TypeError):
         raise ValueError(f"无效数值: {value!r}") from None
 
@@ -144,6 +149,10 @@ class Provider:
     supports_cookie_acquisition = False
     supports_browser_credential_acquisition = False
     supports_subscription_quota = False
+    support_description = ""
+    dashboard_url = ""
+    balance_label = "账户余额"
+    balance_description = "账户可用余额"
     credential_fields: dict[str, dict[str, Any]] = {}
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
