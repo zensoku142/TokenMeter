@@ -5,9 +5,12 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from data import history
 
 MAX_LINE_BYTES = 2 * 1024 * 1024
 
@@ -49,9 +52,12 @@ class LocalUsageScanner:
     def __init__(self):
         self.files: dict[tuple[str, Path], _FileUsage] = {}
         self.issues = 0
+        self.changed = False
+        self._last_rows: list[LocalUsage] | None = None
 
     def scan(self, roots: dict[str, Path]) -> list[LocalUsage]:
         self.issues = 0
+        self.changed = False
         current: set[tuple[str, Path]] = set()
         for provider, root in roots.items():
             if not root.is_dir():
@@ -67,8 +73,11 @@ class LocalUsageScanner:
                         self._read(provider, path)
                 except OSError:
                     self.issues += 1
+        self.changed = self.changed or bool(set(self.files) - current)
         self.files = {key: value for key, value in self.files.items() if key in current}
         self.issues += sum(data.issues for data in self.files.values())
+        if not self.changed and self._last_rows is not None:
+            return self._last_rows
         events: dict[tuple[str, str, str], LocalUsage] = {}
         for (provider, _path), data in self.files.items():
             for event_id, record in data.events.items():
@@ -77,7 +86,8 @@ class LocalUsageScanner:
                 # 同会话复制/归档及流式重写保留最大完整读数，不能累加同一消息。
                 if previous is None or record.total > previous.total:
                     events[key] = record
-        return sorted(events.values(), key=lambda row: (row.day, row.provider, row.session))
+        self._last_rows = sorted(events.values(), key=lambda row: (row.day, row.provider, row.session))
+        return self._last_rows
 
     def _read(self, provider: str, path: Path) -> None:
         key = (provider, path)
@@ -87,11 +97,17 @@ class LocalUsageScanner:
             previous = self.files.get(key)
             if previous and previous.signature == signature:
                 return
+            self.changed = True
             append = previous and previous.signature[:2] == signature[:2] and stat.st_size > previous.signature[2]
             data = previous if append else _FileUsage(signature, session=hashlib.sha256(str(path).encode()).hexdigest())
             with path.open("rb") as stream:
                 stream.seek(data.offset)
+                lines = 0
                 while True:
+                    lines += 1
+                    if lines % 256 == 0:
+                        # 大日志扫描主动让出执行权，避免 CPU 密集 JSON 解析持续挤占 Qt 主线程。
+                        time.sleep(0)
                     offset = stream.tell()
                     raw = stream.readline(MAX_LINE_BYTES + 1)
                     if not raw:
@@ -200,6 +216,27 @@ def filter_usage(rows: list[LocalUsage], days: int, project: str = "", *, today=
             and (not project or project.casefold() in row.project.casefold())]
 
 
+def daily_model_series(rows: list[LocalUsage], start: date, end: date):
+    days = [(start + timedelta(days=index)).isoformat() for index in range(max(0, (end - start).days + 1))]
+    totals: dict[tuple[str, str], int] = {}
+    for row in rows:
+        key = (row.provider, row.model)
+        totals[key] = totals.get(key, 0) + row.total
+    models = sorted(totals, key=lambda key: (-totals[key], key))[:8]
+    other = ("", "其他")
+    series = {key: [0] * len(days) for key in models}
+    if len(totals) > len(models):
+        series[other] = [0] * len(days)
+    indices = {day: index for index, day in enumerate(days)}
+    for row in rows:
+        if row.day not in indices:
+            continue
+        key = (row.provider, row.model)
+        # 过多模型合并为“其他”，保持每日总数不丢失，同时避免图例与柱组无限拥挤。
+        series[key if key in series else other][indices[row.day]] += row.total
+    return days, series
+
+
 def export_usage(path: Path, rows: list[LocalUsage], *, issues: int = 0) -> None:
     fields = list(LocalUsage.__dataclass_fields__)
     records = [asdict(row) for row in rows]
@@ -216,3 +253,49 @@ def export_usage(path: Path, rows: list[LocalUsage], *, issues: int = 0) -> None
                 # Excel 可执行以公式符号开头的项目/模型/会话名；字符串前缀转义，数值仍保留整数。
                 writer.writerow({key: "'" + value if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")) else value
                                  for key, value in {**record, **metadata}.items()})
+
+
+def local_cache_scope(roots: dict[str, Path]) -> str:
+    # 目录与当前时区共同决定统计范围；换目录/时区不能沿用另一范围的快照。
+    identity = {provider: str(path.absolute()) for provider, path in roots.items()}
+    identity["timezone"] = str(datetime.now().astimezone().tzinfo)
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def load_local_report(scope: str) -> tuple[list[LocalUsage], int] | None:
+    with history._connect() as connection:
+        connection.execute("""CREATE TABLE IF NOT EXISTS local_usage_report
+            (scope TEXT PRIMARY KEY, payload TEXT, issues INTEGER, saved TEXT)""")
+        record = connection.execute("SELECT payload, issues FROM local_usage_report WHERE scope=? AND length(payload)<=?",
+                                    (scope, 32 * 1024 * 1024)).fetchone()
+    if record is None:
+        return None
+    try:
+        values = json.loads(record[0])
+        if not isinstance(values, list):
+            return None
+        # 新快照按固定列存储，减少重复字段名；仍可读取先前的字典格式。
+        rows = [LocalUsage(*value) if isinstance(value, list) else LocalUsage(**value) for value in values]
+        for row in rows:
+            if any(type(getattr(row, name)) is not int or getattr(row, name) < 0 for name in ("input", "output", "cache_read", "cache_write", "total")):
+                return None
+            if any(not isinstance(getattr(row, name), str) for name in ("provider", "session", "project", "day", "model")):
+                return None
+            date.fromisoformat(row.day)
+        return rows, max(0, int(record[1]))
+    except (ValueError, TypeError):
+        return None
+
+
+def save_local_report(scope: str, rows: list[LocalUsage], issues: int) -> None:
+    fields = tuple(LocalUsage.__dataclass_fields__)
+    payload = json.dumps([[getattr(row, name) for name in fields] for row in rows], ensure_ascii=False, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > 32 * 1024 * 1024:
+        return
+    with history._connect() as connection:
+        connection.execute("""CREATE TABLE IF NOT EXISTS local_usage_report
+            (scope TEXT PRIMARY KEY, payload TEXT, issues INTEGER, saved TEXT)""")
+        connection.execute("INSERT OR REPLACE INTO local_usage_report VALUES (?, ?, ?, ?)",
+                           (scope, payload, issues, datetime.now().isoformat()))
+        # 仅保留最近八个目录范围，避免反复选目录后快照无界增长。
+        connection.execute("DELETE FROM local_usage_report WHERE scope NOT IN (SELECT scope FROM local_usage_report ORDER BY saved DESC LIMIT 8)")

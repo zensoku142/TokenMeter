@@ -78,6 +78,7 @@ from ui.qt_theme import (
     app_icon,
     current_theme,
     fluent_icon,
+    model_usage_color,
     theme_controller,
 )
 
@@ -93,6 +94,7 @@ STATISTICS_SECTION_HEIGHT = 76
 STATUS_SECTION_HEIGHT = 40
 SECTION_SPACING = 0
 SECTION_HORIZONTAL_MARGIN = 22
+USAGE_AXIS_WIDTH = 60
 
 
 def _make_plot_background_transparent(plot: pg.PlotWidget) -> None:
@@ -628,6 +630,7 @@ class TrendUsageTooltip(QFrame):
         model_name = bind_text(QLabel(), "模型")
         model_name.setObjectName("minuteTooltipMuted")
         self.model_label = QLabel()
+        self.model_label.setTextFormat(Qt.TextFormat.PlainText)
         self.model_label.setObjectName("minuteTooltipValue")
         self.model_label.setWordWrap(False)
         self.model_label.setMaximumWidth(240)
@@ -1007,15 +1010,7 @@ class TrendCard(QFrame):
         self.legend_widget.adjustSize()
 
     def _model_color(self, model: str) -> QColor:
-        tokens = current_theme()
-        if len(self._model_order) == 1:
-            return QColor(tokens.accent)
-        base = QColor(tokens.accent)
-        base_hue = base.hslHue() if base.hslHue() >= 0 else 345
-        stable = sum((index + 1) * ord(char) for index, char in enumerate(model))
-        hue = (base_hue + stable % 281) % 360
-        lightness = 172 if tokens.name == "dark" else 116
-        return QColor.fromHsl(hue, 150, lightness)
+        return model_usage_color(model, single=len(self._model_order) == 1)
 
     @staticmethod
     def _token_colors() -> tuple[QColor, QColor, QColor]:
@@ -1215,6 +1210,7 @@ class MinuteUsageTooltip(QFrame):
         model_name = bind_text(QLabel(), "模型")
         model_name.setObjectName("minuteTooltipMuted")
         self.model_label = QLabel()
+        self.model_label.setTextFormat(Qt.TextFormat.PlainText)
         self.model_label.setObjectName("minuteTooltipValue")
         self.model_label.setWordWrap(False)
         self.model_label.setMaximumWidth(240)
@@ -1319,6 +1315,73 @@ class MinuteUsageTooltip(QFrame):
             swatch.setStyleSheet(f"background: {color.name()}; border-radius: 2px;")
 
 
+def create_usage_plot() -> pg.PlotWidget:
+    """分时与本机统计共用坐标、字体和基础交互，避免各自维护一套图表外观。"""
+    plot = pg.PlotWidget(axisItems={"left": TokenAxis(orientation="left")})
+    plot.setStyleSheet("border: 0;")
+    plot.setMouseEnabled(x=True, y=False)
+    plot.hideButtons()
+    plot.setMenuEnabled(False)
+    plot.showGrid(x=False, y=True, alpha=0.14)
+    plot.setMinimumHeight(118)
+    # 较大的“万/亿”刻度也需完整显示；分时和本机图表使用同一轴宽。
+    plot.getAxis("left").setWidth(USAGE_AXIS_WIDTH)
+    plot.getAxis("left").setTickFont(QFont("Microsoft YaHei UI", 8))
+    plot.getAxis("bottom").setHeight(18)
+    plot.getAxis("bottom").setTickFont(QFont("Microsoft YaHei UI", 8))
+    return plot
+
+
+def refresh_usage_plot_theme(plot: pg.PlotWidget) -> None:
+    tokens = current_theme()
+    _make_plot_background_transparent(plot)
+    for axis_name in ("left", "bottom"):
+        axis = plot.getAxis(axis_name)
+        axis.setTextPen(pg.mkPen(tokens.subtext))
+        border = QColor(tokens.border)
+        border.setAlpha(96)
+        axis.setPen(pg.mkPen(border))
+
+
+def create_usage_navigator() -> tuple[pg.PlotWidget, pg.LinearRegionItem]:
+    navigator = pg.PlotWidget()
+    navigator.setStyleSheet("border: 0;")
+    navigator.setFixedHeight(34)
+    navigator.setMouseEnabled(x=False, y=False)
+    navigator.hideButtons()
+    navigator.setMenuEnabled(False)
+    navigator.getAxis("left").hide()
+    navigator.getAxis("bottom").setHeight(15)
+    navigator.getAxis("bottom").setTickFont(QFont("Microsoft YaHei UI", 7))
+    region = pg.LinearRegionItem(values=(0, 1), movable=True)
+    navigator.addItem(region)
+    return navigator, region
+
+
+def adaptive_usage_bar_width(low: float, high: float, view_width: float, slot_width: float = 1.0) -> float:
+    units_per_pixel = max(1.0, high - low) / max(1.0, view_width)
+    target_pixels = min(MinuteUsageChart.BAR_MAX_WIDTH_PX,
+                        max(MinuteUsageChart.BAR_MIN_WIDTH_PX, 0.7 * slot_width / units_per_pixel))
+    return min(0.84 * slot_width, target_pixels * units_per_pixel)
+
+
+def show_usage_tooltip(plot: pg.PlotWidget, tooltip: QFrame, local: QPoint, *, refresh_layout: bool = True) -> None:
+    if refresh_layout:
+        tooltip.layout().activate()
+        tooltip.resize(tooltip.sizeHint())
+    x = local.x() + 10
+    if x + tooltip.width() > plot.width() - 6:
+        x = local.x() - tooltip.width() - 10
+    view_left = plot.mapFromScene(plot.getViewBox().sceneBoundingRect().topLeft()).x() + 6
+    right_limit = plot.width() - tooltip.width() - 6
+    x = max(view_left, min(x, max(view_left, right_limit)))
+    y = max(6, min(local.y() + 8, plot.height() - tooltip.height() - 6))
+    tooltip.move(x, y)
+    if not tooltip.isVisible():
+        tooltip.raise_()
+        tooltip.show()
+
+
 class MinuteUsageChart(QWidget):
     """当天 Token 分时图；只聚合展示，原始分钟数据保持不变。"""
 
@@ -1375,41 +1438,22 @@ class MinuteUsageChart(QWidget):
         chart_layout = QVBoxLayout(self.chart_container)
         chart_layout.setContentsMargins(0, 0, 0, 0)
         chart_layout.setSpacing(1)
-        self.plot = pg.PlotWidget(axisItems={"left": TokenAxis(orientation="left")})
-        self.plot.setStyleSheet("border: 0;")
-        self.plot.setMouseEnabled(x=True, y=False)
-        self.plot.hideButtons()
-        self.plot.setMenuEnabled(False)
-        self.plot.showGrid(x=False, y=True, alpha=0.14)
-        self.plot.setMinimumHeight(118)
+        self.plot = create_usage_plot()
         self.plot.getViewBox().setLimits(
             xMin=-0.5, xMax=1439.5, yMin=0, minXRange=1, maxXRange=1440
         )
-        self.plot.getAxis("left").setWidth(42)
-        self.plot.getAxis("left").setTickFont(QFont("Microsoft YaHei UI", 8))
-        self.plot.getAxis("bottom").setHeight(18)
-        self.plot.getAxis("bottom").setTickFont(QFont("Microsoft YaHei UI", 8))
         self.plot.getAxis("bottom").setTicks(
             [[(minute, f"{minute // 60:02d}:00") for minute in range(0, 1441, 60)]]
         )
         chart_layout.addWidget(self.plot, 1)
 
-        self.navigator = pg.PlotWidget()
-        self.navigator.setStyleSheet("border: 0;")
-        self.navigator.setFixedHeight(34)
-        self.navigator.setMouseEnabled(x=False, y=False)
-        self.navigator.hideButtons()
-        self.navigator.setMenuEnabled(False)
-        self.navigator.getAxis("left").hide()
-        self.navigator.getAxis("bottom").setHeight(15)
-        self.navigator.getAxis("bottom").setTickFont(QFont("Microsoft YaHei UI", 7))
+        self.navigator, self.region = create_usage_navigator()
         self.navigator.getAxis("bottom").setTicks(
             [[(minute, f"{minute // 60:02d}:00") for minute in range(0, 1441, 240)]]
         )
         self.navigator.getViewBox().setLimits(xMin=-0.5, xMax=1439.5, yMin=0)
-        self.region = pg.LinearRegionItem(values=(720, 960), movable=True)
+        self.region.setRegion((720, 960))
         self.region.sigRegionChanged.connect(self._on_region_changed)
-        self.navigator.addItem(self.region)
         chart_layout.addWidget(self.navigator)
         layout.addWidget(self.chart_container, 1)
         self.chart_container.hide()
@@ -1776,13 +1820,7 @@ class MinuteUsageChart(QWidget):
     def refresh_theme(self) -> None:
         tokens = current_theme()
         for widget in (self.plot, self.navigator):
-            _make_plot_background_transparent(widget)
-            for axis_name in ("left", "bottom"):
-                axis = widget.getAxis(axis_name)
-                axis.setTextPen(pg.mkPen(tokens.subtext))
-                border = QColor(tokens.border)
-                border.setAlpha(96)
-                axis.setPen(pg.mkPen(border))
+            refresh_usage_plot_theme(widget)
         colors = self._colors()
         for ((token_type, _label), color) in zip(self.SERIES, colors):
             bars = self._bars.get(token_type)
@@ -1903,16 +1941,7 @@ class MinuteUsageChart(QWidget):
             self._updating_region = False
 
     def _update_bar_width(self, low: float, high: float) -> None:
-        view_width = max(1.0, self.plot.getViewBox().width())
-        units_per_pixel = max(1.0, high - low) / view_width
-        target_pixels = min(
-            self.BAR_MAX_WIDTH_PX,
-            max(
-                self.BAR_MIN_WIDTH_PX,
-                0.7 / units_per_pixel,
-            ),
-        )
-        self._bar_width = min(0.84, target_pixels * units_per_pixel)
+        self._bar_width = adaptive_usage_bar_width(low, high, self.plot.getViewBox().width())
         for bars in self._bars.values():
             bars.setOpts(width=self._bar_width)
         if self._hover_bar is not None:
@@ -2028,22 +2057,7 @@ class MinuteUsageChart(QWidget):
             self._currency,
             self._model_names[bucket_index],
         )
-        tooltip_layout = self.hover_tooltip.layout()
-        if tooltip_layout is not None:
-            tooltip_layout.activate()
-        self.hover_tooltip.resize(self.hover_tooltip.sizeHint())
-        x = local.x() + 10
-        if x + self.hover_tooltip.width() > self.plot.width() - 6:
-            x = local.x() - self.hover_tooltip.width() - 10
-        view_left = self.plot.mapFromScene(
-            self.plot.getViewBox().sceneBoundingRect().topLeft()
-        ).x() + 6
-        right_limit = self.plot.width() - self.hover_tooltip.width() - 6
-        x = max(view_left, min(x, max(view_left, right_limit)))
-        y = max(6, min(local.y() + 8, self.plot.height() - self.hover_tooltip.height() - 6))
-        self.hover_tooltip.move(x, y)
-        self.hover_tooltip.raise_()
-        self.hover_tooltip.show()
+        show_usage_tooltip(self.plot, self.hover_tooltip, local)
 
     def _hide_hover(self) -> None:
         self.hover_tooltip.hide()

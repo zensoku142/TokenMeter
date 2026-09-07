@@ -993,6 +993,17 @@ def current_theme() -> ThemeTokens:
 APP_STYLE = build_app_style(DARK_THEME)
 
 
+def model_usage_color(model: str, *, single: bool = False) -> QColor:
+    tokens = current_theme()
+    if single:
+        return QColor(tokens.accent)
+    base = QColor(tokens.accent)
+    base_hue = base.hslHue() if base.hslHue() >= 0 else 345
+    stable = sum((index + 1) * ord(char) for index, char in enumerate(model))
+    hue = (base_hue + stable % 281) % 360
+    return QColor.fromHsl(hue, 150, 172 if tokens.name == "dark" else 116)
+
+
 _FLUENT_GLYPHS = {
     "settings": "\ue713",
     "refresh": "\ue72c",
@@ -1019,7 +1030,7 @@ def fluent_icon(
     active_color: str | None = None,
 ) -> QIcon:
     """Return a Windows Fluent line icon with consistent normal/hover states."""
-    if name == "views":
+    if name in {"views", "more"}:
         # 几何视图图标不依赖系统图标字体，与标题栏相同的颜色和笔画在所有机器上稳定显示。
         icon = QIcon()
         tokens = current_theme()
@@ -1029,10 +1040,15 @@ def fluent_icon(
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(QPen(QColor(color), 1.3))
-            cell = (size - 7) / 2
-            for x in (2, size / 2 + 1.5):
-                for y in (2, size / 2 + 1.5):
-                    painter.drawRoundedRect(QRectF(x, y, cell, cell), 1, 1)
+            if name == "more":
+                painter.setBrush(QColor(color))
+                for x in (size * 0.25, size * 0.5, size * 0.75):
+                    painter.drawEllipse(QPointF(x, size / 2), 1, 1)
+            else:
+                cell = (size - 7) / 2
+                for x in (2, size / 2 + 1.5):
+                    for y in (2, size / 2 + 1.5):
+                        painter.drawRoundedRect(QRectF(x, y, cell, cell), 1, 1)
             painter.end()
             icon.addPixmap(pixmap, mode)
         return icon

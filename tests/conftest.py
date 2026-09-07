@@ -9,10 +9,13 @@ from shiboken6 import ownedByPython
 @pytest.fixture(autouse=True)
 def isolate_native_credentials(monkeypatch, tmp_path):
     from config import credentials
+    from data import history
 
     # 项目直接调用 Win32 凭据 API，不受 PYTHON_KEYRING_BACKEND 控制；测试默认断开真实后端。
     # 凭据单元测试可显式注入假的 Win32 实现，普通测试遗漏 mock 时写入应失败而非改动用户密钥。
     monkeypatch.setattr(credentials, "_advapi32", None)
+    # 自动统计会写入可选本地快照；每个测试必须与用户的真实用量数据库隔离。
+    monkeypatch.setattr(history, "DB_PATH", tmp_path / "usage.db")
     # CLI 自动发现也只能看到临时目录；各账号用例再显式注入自己的登录文件。
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.delenv("CODEX_HOME", raising=False)
@@ -25,6 +28,10 @@ def cleanup_qt_widgets(isolate_native_credentials):
     app = QApplication.instance()
     existing = set(app.topLevelWidgets()) if app is not None else set()
     yield
+    from PySide6.QtCore import QThreadPool
+
+    # 等待本地扫描释放临时 DB，再撤销 fixture，避免回调写入恢复后的真实数据路径。
+    QThreadPool.globalInstance().waitForDone()
     app = QApplication.instance()
     if app is None:
         return
