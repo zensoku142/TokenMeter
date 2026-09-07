@@ -121,6 +121,16 @@ PROVIDER_MESSAGES = {
     "已连接": ("Connected", "已連線", "接続済み", "연결됨"),
     "已配置": ("Configured", "已設定", "設定済み", "설정됨"),
     "常用平台": ("Favorites", "常用平台", "お気に入り", "즐겨찾기"),
+    "收藏": ("Add to favorites", "收藏", "お気に入りに追加", "즐겨찾기에 추가"),
+    "取消收藏": ("Remove from favorites", "取消收藏", "お気に入りから削除", "즐겨찾기에서 제거"),
+    "已收藏 {provider}": (
+        "Added {provider} to favorites", "已收藏 {provider}",
+        "{provider} をお気に入りに追加しました", "{provider} 즐겨찾기에 추가됨",
+    ),
+    "已取消收藏 {provider}": (
+        "Removed {provider} from favorites", "已取消收藏 {provider}",
+        "{provider} をお気に入りから削除しました", "{provider} 즐겨찾기에서 제거됨",
+    ),
     "未配置": ("Not configured", "未設定", "未設定", "설정되지 않음"),
     "API 用量": ("API usage", "API 用量", "API 使用量", "API 사용량"),
     "AI 平台列表": ("AI provider list", "AI 平台清單", "AI プロバイダー一覧", "AI 공급업체 목록"),

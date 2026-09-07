@@ -81,6 +81,7 @@ def test_provider_picker_text_and_numbered_count_are_localized(monkeypatch, lang
         "全部平台", "已配置", "常用平台", "未配置", "API 用量", "AI 平台列表", "删除", "已移除",
         "没有匹配的平台，试试其他名称或查看全部平台",
         "Enter 切换 · Ctrl+D 收藏 · Esc 关闭",
+        "收藏", "取消收藏", "已收藏 {provider}", "已取消收藏 {provider}",
     )
     for source in sources:
         assert source in PROVIDER_MESSAGES

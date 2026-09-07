@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +49,14 @@ def pinned_provider_ids() -> list[str]:
 
 
 class _ProviderCardDelegate(QStyledItemDelegate):
+    hovered_pin = None
+    pressed_pin = None
+
+    @staticmethod
+    def pin_rect(rect):
+        # 绘制和命中检测共用 40px 热区，避免只有星形细线附近才能明确操作。
+        return QRectF(rect).adjusted(rect.width() - 44, 6, -4, -rect.height() + 46)
+
     def paint(self, painter, option, index) -> None:
         provider_id, connected, pinned = index.data(Qt.ItemDataRole.UserRole)
         tokens = current_theme()
@@ -66,14 +75,22 @@ class _ProviderCardDelegate(QStyledItemDelegate):
         icon_rect.setSize(QSize(26, 26))
         provider_icon(provider_id, 26).paint(painter, icon_rect)
         # 收藏采用矢量星形；品牌标记始终来自独立的品牌 SVG 资产。
-        center = QPointF(rect.right() - 19, rect.top() + 22)
+        star_rect = self.pin_rect(option.rect)
+        hovered_pin = self.hovered_pin == provider_id
+        pressed_pin = hovered_pin and self.pressed_pin == provider_id
+        if pinned or hovered_pin:
+            painter.setPen(QPen(QColor(tokens.accent), 1) if hovered_pin else Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(tokens.accent if pressed_pin else tokens.accent_soft))
+            painter.drawRoundedRect(star_rect.adjusted(3, 3, -3, -3), 7, 7)
+        center = star_rect.center()
         points = QPolygonF([
             QPointF(center.x() + (7 if n % 2 == 0 else 3.1) * cos(-pi / 2 + n * pi / 5),
                     center.y() + (7 if n % 2 == 0 else 3.1) * sin(-pi / 2 + n * pi / 5))
             for n in range(10)
         ])
-        painter.setPen(QPen(QColor(tokens.accent if pinned else tokens.subtext), 1.1))
-        painter.setBrush(QColor(tokens.accent) if pinned else Qt.BrushStyle.NoBrush)
+        star_color = QColor(tokens.window if pressed_pin else tokens.accent if pinned or hovered_pin else tokens.subtext)
+        painter.setPen(QPen(star_color, 1.4))
+        painter.setBrush(star_color if pinned else Qt.BrushStyle.NoBrush)
         painter.drawPolygon(points)
         painter.setFont(option.font)
         painter.setPen(QColor(tokens.value))
@@ -196,6 +213,9 @@ class ProviderPicker(QComboBox):
         self._populate()
 
     def _populate(self, *_args) -> None:
+        self.grid.itemDelegate().hovered_pin = None
+        self.grid.itemDelegate().pressed_pin = None
+        self._grid_viewport.unsetCursor()
         query = self.search.text().strip().casefold()
         if query and self._filter != "all":
             # 搜索面向所有可接入平台，不能因默认的已配置筛选而隐藏用户正在找的品牌。
@@ -352,7 +372,10 @@ class ProviderPicker(QComboBox):
         if self._pins != pins:
             bind_text(self.hint, "常用平台保存失败，请检查数据目录")
             return
-        bind_text(self.hint, "Enter 切换 · Ctrl+D 收藏 · Esc 关闭")
+        bind_text(self.hint, lambda: tr(
+            "已收藏 {provider}" if provider_id in pins else "已取消收藏 {provider}",
+            provider=provider_short_name(provider_id),
+        ))
         self.pins_changed.emit()
 
     def eventFilter(self, watched, event) -> bool:
@@ -370,16 +393,39 @@ class ProviderPicker(QComboBox):
         if watched is self._grid_viewport and event.type() == QEvent.Type.Resize:
             self.grid.doItemsLayout()
             self._position_remove_buttons()
+        if watched is self._grid_viewport and event.type() == QEvent.Type.Leave:
+            self.grid.itemDelegate().hovered_pin = None
+            self._grid_viewport.unsetCursor()
+            self._grid_viewport.update()
         if watched is self._grid_viewport and event.type() in (
+            QEvent.Type.MouseMove, QEvent.Type.ToolTip,
             QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
-        ) and event.button() == Qt.MouseButton.LeftButton:
-            item = self.grid.itemAt(event.position().toPoint())
-            if item is not None:
-                rect = self.grid.visualItemRect(item)
-                star = rect.adjusted(rect.width() - 44, 5, -4, -rect.height() + 44)
-                if star.contains(event.position().toPoint()):
-                    if event.type() == QEvent.Type.MouseButtonRelease:
+        ):
+            position = event.pos() if event.type() == QEvent.Type.ToolTip else event.position().toPoint()
+            item = self.grid.itemAt(position)
+            delegate = self.grid.itemDelegate()
+            over_pin = item is not None and delegate.pin_rect(self.grid.visualItemRect(item)).contains(position)
+            provider_id = item.data(Qt.ItemDataRole.UserRole)[0] if over_pin else None
+            delegate.hovered_pin = provider_id
+            self._grid_viewport.setCursor(Qt.CursorShape.PointingHandCursor if over_pin else Qt.CursorShape.ArrowCursor)
+            self._grid_viewport.update()
+            if event.type() == QEvent.Type.ToolTip and over_pin:
+                label = "请先在全部平台中重新启用此平台。" if provider_id in self._disabled else "取消收藏" if provider_id in self._pins else "收藏"
+                QToolTip.showText(event.globalPos(), tr(label), self._grid_viewport)
+                return True
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                delegate.pressed_pin = provider_id
+                if over_pin:
+                    return True
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                pressed_pin = delegate.pressed_pin
+                delegate.pressed_pin = None
+                # 必须在同一收藏热区按下并松开；拖出按钮时取消，不能误收藏或切换平台。
+                if pressed_pin is not None:
+                    if pressed_pin == provider_id:
                         self._toggle_pin(item)
+                    return True
+                if over_pin:
                     return True
         if event.type() == QEvent.Type.KeyPress:
             if (watched is self.grid or watched in self.remove_buttons.values()) and event.key() == Qt.Key.Key_Delete:

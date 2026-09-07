@@ -238,6 +238,57 @@ def test_star_click_toggles_favorite_without_activating_card(picker, picker_stat
     assert "elevenlabs" in state["pinned_providers"]
     assert pins_changed.count() == 1 and activated.count() == 0
     assert picker.currentData() == "codex" and picker.popup.isVisible()
+    assert picker.hint.text() == "已收藏 ElevenLabs"
+    QTest.mouseClick(picker.grid.viewport(), Qt.MouseButton.LeftButton, pos=star_center)
+    assert picker.hint.text() == "已取消收藏 ElevenLabs"
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_star_hover_press_and_drag_out_feedback(picker, picker_state, theme, tmp_path):
+    configure_theme(APP, theme)
+    open_all(picker)
+    picker.search.setText("elevenlabs")
+    APP.processEvents()
+    viewport = picker.grid.viewport()
+    rect = picker.grid.visualItemRect(picker.grid.item(0))
+    star_center = QPoint(rect.right() - 23, rect.top() + 26)
+    QTest.mouseMove(viewport, rect.center())
+    normal = viewport.grab().toImage()
+    QTest.mouseMove(viewport, star_center)
+    hovered = viewport.grab().toImage()
+    assert viewport.cursor().shape() == Qt.CursorShape.PointingHandCursor
+    assert hovered != normal
+    QTest.mousePress(viewport, Qt.MouseButton.LeftButton, pos=star_center)
+    pressed = viewport.grab().toImage()
+    assert pressed != hovered
+    picker.popup.grab().save(str(tmp_path / f"favorite-{theme}-pressed.png"))
+    QTest.mouseMove(viewport, rect.center())
+    QTest.mouseRelease(viewport, Qt.MouseButton.LeftButton, pos=rect.center())
+    assert "elevenlabs" not in provider_picker.pinned_provider_ids()
+    assert picker.currentData() == "codex" and picker.popup.isVisible()
+    assert viewport.grab().toImage() == normal
+
+
+def test_star_release_without_press_does_not_toggle(picker):
+    open_all(picker)
+    picker.search.setText("elevenlabs")
+    rect = picker.grid.visualItemRect(picker.grid.item(0))
+    QTest.mouseRelease(picker.grid.viewport(), Qt.MouseButton.LeftButton,
+                       pos=QPoint(rect.right() - 23, rect.top() + 26))
+    assert "elevenlabs" not in provider_picker.pinned_provider_ids()
+
+
+def test_disabled_star_explains_why_it_cannot_be_pinned(picker, monkeypatch):
+    monkeypatch.setattr(provider_picker.config_manager, "get",
+                        lambda key, default=None: ["elevenlabs"] if key == "DISABLED_PROVIDER_IDS" else default)
+    open_all(picker)
+    picker.search.setText("elevenlabs")
+    rect = picker.grid.visualItemRect(picker.grid.item(0))
+    QTest.mouseClick(picker.grid.viewport(), Qt.MouseButton.LeftButton,
+                     pos=QPoint(rect.right() - 23, rect.top() + 26))
+    assert "elevenlabs" not in provider_picker.pinned_provider_ids()
+    assert "重新启用" in picker.hint.text()
+    assert picker.popup.isVisible()
 
 
 def test_shortcuts_show_three_pins_and_emit_correct_id(picker_state):
