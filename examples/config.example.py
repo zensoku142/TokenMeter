@@ -14,6 +14,9 @@ DEEPSEEK_PEAK_PERIOD_1_START = "09:00"
 DEEPSEEK_PEAK_PERIOD_1_END = "12:00"
 DEEPSEEK_PEAK_PERIOD_2_START = "14:00"
 DEEPSEEK_PEAK_PERIOD_2_END = "18:00"
+DEEPSEEK_PEAK_WEEKDAYS = [0, 1, 2, 3, 4]  # 周一至周日对应 0 至 6
+# 周末（包括调休上班的周末）自动按空闲时段；法定节假日可填写日期或日期范围。
+DEEPSEEK_OFFPEAK_DATES = "2026-01-01..2026-01-03,2026-02-15..2026-02-23"
 
 # 小米 MiMo 控制台凭据
 MIMO_COOKIE = ""  # 通常包含 serviceToken、userId、slh、ph

@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from api.deepseek_pricing import configured_periods, parse_time_text
+from api.deepseek_pricing import (
+    configured_periods,
+    normalize_offpeak_dates,
+    parse_time_text,
+)
 from api.http import is_https_url
 from config.defaults import DEFAULT_CONFIG, FIELD_META, OFFICIAL_HOSTS, PROVIDER_IDS, SECRET_KEYS
 
@@ -78,8 +82,19 @@ def validate_value(key: str, value: Any) -> Any:
             if provider_id not in normalized_providers:
                 normalized_providers.append(provider_id)
         return normalized_providers
+    if kind == "weekday_list":
+        if isinstance(value, str):
+            value = [item.strip() for item in value.split(",") if item.strip()]
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"{key} 必须是星期列表")
+        weekdays = sorted({int(item) for item in value})
+        if not weekdays or weekdays[0] < 0 or weekdays[-1] > 6:
+            raise ValueError(f"{key} 必须至少包含周一至周日中的一天")
+        return weekdays
     if kind == "time":
         return parse_time_text(value).strftime("%H:%M")
+    if kind == "offpeak_dates":
+        return normalize_offpeak_dates(value)
     return str(value)
 
 

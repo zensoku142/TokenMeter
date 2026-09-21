@@ -275,6 +275,34 @@ def test_pet_page_and_version_state_follow_language(isolated_language):
             window.close()
 
 
+def test_deepseek_peak_schedule_controls_follow_language(isolated_language):
+    window = SettingsWindow()
+    expected = {
+        "en": ("Peak days", "Monday", "Add range", "Load official 2026 holidays"),
+        "zh-tw": ("尖峰適用日", "週一", "新增範圍", "載入 2026 官方節假日"),
+        "ja": ("ピーク適用日", "月曜日", "範囲を追加", "2026年の公式祝日を読み込む"),
+        "ko": ("피크 적용 요일", "월요일", "범위 추가", "2026년 공식 공휴일 불러오기"),
+    }
+    try:
+        for language, texts in expected.items():
+            isolated_language.set_language(language)
+            assert window.deepseek_peak_weekday_label.text() == texts[0]
+            assert window.deepseek_peak_weekday_checks[0].text() == texts[1]
+            assert window.deepseek_offpeak_add_button.text() == texts[2]
+            assert window.deepseek_offpeak_official_button.text() == texts[3]
+            assert "周一至周五" not in window.deepseek_peak_hint.text()
+        isolated_language.set_language("en")
+        translated = tr(
+            "北京时间高峰日：周一、周二、周三；高峰时段：09:00–12:00、14:00–18:00"
+        )
+        assert translated == (
+            "Peak days (Beijing time): Monday, Tuesday, Wednesday; "
+            "peak periods: 09:00–12:00, 14:00–18:00"
+        )
+    finally:
+        window.close()
+
+
 def test_language_switch_failure_restores_selector(isolated_language):
     window = SettingsWindow()
     with patch.object(config_manager, "save_ui_language", side_effect=OSError("failure")):

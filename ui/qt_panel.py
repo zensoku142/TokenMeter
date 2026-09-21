@@ -3267,6 +3267,9 @@ class MainPanel(QFrame):
                 for window in data.quota_windows
                 if not (provider_id == "codex" and is_codex_spark_quota(window.title))
             ]
+            if provider_id in {"codex", "claude"}:
+                # 5 小时窗口决定短期内能否继续使用，应固定放在主卡片；接口调整窗口顺序时也不能降到小卡片。
+                visible_windows.sort(key=lambda window: window.window_minutes != 300)
             for window in visible_windows[:3]:
                 used = quota_used_percent(window.used_percent)
                 reset_text = (
@@ -3275,7 +3278,7 @@ class MainPanel(QFrame):
                     else format_reset_countdown(window.resets_at)
                 )
                 detail_parts = [
-                    "--" if used is None or loading else f"剩余 {max(0, 100 - used):.0f}%",
+                    "--" if used is None or loading else f"已用 {used:.0f}%",
                     reset_text,
                 ]
                 if window.detail:
@@ -3283,7 +3286,7 @@ class MainPanel(QFrame):
                 summaries.append(
                     (
                         window.title,
-                        "--" if loading or used is None else f"已用 {used:.0f}%",
+                        "--" if loading or used is None else f"剩余 {max(0, 100 - used):.0f}%",
                         " · ".join(detail_parts),
                     )
                 )

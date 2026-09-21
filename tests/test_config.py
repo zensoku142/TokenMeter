@@ -96,6 +96,8 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(defaults["DEEPSEEK_PEAK_PRICING_ENABLED"])
         self.assertEqual(defaults["DEEPSEEK_PEAK_PERIOD_1_START"], "09:00")
         self.assertEqual(defaults["DEEPSEEK_PEAK_PERIOD_2_END"], "18:00")
+        self.assertEqual(defaults["DEEPSEEK_PEAK_WEEKDAYS"], [0, 1, 2, 3, 4])
+        self.assertIn("2026-10-01..2026-10-07", defaults["DEEPSEEK_OFFPEAK_DATES"])
         enabled = config_manager.validate_config(
             {"DEEPSEEK_PEAK_PRICING_ENABLED": "true"}
         )
@@ -124,6 +126,16 @@ class ConfigTests(unittest.TestCase):
             }
         )
         self.assertEqual(adjacent["DEEPSEEK_PEAK_PERIOD_2_START"], "14:00")
+        normalized = config_manager.validate_config(
+            {"DEEPSEEK_OFFPEAK_DATES": "2026-05-01 至 2026-05-03,2026-05-02"}
+        )
+        self.assertEqual(
+            normalized["DEEPSEEK_OFFPEAK_DATES"], "2026-05-01..2026-05-03"
+        )
+        with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+            config_manager.validate_config({"DEEPSEEK_OFFPEAK_DATES": "2026/05/01"})
+        with self.assertRaisesRegex(ValueError, "至少包含"):
+            config_manager.validate_config({"DEEPSEEK_PEAK_WEEKDAYS": []})
 
     def test_data_directory_migration_copies_all_entries_and_keeps_source(self):
         temp_root = Path.cwd() / ".test-appdata" / "tmp"

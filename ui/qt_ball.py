@@ -337,7 +337,11 @@ class FloatingUsageBall(QWidget):
         self._quota_remaining: float | None = None
         self._quota_value_text = ""
         self._quota_reset_text = ""
+        self._quota_reset_clock = ""
         self._quota_title = "周额度"
+        self._quota_secondary_remaining: float | None = None
+        self._quota_secondary_title = ""
+        self._quota_secondary_reset_text = ""
         self._wave_phase = 0.0
         self._liquid_surface = LiquidSurfaceState()
         self._pointer_last_local: QPointF | None = None
@@ -615,6 +619,10 @@ class FloatingUsageBall(QWidget):
         title: str = "周额度",
         *,
         value_text: str = "",
+        reset_clock: str = "",
+        secondary_remaining_percent: float | None = None,
+        secondary_title: str = "",
+        secondary_reset_text: str = "",
     ) -> None:
         try:
             raw_remaining = float(remaining_percent) if remaining_percent is not None else float("nan")
@@ -626,23 +634,62 @@ class FloatingUsageBall(QWidget):
             )
         except (ValueError, TypeError, OverflowError):
             remaining = None
+        try:
+            raw_secondary = (
+                float(secondary_remaining_percent)
+                if secondary_remaining_percent is not None
+                else float("nan")
+            )
+            secondary_remaining = (
+                max(0.0, min(100.0, raw_secondary))
+                if math.isfinite(raw_secondary)
+                and not isinstance(secondary_remaining_percent, bool)
+                else None
+            )
+        except (ValueError, TypeError, OverflowError):
+            secondary_remaining = None
         compact_reset = self._compact_reset_text(reset_text)
+        reset_clock = str(reset_clock).strip()[:5]
         compact_title = str(title).replace("每周额度", "周额度")[:8] or "周额度"
+        compact_secondary_title = str(secondary_title).replace("每周额度", "周额度")[:8]
+        secondary_reset_text = str(secondary_reset_text).strip()
         # 文本额度仅在没有百分比时显示，保持液面为空，避免把“不限量”伪装成满额。
         quota_text = str(value_text).strip() if remaining is None else ""
-        state = (remaining, compact_reset, compact_title, quota_text)
+        state = (
+            remaining,
+            compact_reset,
+            reset_clock,
+            compact_title,
+            quota_text,
+            secondary_remaining,
+            compact_secondary_title,
+            secondary_reset_text,
+        )
         if self._quota_mode and state == (
             self._quota_remaining,
             self._quota_reset_text,
+            self._quota_reset_clock,
             self._quota_title,
             self._quota_value_text,
+            self._quota_secondary_remaining,
+            self._quota_secondary_title,
+            self._quota_secondary_reset_text,
         ):
             # 相同读数仍可能出现在动画被中断后；可见时恢复定时器，不重复重置物理状态。
             if self.isVisible() and remaining is not None and remaining > 0:
                 self._ensure_animation()
             return
         self._quota_mode = True
-        self._quota_remaining, self._quota_reset_text, self._quota_title, self._quota_value_text = state
+        (
+            self._quota_remaining,
+            self._quota_reset_text,
+            self._quota_reset_clock,
+            self._quota_title,
+            self._quota_value_text,
+            self._quota_secondary_remaining,
+            self._quota_secondary_title,
+            self._quota_secondary_reset_text,
+        ) = state
         if remaining is None or remaining <= 0:
             # 空额度停止动画并清掉动量，避免下次恢复额度时复活旧余波。
             self._liquid_surface.reset()
@@ -654,11 +701,53 @@ class FloatingUsageBall(QWidget):
                 CODEX_IDLE_SPEED
                 if self.realistic_motion_enabled
                 else self._idle_flow_speed(remaining / 100)
-            )
+        )
         remaining_text = quota_text or ("未知" if remaining is None else f"{remaining:.0f}%")
         bind_text(self, compact_title, method='setAccessibleName')
-        bind_text(self, remaining_text, method='setAccessibleDescription')
-        bind_text(self, remaining_text, method='setToolTip')
+
+        def accessible_description() -> str:
+            primary_status = tr(remaining_text)
+            if not compact_secondary_title:
+                return primary_status
+            secondary_status = (
+                tr("未知")
+                if secondary_remaining is None
+                else f"{secondary_remaining:g}%"
+            )
+            return f"{primary_status} · {tr(compact_secondary_title)} {secondary_status}"
+
+        bind_text(self, accessible_description, method='setAccessibleDescription')
+        # 球面空间只保留百分比；完整窗口名称和重置时间放进悬浮提示，避免短周期信息被截断。
+        def tooltip() -> str:
+            quota_status = (
+                tr(quota_text)
+                if quota_text
+                else tr("未知") if remaining is None
+                else tr("剩余 {remaining}%", remaining=f"{remaining:g}")
+            )
+            primary_line = " · ".join(
+                filter(None, (tr(compact_title), quota_status, reset_clock or tr(reset_text)))
+            )
+            if not compact_secondary_title:
+                return primary_line
+            secondary_status = (
+                tr("未知")
+                if secondary_remaining is None
+                else tr("剩余 {remaining}%", remaining=f"{secondary_remaining:g}")
+            )
+            secondary_line = " · ".join(
+                filter(
+                    None,
+                    (
+                        tr(compact_secondary_title),
+                        secondary_status,
+                        tr(secondary_reset_text),
+                    ),
+                )
+            )
+            return f"{primary_line}\n{secondary_line}"
+
+        bind_text(self, tooltip, method='setToolTip')
         if self.isVisible():
             if remaining is not None and remaining > 0:
                 self._ensure_animation()
@@ -673,6 +762,10 @@ class FloatingUsageBall(QWidget):
         self._quota_remaining = None
         self._quota_value_text = ""
         self._quota_reset_text = ""
+        self._quota_reset_clock = ""
+        self._quota_secondary_remaining = None
+        self._quota_secondary_title = ""
+        self._quota_secondary_reset_text = ""
         self._wave_timer.stop()
         self._liquid_surface.reset()
         self._pointer_last_local = None
@@ -1451,6 +1544,48 @@ class FloatingUsageBall(QWidget):
         painter.drawPath(self._glass_highlight_path)
         painter.restore()
 
+    def _paint_secondary_quota_ring(
+        self, painter: QPainter, theme, ball_radius: float
+    ) -> None:
+        if self._quota_secondary_remaining is None:
+            return
+        # 内层水位已经承载短期额度；周额度使用独立外环，避免在小球内继续堆叠数字。
+        ring_rect = QRectF(
+            DESIGN_SIZE / 2 - ball_radius + 2.5,
+            DESIGN_SIZE / 2 - ball_radius + 2.5,
+            (ball_radius - 2.5) * 2,
+            (ball_radius - 2.5) * 2,
+        )
+        background = QColor(theme.heat[1])
+        background.setAlpha(150)
+        painter.save()
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(
+            QPen(
+                background,
+                4.0,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        painter.drawEllipse(ring_rect)
+
+        # 与活动热力图共用强调色派生阶梯，并选最高色的前一档；自定义球体颜色时外环会同步变化且不会抢眼。
+        progress = QColor(theme.heat[-2])
+        progress.setAlpha(225)
+        painter.setPen(
+            QPen(
+                progress,
+                4.0,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        span = -round(360 * 16 * self._quota_secondary_remaining / 100)
+        if span:
+            painter.drawArc(ring_rect, 90 * 16, span)
+        painter.restore()
+
     def _paint_quota(self, painter: QPainter, theme, ball_radius: float) -> None:
         inner, clip = self._quota_geometry(ball_radius)
         water_path = QPainterPath()
@@ -1541,51 +1676,44 @@ class FloatingUsageBall(QWidget):
             value_font = QFont("Microsoft YaHei UI", value_size, QFont.Weight.Bold)
             self._quota_font_cache[value_size] = value_font
         painter.setFont(value_font)
+        display_value_font = value_font
         if self._quota_value_text:
             # 翻译后的 Unlimited 等文本比数字宽，按实际字宽适配现有绘制区域。
             text_width = painter.fontMetrics().horizontalAdvance(tr(percentage))
             if text_width > 96:
-                fitted_font = QFont(value_font)
-                fitted_font.setPointSizeF(value_font.pointSizeF() * 96 / text_width)
-                painter.setFont(fitted_font)
-        value_rect = QRectF(8, 36, 104, 48)
+                display_value_font = QFont(value_font)
+                display_value_font.setPointSizeF(value_font.pointSizeF() * 96 / text_width)
+        value_rect = QRectF(8, 29, 104, 48)
+        reset_rect = QRectF(18, 72, 84, 19)
+        reset_font = QFont("Microsoft YaHei UI", 10, QFont.Weight.DemiBold)
         empty_shadow = QColor("#000000" if theme.name == "dark" else "#FFFFFF")
         empty_shadow.setAlpha(130)
         water_shadow = QColor("#000000")
         water_shadow.setAlpha(145)
 
+        def paint_labels(color: QColor, shadow: QColor) -> None:
+            painter.setFont(display_value_font)
+            self._paint_centered_text(painter, value_rect, percentage, color, shadow)
+            if self._quota_reset_clock:
+                painter.setFont(reset_font)
+                self._paint_centered_text(
+                    painter, reset_rect, self._quota_reset_clock, color, shadow
+                )
+
         if water_path.isEmpty():
-            self._paint_centered_text(
-                painter,
-                value_rect,
-                percentage,
-                QColor(theme.value),
-                empty_shadow,
-            )
+            paint_labels(QColor(theme.value), empty_shadow)
             return
 
         # 同一数字按空气和液体区域各绘制一次，液面穿过文字时仍保持逐像素对比度。
         empty_path = clip.subtracted(water_path)
         painter.save()
         painter.setClipPath(empty_path)
-        self._paint_centered_text(
-            painter,
-            value_rect,
-            percentage,
-            QColor(theme.value),
-            empty_shadow,
-        )
+        paint_labels(QColor(theme.value), empty_shadow)
         painter.restore()
 
         painter.save()
         painter.setClipPath(water_path.intersected(clip))
-        self._paint_centered_text(
-            painter,
-            value_rect,
-            percentage,
-            QColor("#FFFFFF"),
-            water_shadow,
-        )
+        paint_labels(QColor("#FFFFFF"), water_shadow)
         painter.restore()
 
     def paintEvent(self, _event) -> None:
@@ -1659,6 +1787,7 @@ class FloatingUsageBall(QWidget):
         painter.drawEllipse(center, ball_radius, ball_radius)
 
         if self._quota_mode:
+            self._paint_secondary_quota_ring(painter, theme, ball_radius)
             self._paint_quota(painter, theme, ball_radius)
             self._paint_glass_highlight(painter)
         else:

@@ -56,6 +56,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "DEEPSEEK_PEAK_PERIOD_1_END": "12:00",
     "DEEPSEEK_PEAK_PERIOD_2_START": "14:00",
     "DEEPSEEK_PEAK_PERIOD_2_END": "18:00",
+    "DEEPSEEK_PEAK_WEEKDAYS": [0, 1, 2, 3, 4],
+    # 国务院每年公布的放假日期需要按年维护；设置页允许用户在新年度安排公布后直接补充。
+    "DEEPSEEK_OFFPEAK_DATES": (
+        "2026-01-01..2026-01-03,2026-02-15..2026-02-23,"
+        "2026-04-04..2026-04-06,2026-05-01..2026-05-05,"
+        "2026-06-19..2026-06-21,2026-09-25..2026-09-27,"
+        "2026-10-01..2026-10-07"
+    ),
     "MIMO_COOKIE": "",
     "MIMO_API_PLATFORM_PH": "",
     "MIMO_API_KEY": "",
@@ -134,6 +142,8 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "DEEPSEEK_PEAK_PERIOD_1_END": {"kind": "time"},
     "DEEPSEEK_PEAK_PERIOD_2_START": {"kind": "time"},
     "DEEPSEEK_PEAK_PERIOD_2_END": {"kind": "time"},
+    "DEEPSEEK_PEAK_WEEKDAYS": {"kind": "weekday_list"},
+    "DEEPSEEK_OFFPEAK_DATES": {"kind": "offpeak_dates"},
     "WIDGET_COMPACT_SIZE": {"kind": "int", "min": 88, "max": 124},
     "WIDGET_EXPANDED_SIZE": {"kind": "tuple_int"},
     "BG_COLOR": {"kind": "color"},

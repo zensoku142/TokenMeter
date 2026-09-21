@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStyle,
+    QStyleOptionButton,
     QStyleOptionFrame,
     QToolButton,
     QWidget,
@@ -498,9 +499,9 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     assert APP.isEffectEnabled(Qt.UIEffect.UI_AnimateCombo) == combo_animation_enabled
     panel.provider_quick_combo.hidePopup()
     assert panel.today_card.title_label.text() == "每周额度"
-    assert panel.today_card.value.text() == "已用 25%"
+    assert panel.today_card.value.text() == "剩余 75%"
     assert not panel.today_card.detail.isHidden()
-    assert "剩余 75%" in panel.today_card.detail.text()
+    assert "已用 25%" in panel.today_card.detail.text()
     assert "8月20日 11:58重置" in panel.today_card.detail.text()
     assert panel.balance_card.title_label.text() == "可用 Credits"
     assert panel.balance_card.value.text() == "12.5"
@@ -535,6 +536,38 @@ def test_panel_quick_switches_provider_and_renders_subscription_quota():
     panel.provider_quick_combo.activated.emit(mimo_index)
 
     assert selected_providers == ["mimo"]
+    panel.close()
+
+
+@pytest.mark.parametrize(
+    "provider_id, provider_name", [("codex", "Codex"), ("claude", "Claude")]
+)
+def test_short_subscription_window_is_the_primary_summary(
+    provider_id, provider_name
+):
+    panel = MainPanel()
+    windows = [
+        QuotaWindow("weekly", "每周额度", 20, window_minutes=10_080),
+        QuotaWindow("five-hour", "5 小时额度", 35, window_minutes=300),
+    ]
+    data = sample_data()
+    data.quota_windows = windows
+    data.account_plan = "pro"
+    data.per_provider = [
+        PerProviderData(
+            provider_id,
+            provider_name,
+            quota_windows=list(windows),
+            account_plan="pro",
+        )
+    ]
+
+    panel.update_data(data)
+
+    assert panel.today_card.title_label.text() == "5 小时额度"
+    assert panel.today_card.value.text() == "剩余 65%"
+    assert "已用 35%" in panel.today_card.detail.text()
+    assert panel.balance_card.title_label.text() == "每周额度"
     panel.close()
 
 
@@ -580,8 +613,8 @@ def test_cursor_uses_existing_quota_panel_positions_and_empty_activity_states():
     assert panel.provider_quick_combo.currentData() == "cursor"
     assert panel.provider_quick_combo.size() == QSize(150, 28)
     assert panel.today_card.title_label.text() == "每月额度"
-    assert panel.today_card.value.text() == "已用 42%"
-    assert "剩余 58%" in panel.today_card.detail.text()
+    assert panel.today_card.value.text() == "剩余 58%"
+    assert "已用 42%" in panel.today_card.detail.text()
     assert panel.balance_card.title_label.text() == "套餐用量"
     assert panel.balance_card.value.text() == "$8.40 / $20.00"
     assert panel.month_card.title_label.text() == "额外消费"
@@ -848,12 +881,21 @@ def test_codex_ball_never_falls_back_to_currency_when_quota_is_unavailable():
 
 def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     reset = datetime(2026, 8, 20, 3, 58, tzinfo=timezone.utc)
-    window = QuotaWindow("codex-weekly", "每周额度", 25, resets_at=reset)
+    windows = [
+        QuotaWindow(
+            "codex-weekly", "每周额度", 10,
+            resets_at=reset + timedelta(days=2), window_minutes=10_080,
+        ),
+        QuotaWindow(
+            "codex-five-hour", "5 小时额度", 25,
+            resets_at=reset, window_minutes=300,
+        ),
+    ]
     data = TokenData(
         status="ok",
-        quota_windows=[window],
+        quota_windows=windows,
         per_provider=[
-            PerProviderData("codex", "Codex", quota_windows=[window], status="ok")
+            PerProviderData("codex", "Codex", quota_windows=windows, status="ok")
         ],
     )
     with patch("ui.qt_widget.FloatingWidget.refresh"):
@@ -864,9 +906,16 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
 
     assert widget.ball._quota_mode
     assert widget.ball._quota_remaining == 75
-    assert widget.ball._quota_title == "周额度"
-    assert widget.ball._quota_reset_text == "8月20日11:58"
-    assert widget.ball.accessibleDescription() == "75%"
+    assert widget.ball._quota_title == "5 小时额度"
+    assert widget.ball._quota_reset_text == "11:58"
+    assert widget.ball._quota_reset_clock == "11:58"
+    assert widget.ball._quota_secondary_remaining == 90
+    assert widget.ball._quota_secondary_title == "周额度"
+    assert widget.ball.accessibleDescription() == "75% · 周额度 90%"
+    assert widget.ball.toolTip() == (
+        "5 小时额度 · 剩余 75% · 11:58\n"
+        "周额度 · 剩余 90% · 08-22 11:58"
+    )
 
     widget._data = sample_data()
     widget._apply_update()
@@ -3542,6 +3591,8 @@ def test_settings_exposes_deepseek_peak_pricing_and_keeps_unsaved_times():
         "DEEPSEEK_PEAK_PERIOD_1_END": "12:00",
         "DEEPSEEK_PEAK_PERIOD_2_START": "14:00",
         "DEEPSEEK_PEAK_PERIOD_2_END": "18:00",
+        "DEEPSEEK_PEAK_WEEKDAYS": [0, 1, 2, 3, 4],
+        "DEEPSEEK_OFFPEAK_DATES": "2026-10-01..2026-10-07",
     }
     with (
         patch("ui.qt_settings.config_manager.load_config", return_value=values),
@@ -3550,6 +3601,13 @@ def test_settings_exposes_deepseek_peak_pricing_and_keeps_unsaved_times():
         window = SettingsWindow()
         assert not window.deepseek_peak_pricing_card.isHidden()
         assert window.deepseek_peak_period_1_start.isEnabled()
+        assert window.deepseek_offpeak_dates.isEnabled()
+        assert [check.isChecked() for check in window.deepseek_peak_weekday_checks] == [
+            True, True, True, True, True, False, False
+        ]
+        window.deepseek_offpeak_start_date.setDate(QDate(2026, 12, 1))
+        window.deepseek_offpeak_end_date.setDate(QDate(2026, 12, 3))
+        window.deepseek_offpeak_add_button.click()
         window.deepseek_peak_period_1_start.setTime(QTime(8, 30))
 
         mimo_index = window.provider_combo.findData("mimo")
@@ -3562,8 +3620,12 @@ def test_settings_exposes_deepseek_peak_pricing_and_keeps_unsaved_times():
         saved = window._values()
         assert saved["DEEPSEEK_PEAK_PRICING_ENABLED"] is True
         assert saved["DEEPSEEK_PEAK_PERIOD_1_START"] == "08:30"
+        assert "2026-10-01..2026-10-07" in saved["DEEPSEEK_OFFPEAK_DATES"]
+        assert "2026-12-01..2026-12-03" in saved["DEEPSEEK_OFFPEAK_DATES"]
+        assert saved["DEEPSEEK_PEAK_WEEKDAYS"] == [0, 1, 2, 3, 4]
         window.deepseek_peak_pricing_enabled.setChecked(False)
         assert not window.deepseek_peak_period_1_start.isEnabled()
+        assert not window.deepseek_offpeak_dates.isEnabled()
         assert window._values()["DEEPSEEK_PEAK_PRICING_ENABLED"] is False
         window.close()
 
@@ -3607,7 +3669,15 @@ def test_ball_peak_highlight_enhances_glow_without_pricing_text():
 def test_codex_water_ball_renders_quota_level_in_dark_and_light_themes(qtbot):
     controller = configure_theme(APP, "dark")
     ball = FloatingUsageBall(88)
-    ball.set_quota_state(72, "2 天 8 小时后重置", "每周额度")
+    ball.set_quota_state(
+        72,
+        "2 天 8 小时后重置",
+        "5 小时额度",
+        reset_clock="14:30",
+        secondary_remaining_percent=64,
+        secondary_title="每周额度",
+        secondary_reset_text="09-24 08:00",
+    )
     ball.show()
     APP.processEvents()
     dark_image = ball.grab().toImage()
@@ -3628,8 +3698,13 @@ def test_codex_water_ball_renders_quota_level_in_dark_and_light_themes(qtbot):
         assert dark_water.blue() > dark_water.red()
         assert dark_water != dark_empty
         assert ball._quota_reset_text == "2天 8小时后重置"
-        assert ball.toolTip() == "72%"
-        assert ball.accessibleDescription() == "72%"
+        assert ball._quota_reset_clock == "14:30"
+        assert ball._quota_secondary_remaining == 64
+        assert ball.toolTip() == (
+            "5 小时额度 · 剩余 72% · 14:30\n"
+            "周额度 · 剩余 64% · 09-24 08:00"
+        )
+        assert ball.accessibleDescription() == "72% · 周额度 64%"
 
         controller.set_mode("light")
         APP.processEvents()
@@ -4756,6 +4831,70 @@ def test_settings_quota_threshold_has_room_for_complete_percentage(mode):
         for value in (spin.minimum(), 10, spin.maximum()):
             spin.setValue(value)
             assert editor.fontMetrics().horizontalAdvance(spin.text()) <= available
+    finally:
+        window.close()
+        controller.set_mode("dark")
+
+
+def test_settings_value_inputs_ignore_wheel_until_explicitly_focused():
+    with patch("ui.qt_settings.config_manager.load_config", return_value=DEFAULT_CONFIG.copy()):
+        window = SettingsWindow()
+
+    controls = (
+        window.update_channel_combo,
+        window.refresh_seconds,
+        window.deepseek_peak_period_1_start,
+        window.deepseek_offpeak_start_date,
+    )
+    window.setFocus()
+    for control in controls:
+        event = Mock()
+        before = control.currentIndex() if hasattr(control, "currentIndex") else (
+            control.time() if hasattr(control, "time") else (
+                control.date() if hasattr(control, "date") else control.value()
+            )
+        )
+
+        control.wheelEvent(event)
+
+        after = control.currentIndex() if hasattr(control, "currentIndex") else (
+            control.time() if hasattr(control, "time") else (
+                control.date() if hasattr(control, "date") else control.value()
+            )
+        )
+        assert control.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        assert after == before
+        event.ignore.assert_called_once_with()
+    window.close()
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_settings_checked_box_renders_a_white_check(mode):
+    controller = configure_theme(APP, mode)
+    window = SettingsWindow()
+    try:
+        checkbox = window.deepseek_peak_pricing_enabled
+        checkbox.setChecked(True)
+        checkbox.resize(checkbox.sizeHint())
+        checkbox.show()
+        APP.processEvents()
+
+        option = QStyleOptionButton()
+        checkbox.initStyleOption(option)
+        indicator = checkbox.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator, option, checkbox
+        )
+        image = checkbox.grab().toImage()
+        inner_colors = (
+            image.pixelColor(x, y)
+            for x in range(indicator.left() + 2, indicator.right() - 1)
+            for y in range(indicator.top() + 2, indicator.bottom() - 1)
+        )
+
+        assert any(
+            color.red() >= 245 and color.green() >= 245 and color.blue() >= 245
+            for color in inner_colors
+        )
     finally:
         window.close()
         controller.set_mode("dark")

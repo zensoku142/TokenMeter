@@ -76,7 +76,7 @@ def test_numeric_and_overage_quota_stay_consistent_across_surfaces(app, used, re
     assert ball._quota_remaining == remaining
     panel = MainPanel()
     panel.update_data(data)
-    assert f"剩余 {remaining}%" in panel.today_card.detail.text()
+    assert panel.today_card.value.text() == f"剩余 {remaining}%"
     assert usage_message(data, False, "codex")["primary"] == f"剩余 {remaining}%"
 
 
@@ -89,7 +89,7 @@ def test_ball_cache_flag_does_not_change_animation_or_tooltip(app, stale):
     ball = update_ball(data)
     ball.show()
     assert ball._quota_remaining == 45
-    assert ball.toolTip() == "45%"
+    assert ball.toolTip() == "周额度 · 剩余 45% · 重置时间未知"
     assert ball._wave_timer.isActive()
     ball.hide()
 
@@ -122,7 +122,7 @@ def test_unlimited_copilot_remains_text_on_pet_and_ball(app, status, stale):
     assert ball._quota_remaining is None
     assert ball._quota_value_text == "不限量"
     assert ball.accessibleDescription() == "不限量"
-    assert ball.toolTip() == "不限量"
+    assert ball.toolTip() == "聊天额度 · 不限量 · 以平台实际策略为准"
     assert not ball._wave_timer.isActive()
 
 

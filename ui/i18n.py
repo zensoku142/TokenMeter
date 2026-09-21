@@ -113,9 +113,16 @@ def tr(source: str, **values) -> str:
         for pattern, template in _patterns:
             match = pattern.fullmatch(source)
             if match:
+                translated_values = {key: tr(value) for key, value in match.groupdict().items()}
+                if language in {"en", "ko"} and "schedule" in translated_values:
+                    translated_values["schedule"] = translated_values["schedule"].replace(
+                        "、", ", "
+                    )
                 return _catalog_text(template, language).format(
-                    **{key: tr(value) for key, value in match.groupdict().items()}
+                    **translated_values
                 )
+        if "、" in source:
+            return ", ".join(tr(part) for part in source.split("、"))
         amount = re.fullmatch(r"(-?\d+(?:\.\d+)?)(万|亿)", source)
         if amount:
             number, unit = amount.groups()

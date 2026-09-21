@@ -14,7 +14,19 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Union
 
-from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, QSize, Qt, QThread, QTime, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QDate,
+    QPointF,
+    QRectF,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QThread,
+    QTime,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +34,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDialog,
+    QDateEdit,
     QFileDialog,
     QFormLayout,
     QGridLayout,
@@ -36,6 +49,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QStyle,
+    QStyleOptionButton,
     QStyleOptionSpinBox,
     QTabBar,
     QTabWidget,
@@ -44,6 +58,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from api.deepseek_pricing import normalize_offpeak_dates
 from api.providers import PROVIDERS, list_providers
 from api.providers.base import FetchError
 from config import runtime as config_manager
@@ -68,9 +83,24 @@ from updater.client import (
 )
 
 _CARD_PADDING = 18
+_DEEPSEEK_2026_HOLIDAY_NOTICE_URL = (
+    "https://big5.www.gov.cn/gate/big5/www.gov.cn/yaowen/liebiao/202511/"
+    "content_7047099.htm"
+)
 
 
 class _SettingsSpinBox(QSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 滚动设置页时不能让悬停控件抢焦点并改值；点击或键盘聚焦后仍保留滚轮调节。
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         # 只替换箭头绘制，命中区域仍由原生样式提供，保留长按、键盘及数值边界行为。
@@ -102,6 +132,17 @@ class _SettingsSpinBox(QSpinBox):
 
 
 class _SettingsComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 避免浏览设置时仅因鼠标悬停和滚轮操作就切换选项。
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         # 去掉原生箭头按钮的直角底板后，复用项目的 Fluent 箭头保留清晰的下拉提示。
@@ -112,6 +153,32 @@ class _SettingsComboBox(QComboBox):
         if not self.isEnabled():
             painter.setOpacity(0.45)
         icon.paint(painter, self.width() - 24, (self.height() - 14) // 2, 14, 14)
+
+
+class _SettingsTimeEdit(QTimeEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 时间输入与数字输入保持一致，必须先由点击或键盘明确聚焦才能用滚轮修改。
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class _SettingsDateEdit(QDateEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 日期输入同样位于滚动页中，悬停滚轮不能改变日期或抢占输入焦点。
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event) -> None:
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
 
 class _SettingsTabBar(QTabBar):
@@ -151,6 +218,41 @@ class _SettingsTabBar(QTabBar):
                     painter.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
             painter.setPen(QColor(tokens.accent_text if selected else tokens.subtext))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr(self.tabText(index)))
+
+
+class _SettingsCheckBox(QCheckBox):
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.checkState() == Qt.CheckState.Unchecked:
+            return
+
+        # 原生 Windows 样式会在强调色底上绘制深色勾；覆盖选中指示器以保持清晰的白色标记。
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        indicator = self.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator, option, self
+        )
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(1.0 if self.isEnabled() else 0.45)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(current_theme().accent))
+        painter.drawRoundedRect(QRectF(indicator).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+        pen = QPen(QColor("#FFFFFF"), 1.7)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        if self.checkState() == Qt.CheckState.PartiallyChecked:
+            painter.drawLine(
+                QPointF(indicator.left() + 3.5, indicator.center().y()),
+                QPointF(indicator.right() - 3.5, indicator.center().y()),
+            )
+        else:
+            start = QPointF(indicator.left() + 3.2, indicator.center().y())
+            middle = QPointF(indicator.left() + 6.2, indicator.bottom() - 3.2)
+            end = QPointF(indicator.right() - 2.8, indicator.top() + 3.5)
+            painter.drawLine(start, middle)
+            painter.drawLine(middle, end)
 
 
 class _SettingsSwitch(QCheckBox):
@@ -391,7 +493,7 @@ class SettingsWindow(QDialog):
         peak_title = bind_text(QLabel(), "峰谷计价提示")
         peak_title.setStyleSheet("font-size: 14px; font-weight: 600;")
         peak_layout.addWidget(peak_title)
-        self.deepseek_peak_pricing_enabled = bind_text(QCheckBox(), "显示峰谷计价状态")
+        self.deepseek_peak_pricing_enabled = bind_text(_SettingsCheckBox(), "显示峰谷计价状态")
         self.deepseek_peak_pricing_enabled.toggled.connect(
             self._set_peak_pricing_inputs_enabled
         )
@@ -415,12 +517,70 @@ class SettingsWindow(QDialog):
                 self.deepseek_peak_period_2_start, self.deepseek_peak_period_2_end
             ),
         )
+        weekday_row = QWidget()
+        weekday_layout = QHBoxLayout(weekday_row)
+        weekday_layout.setContentsMargins(0, 0, 0, 0)
+        weekday_layout.setSpacing(10)
+        self.deepseek_peak_weekday_checks = []
+        for name in ("周一", "周二", "周三", "周四", "周五", "周六", "周日"):
+            check = bind_text(_SettingsCheckBox(), name)
+            self.deepseek_peak_weekday_checks.append(check)
+            weekday_layout.addWidget(check)
+        weekday_layout.addStretch(1)
+        self.deepseek_peak_weekday_label = bind_text(QLabel(), "高峰适用日")
+        peak_form.addRow(self.deepseek_peak_weekday_label, weekday_row)
+
+        offpeak_picker = QWidget()
+        offpeak_picker_layout = QHBoxLayout(offpeak_picker)
+        offpeak_picker_layout.setContentsMargins(0, 0, 0, 0)
+        offpeak_picker_layout.setSpacing(8)
+        self.deepseek_offpeak_start_date = self._offpeak_date_edit()
+        self.deepseek_offpeak_end_date = self._offpeak_date_edit()
+        self.deepseek_offpeak_add_button = bind_text(QPushButton(), "添加范围")
+        self.deepseek_offpeak_add_button.clicked.connect(self._add_offpeak_date_range)
+        offpeak_picker_layout.addWidget(self.deepseek_offpeak_start_date)
+        offpeak_picker_layout.addWidget(bind_text(QLabel(), "至"))
+        offpeak_picker_layout.addWidget(self.deepseek_offpeak_end_date)
+        offpeak_picker_layout.addWidget(self.deepseek_offpeak_add_button)
+        offpeak_picker_layout.addStretch(1)
+        peak_form.addRow(bind_text(QLabel(), "添加空闲日期"), offpeak_picker)
+
+        self.deepseek_offpeak_dates = QLineEdit()
+        bind_text(
+            self.deepseek_offpeak_dates,
+            "日期用英文逗号分隔；范围格式为 YYYY-MM-DD..YYYY-MM-DD",
+            method="setPlaceholderText",
+        )
+        self.deepseek_offpeak_dates.textEdited.connect(self._schedule_save)
+        peak_form.addRow(bind_text(QLabel(), "已配置日期"), self.deepseek_offpeak_dates)
+
+        official_actions = QWidget()
+        official_actions_layout = QHBoxLayout(official_actions)
+        official_actions_layout.setContentsMargins(0, 0, 0, 0)
+        official_actions_layout.setSpacing(8)
+        self.deepseek_offpeak_official_button = bind_text(
+            QPushButton(), "载入 2026 官方节假日"
+        )
+        self.deepseek_offpeak_official_button.clicked.connect(
+            self._load_official_offpeak_dates
+        )
+        self.deepseek_offpeak_source_button = bind_text(QPushButton(), "查看国务院通知")
+        self.deepseek_offpeak_source_button.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(_DEEPSEEK_2026_HOLIDAY_NOTICE_URL))
+        )
+        official_actions_layout.addWidget(self.deepseek_offpeak_official_button)
+        official_actions_layout.addWidget(self.deepseek_offpeak_source_button)
+        official_actions_layout.addStretch(1)
+        peak_form.addRow(bind_text(QLabel(), "官方日历"), official_actions)
         peak_layout.addLayout(peak_form)
-        peak_hint = bind_text(QLabel(), "按北京时间判断；高峰时所有计费项按平时价格 2 倍计费。")
-        peak_hint.setWordWrap(True)
-        peak_hint.setProperty("tone", "muted")
-        peak_hint.setStyleSheet("font-size: 12px;")
-        peak_layout.addWidget(peak_hint)
+        self.deepseek_peak_hint = bind_text(
+            QLabel(),
+            "按北京时间判断；默认周一至周五为高峰适用日，周末（含调休上班）和上方日期全天为空闲时段。日期可用英文逗号分隔，连续日期使用两个英文句点连接。",
+        )
+        self.deepseek_peak_hint.setWordWrap(True)
+        self.deepseek_peak_hint.setProperty("tone", "muted")
+        self.deepseek_peak_hint.setStyleSheet("font-size: 12px;")
+        peak_layout.addWidget(self.deepseek_peak_hint)
         content_layout.addLayout(connection_actions)
         content_layout.addWidget(self.connection_feedback)
         content_layout.addStretch(1)
@@ -475,7 +635,7 @@ class SettingsWindow(QDialog):
         accent_layout.addWidget(self.accent_color_button)
         appearance_form.addRow(bind_text(QLabel(), "主题主色"), accent_row)
 
-        self.sync_accent_check = bind_text(QCheckBox(), "深浅模式使用相同主题色")
+        self.sync_accent_check = bind_text(_SettingsCheckBox(), "深浅模式使用相同主题色")
         bind_text(
             self.sync_accent_check,
             "默认同步主色；取消勾选后可分别设置，面板透明度始终独立。",
@@ -601,7 +761,7 @@ class SettingsWindow(QDialog):
         background_provider_layout.setSpacing(10)
         self.background_provider_checks: dict[str, QCheckBox] = {}
         for index, (provider_id, provider_name) in enumerate(list_providers()):
-            check = bind_text(QCheckBox(), provider_name)
+            check = bind_text(_SettingsCheckBox(), provider_name)
             bind_text(check, "勾选后，即使不是当前数据来源也会在后台定时获取", method='setToolTip')
             self.background_provider_checks[provider_id] = check
             background_provider_layout.addWidget(check, index // 3, index % 3)
@@ -610,7 +770,7 @@ class SettingsWindow(QDialog):
         alert_layout = QHBoxLayout(alert_row)
         alert_layout.setContentsMargins(0, 0, 0, 0)
         alert_layout.setSpacing(8)
-        self.quota_alert_check = bind_text(QCheckBox(), "低额度提醒")
+        self.quota_alert_check = bind_text(_SettingsCheckBox(), "低额度提醒")
         self.quota_alert_threshold = _SettingsSpinBox()
         self.quota_alert_threshold.setRange(1, 50)
         self.quota_alert_threshold.setSuffix("%")
@@ -624,15 +784,15 @@ class SettingsWindow(QDialog):
         alert_layout.addWidget(bind_text(QLabel(), "剩余不高于"))
         alert_layout.addWidget(self.quota_alert_threshold)
         runtime_form.addRow(bind_text(QLabel(), "订阅额度"), alert_row)
-        self.quota_recovery_check = bind_text(QCheckBox(), "额度恢复时提醒")
+        self.quota_recovery_check = bind_text(_SettingsCheckBox(), "额度恢复时提醒")
         self.quota_alert_check.toggled.connect(self.quota_recovery_check.setEnabled)
         self.quota_recovery_check.setEnabled(False)
         bind_text(self.quota_recovery_check, "需先启用低额度提醒；只在成功获取恢复后的额度时通知。", method="setToolTip")
         runtime_form.addRow("", self.quota_recovery_check)
-        self.quota_forecast_check = bind_text(QCheckBox(), "显示额度消耗预测")
+        self.quota_forecast_check = bind_text(_SettingsCheckBox(), "显示额度消耗预测")
         bind_text(self.quota_forecast_check, "至少积累 10 分钟有效样本后显示估计；不会推算剩余请求数。", method="setToolTip")
         runtime_form.addRow("", self.quota_forecast_check)
-        self.quota_quiet_check = bind_text(QCheckBox(), "额度通知静默时段")
+        self.quota_quiet_check = bind_text(_SettingsCheckBox(), "额度通知静默时段")
         runtime_form.addRow("", self.quota_quiet_check)
         self.quota_quiet_start = self._peak_time_edit()
         self.quota_quiet_end = self._peak_time_edit()
@@ -1149,11 +1309,47 @@ class SettingsWindow(QDialog):
 
     @staticmethod
     def _peak_time_edit() -> QTimeEdit:
-        editor = QTimeEdit()
+        editor = _SettingsTimeEdit()
         editor.setDisplayFormat("HH:mm")
         editor.setTime(QTime(0, 0))
         editor.setFixedWidth(92)
         return editor
+
+    @staticmethod
+    def _offpeak_date_edit() -> QDateEdit:
+        editor = _SettingsDateEdit()
+        editor.setCalendarPopup(True)
+        editor.setDisplayFormat("yyyy-MM-dd")
+        editor.setDate(QDate.currentDate())
+        editor.setFixedWidth(126)
+        return editor
+
+    def _add_offpeak_date_range(self) -> None:
+        start = self.deepseek_offpeak_start_date.date()
+        end = self.deepseek_offpeak_end_date.date()
+        if start > end:
+            self._set_feedback(self.save_feedback, "开始日期不能晚于结束日期。", "danger")
+            return
+        start_text = start.toString("yyyy-MM-dd")
+        end_text = end.toString("yyyy-MM-dd")
+        self._merge_offpeak_dates(
+            start_text if start == end else f"{start_text}..{end_text}"
+        )
+
+    def _load_official_offpeak_dates(self) -> None:
+        self._merge_offpeak_dates(
+            str(config_manager.DEFAULT_CONFIG["DEEPSEEK_OFFPEAK_DATES"])
+        )
+
+    def _merge_offpeak_dates(self, added: str) -> None:
+        current = self.deepseek_offpeak_dates.text().strip()
+        try:
+            normalized = normalize_offpeak_dates(",".join(filter(None, (current, added))))
+        except ValueError as exc:
+            self._set_feedback(self.save_feedback, str(exc), "danger")
+            return
+        self.deepseek_offpeak_dates.setText(normalized)
+        self._schedule_save()
 
     @staticmethod
     def _peak_period_row(start: QTimeEdit, end: QTimeEdit) -> QWidget:
@@ -1173,6 +1369,13 @@ class SettingsWindow(QDialog):
             self.deepseek_peak_period_1_end,
             self.deepseek_peak_period_2_start,
             self.deepseek_peak_period_2_end,
+            *self.deepseek_peak_weekday_checks,
+            self.deepseek_offpeak_start_date,
+            self.deepseek_offpeak_end_date,
+            self.deepseek_offpeak_add_button,
+            self.deepseek_offpeak_dates,
+            self.deepseek_offpeak_official_button,
+            self.deepseek_offpeak_source_button,
         ):
             editor.setEnabled(enabled)
 
@@ -1845,6 +2048,12 @@ class SettingsWindow(QDialog):
         self.deepseek_peak_pricing_enabled.setChecked(
             bool(values.get("DEEPSEEK_PEAK_PRICING_ENABLED", False))
         )
+        self.deepseek_offpeak_dates.setText(str(values.get("DEEPSEEK_OFFPEAK_DATES", "")))
+        peak_weekdays = {
+            int(day) for day in values.get("DEEPSEEK_PEAK_WEEKDAYS", (0, 1, 2, 3, 4))
+        }
+        for index, check in enumerate(self.deepseek_peak_weekday_checks):
+            check.setChecked(index in peak_weekdays)
         for editor, key, fallback in (
             (
                 self.deepseek_peak_period_1_start,
@@ -1947,6 +2156,12 @@ class SettingsWindow(QDialog):
             "DEEPSEEK_PEAK_PERIOD_2_END": self.deepseek_peak_period_2_end.time().toString(
                 "HH:mm"
             ),
+            "DEEPSEEK_PEAK_WEEKDAYS": [
+                index
+                for index, check in enumerate(self.deepseek_peak_weekday_checks)
+                if check.isChecked()
+            ],
+            "DEEPSEEK_OFFPEAK_DATES": self.deepseek_offpeak_dates.text().strip(),
         }
         # Persist credentials for all registered providers. The currently
         # selected provider is read from the on-screen inputs; other

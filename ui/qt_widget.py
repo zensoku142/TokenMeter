@@ -32,7 +32,7 @@ from config import runtime as config_manager
 from core import pet_extension
 from core.identity import APP_DISPLAY_NAME
 from data.store import PerProviderData, TokenData
-from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown, quota_used_percent
+from ui.formatting import format_money, quota_used_percent
 from ui.geometry import (
     WorkArea,
     clamp_window,
@@ -1954,16 +1954,53 @@ class FloatingWidget(QWidget):
         )
         if self._data.quota_windows:
             primary = self._data.quota_windows[0]
+            secondary = None
+            if provider_id in {"codex", "claude"}:
+                # 短期窗口直接决定当前是否还能继续使用；即使接口先返回周额度，悬浮球也应提示 5 小时窗口。
+                primary = next(
+                    (window for window in self._data.quota_windows if window.window_minutes == 300),
+                    primary,
+                )
+                secondary = next(
+                    (
+                        window
+                        for window in self._data.quota_windows
+                        if window is not primary and window.window_minutes == 10_080
+                    ),
+                    None,
+                )
             used = quota_used_percent(primary.used_percent)
-            reset_text = (
-                format_codex_reset_time(primary.resets_at, compact=True)
-                if provider_id == "codex"
-                else format_reset_countdown(primary.resets_at)
+            reset_clock = (
+                primary.resets_at.astimezone().strftime("%H:%M")
+                if primary.resets_at is not None and primary.resets_at.tzinfo is not None
+                else primary.resets_at.strftime("%H:%M")
+                if primary.resets_at is not None
+                else ""
+            )
+            secondary_used = (
+                quota_used_percent(secondary.used_percent) if secondary is not None else None
+            )
+            secondary_reset_text = (
+                secondary.resets_at.astimezone().strftime("%m-%d %H:%M")
+                if secondary is not None
+                and secondary.resets_at is not None
+                and secondary.resets_at.tzinfo is not None
+                else secondary.resets_at.strftime("%m-%d %H:%M")
+                if secondary is not None and secondary.resets_at is not None
+                else ""
             )
             self.ball.set_quota_state(
                 None if loading or used is None else max(0, 100 - used),
-                "正在更新额度" if loading else reset_text,
+                "正在更新额度" if loading else reset_clock or "重置时间未知",
                 primary.title,
+                reset_clock="" if loading else reset_clock,
+                secondary_remaining_percent=(
+                    None
+                    if loading or secondary_used is None
+                    else max(0, 100 - secondary_used)
+                ),
+                secondary_title=secondary.title if secondary is not None else "",
+                secondary_reset_text=secondary_reset_text,
             )
         elif quota_mode:
             # 订阅额度暂不可用时也不能回退成金额视图，否则会显示虚假的金额。
