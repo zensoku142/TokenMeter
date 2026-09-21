@@ -221,6 +221,7 @@ class LocalAnalyticsDialog(QDialog):
         defaults = {
             "codex": str(config_manager.get("CODEX_HOME", "") or os.environ.get("CODEX_HOME") or Path.home() / ".codex"),
             "claude": str(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"),
+            "zcode": str(Path.home() / ".zcode"),
         }
         for provider, value in defaults.items():
             row = QHBoxLayout()
@@ -232,7 +233,7 @@ class LocalAnalyticsDialog(QDialog):
             browse.clicked.connect(lambda _checked=False, pid=provider: self._choose_directory(pid))
             row.addWidget(browse)
             self.browse_buttons.append(browse)
-            form.addRow(provider.title(), row)
+            form.addRow("ZCode" if provider == "zcode" else provider.title(), row)
         layout.addWidget(self.directory_panel)
         actions = QHBoxLayout()
         self.period = _SettingsComboBox()

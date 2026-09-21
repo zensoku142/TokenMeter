@@ -1,5 +1,6 @@
 import csv
 import json
+import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -85,6 +86,76 @@ def test_malformed_usage_and_warning_survives_cached_scan(tmp_path):
     assert scanner.issues == 1
     scanner.scan({"claude": tmp_path})
     assert scanner.issues == 1
+
+
+def test_zcode_reads_normalized_usage_without_message_content(tmp_path):
+    database = tmp_path / "cli" / "db" / "db.sqlite"
+    database.parent.mkdir(parents=True)
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+            CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT, started_at INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER, cache_read_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER, computed_total_tokens INTEGER, status TEXT
+            );
+            INSERT INTO session VALUES ('s1', 'C:/work/private-project');
+            INSERT INTO model_usage VALUES
+                ('r1', 's1', 'GLM-5', 1788750000000, 120, 30, 80, 10, 150, 'completed'),
+                ('r2', 's1', 'GLM-5', 1788750060000, 0, 0, 0, 0, 0, 'error');
+        """)
+    scanner = LocalUsageScanner()
+    rows = scanner.scan({"zcode": tmp_path})
+    assert rows == [LocalUsage("zcode", "s1", "private-project", "2026-09-07", "GLM-5", 120, 30, 80, 10, 150)]
+    assert "message" not in repr(scanner.files)
+
+
+def test_zcode_accepts_cli_root_and_reports_missing_database(tmp_path):
+    scanner = LocalUsageScanner()
+    assert scanner.scan({"zcode": tmp_path}) == []
+    assert scanner.issues == 1
+
+    database = tmp_path / "db" / "db.sqlite"
+    database.parent.mkdir()
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+            CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT, started_at INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER, cache_read_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER, computed_total_tokens INTEGER, status TEXT
+            );
+        """)
+    assert scanner.scan({"zcode": tmp_path}) == []
+    assert scanner.issues == 0
+
+
+def test_zcode_rescans_when_only_wal_changes(tmp_path):
+    database = tmp_path / "cli" / "db" / "db.sqlite"
+    database.parent.mkdir(parents=True)
+    writer = sqlite3.connect(database)
+    try:
+        writer.executescript("""
+            PRAGMA journal_mode = WAL;
+            CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+            CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT, started_at INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER, cache_read_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER, computed_total_tokens INTEGER, status TEXT
+            );
+            INSERT INTO session VALUES ('s1', 'C:/work/project');
+        """)
+        writer.commit()
+        scanner = LocalUsageScanner()
+        assert scanner.scan({"zcode": tmp_path}) == []
+        writer.execute(
+            "INSERT INTO model_usage VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("r1", "s1", "GLM-5", 1788750000000, 120, 30, 80, 10, 150, "completed"),
+        )
+        writer.commit()
+        assert sum(row.total for row in scanner.scan({"zcode": tmp_path})) == 150
+    finally:
+        writer.close()
 
 
 def test_filters_exports_metadata_and_formula_escape(tmp_path):

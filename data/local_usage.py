@@ -5,9 +5,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from data import history
@@ -31,7 +32,7 @@ class LocalUsage:
 
 @dataclass
 class _FileUsage:
-    signature: tuple[int, int, int, int]
+    signature: tuple[int, ...]
     offset: int = 0
     session: str = ""
     project: str = ""
@@ -63,6 +64,17 @@ class LocalUsageScanner:
             if not root.is_dir():
                 self.issues += 1
                 continue
+            if provider == "zcode":
+                path = root / "cli" / "db" / "db.sqlite"
+                if not path.is_file():
+                    # 也允许用户直接选择 ~/.zcode/cli，避免自定义目录时被迫回退到上一级。
+                    path = root / "db" / "db.sqlite"
+                if not path.is_file():
+                    self.issues += 1
+                    continue
+                current.add((provider, path))
+                self._read_zcode(path)
+                continue
             # Only user-selected local log directories; no CLI launch or credential discovery.
             directories = (root / "sessions", root / "archived_sessions") if provider == "codex" else (root / "projects",)
             for directory in directories:
@@ -88,6 +100,55 @@ class LocalUsageScanner:
                     events[key] = record
         self._last_rows = sorted(events.values(), key=lambda row: (row.day, row.provider, row.session))
         return self._last_rows
+
+    def _read_zcode(self, path: Path) -> None:
+        key = ("zcode", path)
+        try:
+            stat = path.stat()
+            wal_path = path.with_name(f"{path.name}-wal")
+            try:
+                wal = wal_path.stat()
+                wal_signature = (wal.st_size, wal.st_mtime_ns)
+            except OSError:
+                wal_signature = (0, 0)
+            # SQLite 的活跃写入可能只更新 WAL；签名必须包含它才能在下一轮看到新增用量。
+            signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, *wal_signature)
+            previous = self.files.get(key)
+            if previous and previous.signature == signature:
+                return
+            data = _FileUsage(signature)
+            # ZCode 已将用量单独规范化到 SQLite；仅读这些数值列，避免接触消息和对话正文。
+            uri = f"{path.resolve().as_uri()}?mode=ro"
+            with sqlite3.connect(uri, uri=True, timeout=1) as connection:
+                connection.execute("PRAGMA query_only = ON")
+                rows = connection.execute(
+                    """SELECT m.id, m.session_id, s.directory, m.model_id, m.started_at,
+                              m.input_tokens, m.output_tokens, m.cache_read_input_tokens,
+                              m.cache_creation_input_tokens, m.computed_total_tokens
+                       FROM model_usage AS m
+                       JOIN session AS s ON s.id = m.session_id
+                       WHERE m.status = 'completed' AND m.computed_total_tokens > 0"""
+                )
+                for row in rows:
+                    identity, session, directory, model, started_at, *counts = row
+                    if not all(type(value) is int and value >= 0 for value in (started_at, *counts)):
+                        data.issues += 1
+                        continue
+                    stamp = datetime.fromtimestamp(started_at / 1000, timezone.utc)
+                    usage = LocalUsage(
+                        "zcode",
+                        str(session),
+                        Path(str(directory or "")).name,
+                        stamp.astimezone().date().isoformat(),
+                        str(model or ""),
+                        *counts,
+                    )
+                    data.events[str(identity)] = usage
+            self.changed = True
+            self.files[key] = data
+        except (OSError, sqlite3.Error, ValueError, OverflowError):
+            self.files.pop(key, None)
+            self.issues += 1
 
     def _read(self, provider: str, path: Path) -> None:
         key = (provider, path)
