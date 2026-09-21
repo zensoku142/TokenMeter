@@ -699,6 +699,13 @@ class SettingsWindow(QDialog):
         self._add_switch_row(
             behavior_layout, "贴边自动隐藏", "靠近屏幕边缘时隐藏悬浮球", self.edge_hide_check
         )
+        self.quota_ring_counterclockwise_check = _SettingsSwitch("周额度环逆时针")
+        self._add_switch_row(
+            behavior_layout,
+            "周额度环逆时针",
+            "开启后逆时针显示周额度；关闭时顺时针显示",
+            self.quota_ring_counterclockwise_check,
+        )
         self.panel_auto_collapse_check = _SettingsSwitch("失焦自动收起")
         self._add_switch_row(
             behavior_layout, "失焦自动收起", "点击其他应用时，面板和设置一起收起",
@@ -2055,6 +2062,9 @@ class SettingsWindow(QDialog):
         )
         self.sync_accent_check.setChecked(bool(values.get("UI_SYNC_ACCENT_COLOR", True)))
         self.edge_hide_check.setChecked(bool(values.get("EDGE_HIDE_ENABLED", True)))
+        self.quota_ring_counterclockwise_check.setChecked(
+            bool(values.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
+        )
         self.vpet_check.setChecked(bool(values.get("VPET_ENABLED", False)))
         self.panel_auto_collapse_check.setChecked(
             bool(values.get("PANEL_AUTO_COLLAPSE_ON_DEACTIVATE", True))
@@ -2153,6 +2163,9 @@ class SettingsWindow(QDialog):
             ],
             "UI_THEME": str(self.theme_combo.currentData() or "dark"),
             "EDGE_HIDE_ENABLED": self.edge_hide_check.isChecked(),
+            "QUOTA_WEEKLY_RING_COUNTERCLOCKWISE": (
+                self.quota_ring_counterclockwise_check.isChecked()
+            ),
             "VPET_ENABLED": self.vpet_check.isChecked(),
             "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": self.panel_auto_collapse_check.isChecked(),
             "AUTO_START_ENABLED": self.autostart_check.isChecked(),

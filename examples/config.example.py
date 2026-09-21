@@ -79,6 +79,7 @@ MINUTE_USAGE_INTERVAL_MINUTES = 5
 # Today intraday chart type: "bar" or "line"
 MINUTE_USAGE_CHART_TYPE = "bar"
 EDGE_HIDE_ENABLED = True
+QUOTA_WEEKLY_RING_COUNTERCLOCKWISE = False
 
 # Widget appearance
 WIDGET_COMPACT_SIZE = 96

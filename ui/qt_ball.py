@@ -342,6 +342,7 @@ class FloatingUsageBall(QWidget):
         self._quota_secondary_remaining: float | None = None
         self._quota_secondary_title = ""
         self._quota_secondary_reset_text = ""
+        self._quota_secondary_counterclockwise = False
         self._wave_phase = 0.0
         self._liquid_surface = LiquidSurfaceState()
         self._pointer_last_local: QPointF | None = None
@@ -925,6 +926,19 @@ class FloatingUsageBall(QWidget):
             return
         self._peak_highlight = enabled
         self.update()
+
+    def set_secondary_quota_counterclockwise(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self._quota_secondary_counterclockwise == enabled:
+            return
+        self._quota_secondary_counterclockwise = enabled
+        self.update()
+
+    def _secondary_quota_span(self) -> int:
+        remaining = self._quota_secondary_remaining or 0
+        magnitude = round(360 * 16 * remaining / 100)
+        # Qt 的屏幕坐标方向与数学坐标相反；正跨度在球面上顺时针绘制。
+        return -magnitude if self._quota_secondary_counterclockwise else magnitude
 
     def enterEvent(self, event) -> None:
         self._hovered = True
@@ -1587,7 +1601,7 @@ class FloatingUsageBall(QWidget):
                 Qt.PenCapStyle.RoundCap,
             )
         )
-        span = -round(360 * 16 * self._quota_secondary_remaining / 100)
+        span = self._secondary_quota_span()
         if span:
             painter.drawArc(ring_rect, 90 * 16, span)
 

@@ -3780,6 +3780,25 @@ def test_quota_value_recenters_when_reset_clock_is_hidden():
     ball.close()
 
 
+def test_weekly_quota_ring_direction_defaults_clockwise_and_can_reverse():
+    ball = FloatingUsageBall(88)
+    ball.set_quota_state(
+        75,
+        "14:30",
+        "5 小时额度",
+        reset_clock="14:30",
+        secondary_remaining_percent=64,
+        secondary_title="每周额度",
+    )
+
+    assert ball._secondary_quota_span() > 0
+    ball.set_secondary_quota_counterclockwise(True)
+    assert ball._secondary_quota_span() < 0
+    ball.set_secondary_quota_counterclockwise(False)
+    assert ball._secondary_quota_span() > 0
+    ball.close()
+
+
 def test_codex_water_ball_uses_custom_accent_for_water_and_border():
     controller = configure_theme(APP, "dark")
     controller.set_appearance("dark", "#D14C2F", 100)
@@ -4969,6 +4988,7 @@ def test_settings_groups_configuration_into_scrolling_pages_with_separate_pet_pa
         (0, window.provider_combo),
         (2, window.theme_combo),
         (3, window.panel_auto_collapse_check),
+        (3, window.quota_ring_counterclockwise_check),
         (4, window.vpet_check),
         (4, window.pet_version_label),
         (4, window.pet_install_button),
@@ -5043,6 +5063,18 @@ def test_settings_switch_autosaves_and_return_flushes_last_edit(autosave_setting
     refreshed.assert_called_once()
     assert values["EDGE_HIDE_ENABLED"] is False
     assert not window._save_timer.isActive()
+
+
+def test_weekly_ring_direction_switch_autosaves(autosave_settings):
+    window, values, saved, refreshed = autosave_settings
+    assert not window.quota_ring_counterclockwise_check.isChecked()
+
+    window.quota_ring_counterclockwise_check.click()
+    window.flush_pending_saves()
+
+    assert values["QUOTA_WEEKLY_RING_COUNTERCLOCKWISE"] is True
+    saved.assert_called_once()
+    refreshed.assert_called_once()
 
 
 def test_settings_vpet_switch_persists_without_changing_ball_preferences(autosave_settings):

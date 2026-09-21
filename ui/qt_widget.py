@@ -312,6 +312,9 @@ class FloatingWidget(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
         self.ball = FloatingUsageBall(self._compact_size())
+        self.ball.set_secondary_quota_counterclockwise(
+            bool(config_manager.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
+        )
         # 图表面板会加载 pyqtgraph/NumPy；悬浮球常驻时延迟创建可显著降低基线内存。
         self.panel: MainPanel | None = None
         self._layout.addWidget(self.ball, 0, Qt.AlignmentFlag.AlignTop)
@@ -1169,6 +1172,9 @@ class FloatingWidget(QWidget):
 
     def _on_config_saved(self) -> None:
         config_manager.load_config()
+        self.ball.set_secondary_quota_counterclockwise(
+            bool(config_manager.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
+        )
         active = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
         disabled = config_manager.get("DISABLED_PROVIDER_IDS", [])
         if "mimo" in disabled and self._mimo_renewal_task is not None:

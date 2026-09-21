@@ -93,6 +93,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_deepseek_peak_pricing_defaults_and_period_validation(self):
         defaults = config_manager.validate_config({})
+        self.assertFalse(defaults["QUOTA_WEEKLY_RING_COUNTERCLOCKWISE"])
         self.assertFalse(defaults["DEEPSEEK_PEAK_PRICING_ENABLED"])
         self.assertEqual(defaults["DEEPSEEK_PEAK_PERIOD_1_START"], "09:00")
         self.assertEqual(defaults["DEEPSEEK_PEAK_PERIOD_2_END"], "18:00")

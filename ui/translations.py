@@ -202,6 +202,12 @@ MESSAGES = {
         "画面端で自動的に隠す",
         "화면 가장자리에서 자동 숨기기",
     ),
+    "周额度环逆时针": (
+        "Counterclockwise weekly ring",
+        "週額度環逆時針",
+        "週間リングを反時計回りにする",
+        "주간 한도 링 반시계 방향",
+    ),
     "失焦自动收起": (
         "Collapse when unfocused",
         "失焦自動收合",
@@ -605,6 +611,12 @@ MESSAGES = {
         "靠近螢幕邊緣時隱藏懸浮球",
         "画面端でフローティング球を隠す",
         "화면 가장자리 근처에서 볼 숨기기",
+    ),
+    "开启后逆时针显示周额度；关闭时顺时针显示": (
+        "On draws weekly quota counterclockwise; off draws it clockwise",
+        "開啟後逆時針顯示週額度；關閉時順時針顯示",
+        "オンでは週間利用枠を反時計回り、オフでは時計回りに表示します",
+        "켜면 주간 한도를 반시계 방향으로, 끄면 시계 방향으로 표시합니다",
     ),
     "点击其他应用时，面板和设置一起收起": (
         "Collapse the panel and settings when another app is selected",
