@@ -881,6 +881,10 @@ def test_codex_ball_never_falls_back_to_currency_when_quota_is_unavailable():
 
 def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     reset = datetime(2026, 8, 20, 3, 58, tzinfo=timezone.utc)
+    expected_clock = reset.astimezone().strftime("%H:%M")
+    expected_weekly_reset = (reset + timedelta(days=2)).astimezone().strftime(
+        "%m-%d %H:%M"
+    )
     windows = [
         QuotaWindow(
             "codex-weekly", "每周额度", 10,
@@ -907,14 +911,14 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     assert widget.ball._quota_mode
     assert widget.ball._quota_remaining == 75
     assert widget.ball._quota_title == "5 小时额度"
-    assert widget.ball._quota_reset_text == "11:58"
-    assert widget.ball._quota_reset_clock == "11:58"
+    assert widget.ball._quota_reset_text == expected_clock
+    assert widget.ball._quota_reset_clock == expected_clock
     assert widget.ball._quota_secondary_remaining == 90
     assert widget.ball._quota_secondary_title == "周额度"
     assert widget.ball.accessibleDescription() == "75% · 周额度 90%"
     assert widget.ball.toolTip() == (
-        "5 小时额度 · 剩余 75% · 11:58\n"
-        "周额度 · 剩余 90% · 08-22 11:58"
+        f"5 小时额度 · 剩余 75% · {expected_clock}\n"
+        f"周额度 · 剩余 90% · {expected_weekly_reset}"
     )
 
     widget._data = sample_data()
@@ -927,6 +931,7 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
 
 def test_codex_ball_hides_clock_without_five_hour_quota():
     reset = datetime(2026, 8, 22, 3, 58, tzinfo=timezone.utc)
+    expected_reset = reset.astimezone().strftime("%m-%d %H:%M")
     window = QuotaWindow(
         "codex-weekly", "每周额度", 9,
         resets_at=reset, window_minutes=10_080,
@@ -947,7 +952,7 @@ def test_codex_ball_hides_clock_without_five_hour_quota():
     assert widget.ball._quota_remaining == 91
     assert widget.ball._quota_title == "周额度"
     assert widget.ball._quota_reset_clock == ""
-    assert widget.ball.toolTip() == "周额度 · 剩余 91% · 08-22 11:58"
+    assert widget.ball.toolTip() == f"周额度 · 剩余 91% · {expected_reset}"
     widget._closed = True
     widget.hide()
 
