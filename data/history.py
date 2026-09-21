@@ -268,7 +268,36 @@ def needs_initial_sync(provider: str = "deepseek") -> bool:
     return not row or not row[0]
 
 
-def scoped_provider(provider: str, account_key: str) -> str:
+def _merge_provider_scope(
+    connection: sqlite3.Connection, source: str, target: str
+) -> None:
+    if source == target:
+        return
+    for table in (
+        "daily_usage", "sync_state", "monthly_sync", "minute_usage",
+        "minute_usage_snapshot", "minute_cost_usage", "minute_model_usage",
+        "minute_cost_snapshot",
+    ):
+        columns = [str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")]
+        if "provider" not in columns:
+            continue
+        quoted = ", ".join(f'"{column}"' for column in columns)
+        selected = ", ".join("?" if column == "provider" else f'"{column}"' for column in columns)
+        connection.execute(
+            f"INSERT OR REPLACE INTO {table} ({quoted}) "
+            f"SELECT {selected} FROM {table} WHERE provider = ?",
+            (target, source),
+        )
+        connection.execute(f"DELETE FROM {table} WHERE provider = ?", (source,))
+
+
+def scoped_provider(
+    provider: str,
+    account_key: str,
+    *,
+    legacy_account_key: str = "",
+    stable_identity_prefix: str = "",
+) -> str:
     if not account_key:
         return provider
     scoped = f"{provider}:{account_key}"
@@ -288,7 +317,81 @@ def scoped_provider(provider: str, account_key: str) -> str:
                 "minute_cost_snapshot",
             ):
                 connection.execute(f"UPDATE {table} SET provider = ? WHERE provider = ?", (scoped, provider))
+        elif stable_identity_prefix and account_key.startswith(stable_identity_prefix):
+            row = connection.execute(
+                "SELECT account_key FROM history_account WHERE provider = ?", (provider,)
+            ).fetchone()
+            previous_key = str(row[0]) if row else ""
+            if previous_key and not previous_key.startswith(stable_identity_prefix):
+                # 旧版以会续签的 Token 指纹隔离历史；升级时把首次账号及当前 Token
+                # 产生的两个旧作用域合并到稳定账号身份，避免分时记录在换 Token 后消失。
+                _merge_provider_scope(connection, f"{provider}:{previous_key}", scoped)
+                if legacy_account_key:
+                    _merge_provider_scope(
+                        connection, f"{provider}:{legacy_account_key}", scoped
+                    )
+                connection.execute(
+                    "UPDATE history_account SET account_key = ? WHERE provider = ?",
+                    (account_key, provider),
+                )
     return scoped
+
+
+def _daily_account_signatures(
+    connection: sqlite3.Connection, provider: str
+) -> dict[str, tuple[int, float]]:
+    token_types = ", ".join("?" for _ in MINUTE_TOKEN_TYPES)
+    rows = connection.execute(
+        f"""SELECT d.usage_date,
+                   SUM(CASE WHEN d.token_type IN ({token_types}) THEN d.token_amount ELSE 0 END),
+                   TOTAL(CAST({_EFFECTIVE_COST_SQL} AS REAL))
+              FROM daily_usage AS d
+             WHERE d.provider = ?
+             GROUP BY d.usage_date""",
+        (*MINUTE_TOKEN_TYPES, provider),
+    ).fetchall()
+    return {
+        str(usage_date): (int(tokens or 0), round(float(cost or 0), 8))
+        for usage_date, tokens, cost in rows
+        if int(tokens or 0) > 0 or round(float(cost or 0), 8) > 0
+    }
+
+
+def adopt_matching_account_history(provider: str, account_key: str) -> bool:
+    """Adopt history after an opaque login token rotates for the same account."""
+    if not account_key:
+        return False
+    current_scope = f"{provider}:{account_key}"
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT account_key FROM history_account WHERE provider = ?", (provider,)
+        ).fetchone()
+        previous_key = str(row[0]) if row else ""
+        previous_scope = f"{provider}:{previous_key}" if previous_key else ""
+        if not previous_scope or previous_scope == current_scope:
+            return False
+        previous = _daily_account_signatures(connection, previous_scope)
+        current = _daily_account_signatures(connection, current_scope)
+        matching_days = sorted(
+            usage_day
+            for usage_day in previous.keys() & current.keys()
+            if previous[usage_day] == current[usage_day]
+        )
+        if len(matching_days) < 3:
+            return False
+        latest_current = max(current, default="")
+        latest_match = matching_days[-1]
+        if not latest_current or (date.fromisoformat(latest_current) - date.fromisoformat(latest_match)).days > 62:
+            return False
+        # DeepSeek 的不透明登录 Token 无法直接提取账号 ID；连续多天的 Token 与费用
+        # 汇总完全一致时才认定为同一账号续签，避免把真实换号的历史混在一起。
+        _merge_provider_scope(connection, previous_scope, current_scope)
+        connection.execute(
+            "UPDATE history_account SET account_key = ? WHERE provider = ?",
+            (account_key, provider),
+        )
+    return True
 
 
 def _ensure_nayuto_cache(connection: sqlite3.Connection) -> None:

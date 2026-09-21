@@ -775,6 +775,11 @@ class FloatingWidget(QWidget):
 
     def event(self, event) -> bool:
         if (
+            event.type() == QEvent.Type.WindowActivate
+            and self._has_settings_child()
+        ):
+            self._settings_window.finish_external_navigation()
+        if (
             event.type() == QEvent.Type.WindowDeactivate
             and self._expanded
             and not self._transitioning
@@ -787,6 +792,12 @@ class FloatingWidget(QWidget):
     def _collapse_after_deactivation(self) -> None:
         # 退出会在下一轮事件循环触发失焦回调；已关闭的面板不能再收起并重新显示悬浮球。
         if self._closed:
+            return
+        if (
+            self._has_settings_child()
+            and self._settings_window.deactivation_is_protected()
+        ):
+            # 设置页主动打开的浏览器必然抢走焦点；保留原页，方便查看后继续操作。
             return
         # 设置页沿用面板的失焦收起规则，但操作文件/颜色对话框或下拉菜单时不能误收起。
         if (

@@ -2955,6 +2955,67 @@ def test_settings_deactivation_follows_panel_preference(auto_collapse):
             widget.hide()
 
 
+def test_browser_credential_acquisition_keeps_settings_open_on_deactivation():
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+        try:
+            widget.open_settings()
+            settings = widget._settings_window
+            settings._cookie_acquire_worker = Mock()
+            with (
+                patch("ui.qt_widget.config_manager.get", return_value=True),
+                patch.object(widget, "isActiveWindow", return_value=False),
+                patch("ui.qt_widget.QApplication.activeModalWidget", return_value=None),
+                patch("ui.qt_widget.QApplication.activePopupWidget", return_value=None),
+            ):
+                widget._collapse_after_deactivation()
+
+            assert widget._expanded
+            assert settings.isVisible()
+        finally:
+            if widget._settings_window is not None:
+                widget._settings_window._cookie_acquire_worker = None
+            widget._closed = True
+            widget.hide()
+
+
+@pytest.mark.parametrize(
+    ("button_name", "expected_url"),
+    (
+        ("deepseek_offpeak_source_button", _deepseek_2026_holiday_notice_url()),
+        ("project_homepage_button", "https://github.com/zensoku142/TokenMeter"),
+    ),
+)
+def test_settings_external_links_keep_panel_open(button_name, expected_url):
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+        try:
+            widget.open_settings()
+            settings = widget._settings_window
+            settings.provider_combo.setCurrentIndex(settings.provider_combo.findData("deepseek"))
+            settings.deepseek_peak_pricing_enabled.setChecked(True)
+            with patch("ui.qt_settings.QDesktopServices.openUrl", return_value=True) as open_url:
+                getattr(settings, button_name).click()
+            assert open_url.call_args.args[0].toString() == expected_url
+            assert settings.deactivation_is_protected()
+
+            with (
+                patch("ui.qt_widget.config_manager.get", return_value=True),
+                patch.object(widget, "isActiveWindow", return_value=False),
+                patch("ui.qt_widget.QApplication.activeModalWidget", return_value=None),
+                patch("ui.qt_widget.QApplication.activePopupWidget", return_value=None),
+            ):
+                widget._collapse_after_deactivation()
+
+            assert widget._expanded
+            assert settings.isVisible()
+            settings.finish_external_navigation()
+            assert not settings.deactivation_is_protected()
+        finally:
+            widget._closed = True
+            widget.hide()
+
+
 @pytest.mark.skipif(APP.platformName() != "windows", reason="Requires native Windows focus handling")
 @pytest.mark.parametrize("modal", [False, True])
 def test_settings_activation_ignores_child_dialog_but_not_other_windows(modal):
@@ -5226,7 +5287,7 @@ def test_settings_switch_keeps_white_thumb_with_custom_accent(mode, accent):
         controller.set_mode("dark")
 
 
-def test_deepseek_cookie_acquisition_only_updates_its_cookie_draft():
+def test_deepseek_credential_acquisition_updates_platform_token_draft():
     values = {
         **config_manager.all_config(),
         "ACTIVE_PROVIDER": "deepseek",
@@ -5238,10 +5299,10 @@ def test_deepseek_cookie_acquisition_only_updates_its_cookie_draft():
     ):
         window = SettingsWindow()
 
-    window._apply_acquired_cookie("deepseek", "session=latest; user=42")
-    assert window._provider_widgets["COOKIE"].toPlainText() == "session=latest; user=42"
-    assert window._provider_widgets["AUTH"].text() == "existing-bearer-token"
-    assert window._provider_drafts["deepseek"]["COOKIE"] == "session=latest; user=42"
+    window._apply_acquired_cookie("deepseek", "fresh-platform-token")
+    assert window._provider_widgets["COOKIE"].toPlainText() == ""
+    assert window._provider_widgets["AUTH"].text() == "Bearer fresh-platform-token"
+    assert window._provider_drafts["deepseek"]["AUTH"] == "Bearer fresh-platform-token"
     window.close()
 
 

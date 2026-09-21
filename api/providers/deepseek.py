@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
@@ -70,7 +71,10 @@ def _append_usage(
                 # 归一为 cost_cny，避免下游把小数金额误算成 Token。
                 cost = Decimal("0")
                 for usage in usages:
-                    if not isinstance(usage, dict) or usage.get("type") not in TOKEN_TYPES:
+                    if not isinstance(usage, dict) or usage.get("type") not in {
+                        *TOKEN_TYPES,
+                        "cost_cny",
+                    }:
                         continue
                     try:
                         cost += _decimal(usage.get("amount"))
@@ -113,7 +117,10 @@ class DeepSeekProvider(Provider):
     supports_daily_usage = True
     supports_cost = True
     supports_estimated_minute_usage = True
-    supports_cookie_acquisition = True
+    supports_browser_credential_acquisition = True
+    credential_acquisition_label = "平台 Token"
+    stable_history_identity_prefix = "deepseek-jwt-v1-"
+    supports_credential_history_adoption = True
     credential_fields = {
         "API_KEY": {
             "label": "API Key（可选）",
@@ -124,13 +131,15 @@ class DeepSeekProvider(Provider):
         "AUTH": {
             "label": "Bearer Token",
             "secret": True,
-            "hint": "登录后浏览器请求头 authorization（推荐）",
+            "browser_acquisition": True,
+            "hint": "平台登录 Token；可粘贴原始值或完整 Bearer 值（推荐一键获取）",
         },
         "COOKIE": {
             "label": "Cookie",
             "secret": True,
+            "optional": True,
             "multiline": True,
-            "hint": "登录 platform.deepseek.com 后复制，填 AUTH 可省略",
+            "hint": "仅用于兼容旧版平台接口；新版用量接口仍需 Bearer Token",
         },
         "BASE": {
             "label": "平台地址",
@@ -152,6 +161,18 @@ class DeepSeekProvider(Provider):
         self._summary_cache = None
         self._summary_error = None
 
+    def snapshot_identity(self) -> str:
+        subject = platform_api.platform_token_subject(self.config_get("DEEPSEEK_AUTH", ""))
+        if subject:
+            # 登录 Token 会续签变化；JWT subject 才是同一平台账号的稳定身份。
+            digest = hashlib.sha256(f"deepseek-platform:{subject}".encode()).hexdigest()
+            return f"deepseek-jwt-v1-{digest}"
+        return super().snapshot_identity()
+
+    def legacy_snapshot_identity(self) -> str:
+        """Return the pre-v1 credential fingerprint for one-time history adoption."""
+        return super().snapshot_identity()
+
     def close(self) -> None:
         self._platform_session.close()
         self._official_session.close()
@@ -159,6 +180,11 @@ class DeepSeekProvider(Provider):
     @staticmethod
     def acquired_cookie_values(cookie: str) -> dict[str, str]:
         return {"COOKIE": browser_cookie.normalize_cookie(cookie)}
+
+    @staticmethod
+    def acquired_credential_values(value: str) -> dict[str, str]:
+        authorization = platform_api.normalize_authorization(value)
+        return {"AUTH": authorization} if authorization else {}
 
     @staticmethod
     def acquire_cookie_via_chrome(
@@ -179,16 +205,78 @@ class DeepSeekProvider(Provider):
         )
 
     @staticmethod
+    def acquire_credentials_via_chrome(
+        stop_event: threading.Event,
+        use_edge: bool = False,
+        user_data_dir: str | None = None,
+    ) -> str:
+        session = browser_cookie.open_chrome_session(
+            stop_event,
+            acquire_url=_DEEPSEEK_ACQUIRE_URL,
+            profile_name="deepseek-chrome",
+            use_edge=use_edge,
+            user_data_dir=user_data_dir
+            or str(config_manager.CONFIG_DIR / "deepseek-chrome"),
+        )
+        try:
+            if not stop_event.wait(timeout=180):
+                raise RuntimeError("DEEPSEEK_AUTH_EMPTY")
+            headers = session.capture_request_headers(
+                url_prefix="https://platform.deepseek.com/api/v0/",
+                timeout_seconds=10.0,
+            )
+            authorization = platform_api.normalize_authorization(
+                next(
+                    (
+                        value
+                        for key, value in headers.items()
+                        if str(key).lower() == "authorization"
+                    ),
+                    "",
+                )
+            )
+            if not authorization:
+                raise RuntimeError("DEEPSEEK_AUTH_EMPTY")
+            result = session.fetch_json(
+                url="https://platform.deepseek.com/api/v0/users/get_user_summary",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": authorization,
+                    "x-client-platform": "web",
+                },
+                allowed_domains=("platform.deepseek.com", "deepseek.com"),
+            )
+            payload = result.payload
+            if result.status_code in {401, 403} or not isinstance(payload, dict):
+                raise RuntimeError("DEEPSEEK_AUTH_INVALID")
+            data = payload.get("data")
+            outer_code = payload.get("code", 0)
+            biz_code = data.get("biz_code", 0) if isinstance(data, dict) else None
+            biz_data = data.get("biz_data") if isinstance(data, dict) else None
+            if (
+                result.status_code != 200
+                or outer_code not in (0, "0", None)
+                or biz_code not in (0, "0", None)
+                or not isinstance(biz_data, dict)
+            ):
+                raise RuntimeError("DEEPSEEK_AUTH_INVALID")
+            return authorization
+        finally:
+            session.close()
+
+    @staticmethod
     def describe_acquire_error(exc: Exception) -> str:
         code = str(exc) if isinstance(exc, RuntimeError) else "ACQUIRE_UNEXPECTED"
         messages = {
-            "CHROME_NOT_FOUND": "未检测到 Chrome 或 Edge，请先安装浏览器，或手动粘贴 Cookie",
+            "CHROME_NOT_FOUND": "未检测到 Chrome 或 Edge，请先安装浏览器，或手动粘贴平台 Token",
             "USER_DATA_DIR_FAILED": "无法创建浏览器用户数据目录",
             "NO_FREE_CDP_PORT": "无法分配浏览器调试端口",
             "CHROME_LAUNCH_FAILED": "浏览器启动失败，请检查权限或安全软件",
             "BROWSER_NOT_READY": "浏览器调试接口未就绪，请稍后重试",
             "DEEPSEEK_COOKIE_EMPTY": "当前浏览器会话尚未登录 DeepSeek，请登录后再采集",
-            "ACQUIRE_UNEXPECTED": "采集 DeepSeek Cookie 时出现未预期错误",
+            "DEEPSEEK_AUTH_EMPTY": "未捕获到 DeepSeek 平台 Token，请确认已登录后再点击完成采集",
+            "DEEPSEEK_AUTH_INVALID": "捕获到的 DeepSeek 平台 Token 验证失败，请重新登录",
+            "ACQUIRE_UNEXPECTED": "采集 DeepSeek 平台 Token 时出现未预期错误",
         }
         return messages.get(code, f"采集失败：{code}")
 
@@ -264,15 +352,27 @@ class DeepSeekProvider(Provider):
             return None, FetchError("NOT_CONFIGURED", "账户摘要", "未配置 DeepSeek 平台 Token/Cookie")
         try:
             summary = self._summary()
-            monthly_costs = summary.get("monthly_costs", [])
-            month_cost = Decimal("0")
+            monthly_costs = summary.get("monthly_costs")
+            month_cost: Decimal | None = None
             if isinstance(monthly_costs, list) and monthly_costs:
                 first = monthly_costs[0]
                 if isinstance(first, dict):
                     month_cost = _decimal(first.get("amount"))
+            total_cost: Decimal | None = None
+            total_costs = summary.get("total_costs")
+            if isinstance(total_costs, list):
+                for item in total_costs:
+                    if isinstance(item, dict) and item.get("currency") == "CNY":
+                        total_cost = _decimal(item.get("amount"))
+                        break
             return ProviderSummary(
                 month_cost=month_cost,
-                month_tokens=safe_int(summary.get("monthly_token_usage")),
+                month_tokens=(
+                    safe_int(summary.get("monthly_token_usage"))
+                    if "monthly_token_usage" in summary
+                    else None
+                ),
+                total_cost=total_cost,
             ), None
         except Exception as exc:
             return None, _fetch_error("账户摘要", exc)

@@ -946,8 +946,23 @@ class TokenData:
         data.account_key = account_key
         data.refresh_error_codes = ()
         try:
+            legacy_identity = getattr(provider, "legacy_snapshot_identity", None)
+            legacy_account_key = (
+                str(legacy_identity() or "").strip() if callable(legacy_identity) else ""
+            )
             history_provider = (
-                (f"{provider.id}:{account_key}" if isolated_profile else history.scoped_provider(provider.id, account_key))
+                (
+                    f"{provider.id}:{account_key}"
+                    if isolated_profile
+                    else history.scoped_provider(
+                        provider.id,
+                        account_key,
+                        legacy_account_key=legacy_account_key,
+                        stable_identity_prefix=str(
+                            getattr(provider, "stable_history_identity_prefix", "") or ""
+                        ),
+                    )
+                )
                 if not getattr(provider, "supports_subscription_quota", False) else provider.id
             )
         except Exception:
@@ -1294,6 +1309,16 @@ class TokenData:
                         history_provider,
                         costs_are_normalized=True,
                     )
+                    if (
+                        not isolated_profile
+                        and account_key
+                        and getattr(provider, "supports_credential_history_adoption", False)
+                        and history.adopt_matching_account_history(provider.id, account_key)
+                    ):
+                        config_manager.logger().info(
+                            "Adopted matching history after credential renewal: provider=%s",
+                            provider.id,
+                        )
                 except Exception:
                     config_manager.logger().exception("History save failed for %s", provider.id)
                     per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史保存失败"))

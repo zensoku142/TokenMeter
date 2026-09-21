@@ -411,6 +411,7 @@ class SettingsWindow(QDialog):
         self._cookie_acquire_provider_id = ""
         self._credential_acquire_label = "Cookie"
         self._credential_acquire_automatic = False
+        self._external_navigation_pending = False
         self._rendered_provider_id = ""
         self._provider_widgets: dict[str, Union[QLineEdit, QPlainTextEdit]] = {}
         self._provider_drafts: dict[str, dict[str, str]] = {}
@@ -581,7 +582,7 @@ class SettingsWindow(QDialog):
         )
         self.deepseek_offpeak_source_button = bind_text(QPushButton(), "查看国务院通知")
         self.deepseek_offpeak_source_button.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(_deepseek_2026_holiday_notice_url()))
+            lambda: self._open_external_url(_deepseek_2026_holiday_notice_url())
         )
         official_actions_layout.addWidget(self.deepseek_offpeak_official_button)
         official_actions_layout.addWidget(self.deepseek_offpeak_source_button)
@@ -1271,6 +1272,19 @@ class SettingsWindow(QDialog):
             if worker.isRunning():
                 worker.wait()
 
+    def deactivation_is_protected(self) -> bool:
+        """Keep settings alive while an action it started legitimately owns focus."""
+        return self._cookie_acquire_worker is not None or self._external_navigation_pending
+
+    def finish_external_navigation(self) -> None:
+        self._external_navigation_pending = False
+
+    def _open_external_url(self, url: str) -> None:
+        # 设置页主动打开的网页会抢走主面板焦点；记录来源，避免被普通失焦策略误判为离开设置。
+        self._external_navigation_pending = True
+        if not QDesktopServices.openUrl(QUrl(url)):
+            self._external_navigation_pending = False
+
     def _bind_update_controller(self) -> None:
         if self.update_controller is None:
             bind_text(self.current_version_label, "v开发模式")
@@ -1846,7 +1860,7 @@ class SettingsWindow(QDialog):
             dashboard_button = bind_text(QPushButton(), "打开官方用量页面")
             dashboard_button.setObjectName("providerDashboardButton")
             dashboard_button.clicked.connect(
-                lambda _checked=False, url=dashboard_url: QDesktopServices.openUrl(QUrl(url))
+                lambda _checked=False, url=dashboard_url: self._open_external_url(url)
             )
             self.credentials_layout.addWidget(dashboard_button)
 
@@ -2225,7 +2239,7 @@ class SettingsWindow(QDialog):
         self.update_controller.skip_available_version(self)
 
     def _open_project_homepage(self) -> None:
-        QDesktopServices.openUrl(QUrl(GITHUB_REPOSITORY_URL))
+        self._open_external_url(GITHUB_REPOSITORY_URL)
 
     def _choose_data_dir(self) -> None:
         selected = QFileDialog.getExistingDirectory(

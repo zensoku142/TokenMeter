@@ -1,7 +1,7 @@
 """Regression cases for account boundaries and bounded history/log reads."""
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import Mock
 
@@ -89,6 +89,82 @@ def test_api_history_adopts_legacy_once_and_keeps_accounts_separate(database):
     assert history.total_cost(second) == 0
     assert history.scoped_provider("mimo", "A") == first
     assert history.total_cost(first) == Decimal("1.25")
+
+
+def test_deepseek_stable_identity_adopts_old_and_current_token_scopes(database):
+    old_scope = history.scoped_provider("deepseek", "old-token-fingerprint")
+    current_scope = "deepseek:current-token-fingerprint"
+    stable_key = "deepseek-jwt-v1-stable-account"
+    usage_day = date(2026, 9, 20)
+    totals = {token_type: 1 for token_type in history.MINUTE_TOKEN_TYPES}
+    history.save_estimated_minute_usage(
+        old_scope, usage_day, totals, datetime(2026, 9, 20, 9, 0)
+    )
+    totals["RESPONSE_TOKEN"] = 4
+    history.save_estimated_minute_usage(
+        old_scope, usage_day, totals, datetime(2026, 9, 20, 9, 1)
+    )
+    history.save_usage(
+        [{"days": [{"date": usage_day.isoformat(), "data": [{
+            "model": "deepseek-test",
+            "usage": [{"type": "RESPONSE_TOKEN", "amount": 4}],
+        }]}]}],
+        [],
+        provider=current_scope,
+    )
+
+    stable_scope = history.scoped_provider(
+        "deepseek",
+        stable_key,
+        legacy_account_key="current-token-fingerprint",
+        stable_identity_prefix="deepseek-jwt-v1-",
+    )
+
+    assert history.minute_usage_for_day(stable_scope, usage_day)
+    assert history.recent_daily(7, stable_scope)[0]["tokens"] == 4
+    assert history.minute_usage_for_day(old_scope, usage_day) == []
+    assert history.recent_daily(7, current_scope) == []
+
+
+def test_opaque_token_renewal_adopts_history_only_after_three_matching_days(database):
+    old_scope = history.scoped_provider("deepseek", "old-token")
+    new_scope = "deepseek:new-token"
+    for day in range(18, 21):
+        usage_day = f"2026-09-{day:02d}"
+        payload = [{"days": [{"date": usage_day, "data": [{
+            "model": "deepseek-test",
+            "usage": [
+                {"type": "RESPONSE_TOKEN", "amount": day},
+                {"type": "cost_cny", "amount": f"0.{day}"},
+            ],
+        }]}]}]
+        history.save_usage(payload, payload, provider=old_scope, costs_are_normalized=True)
+        history.save_usage(payload, payload, provider=new_scope, costs_are_normalized=True)
+    totals = {token_type: 1 for token_type in history.MINUTE_TOKEN_TYPES}
+    history.save_estimated_minute_usage(
+        old_scope, date(2026, 9, 20), totals, datetime(2026, 9, 20, 9, 0)
+    )
+    totals["RESPONSE_TOKEN"] = 2
+    history.save_estimated_minute_usage(
+        old_scope, date(2026, 9, 20), totals, datetime(2026, 9, 20, 9, 1)
+    )
+
+    assert history.adopt_matching_account_history("deepseek", "new-token")
+    assert history.minute_usage_for_day(new_scope, date(2026, 9, 20))
+    assert history.minute_usage_for_day(old_scope, date(2026, 9, 20)) == []
+
+
+def test_opaque_token_history_does_not_merge_on_weak_match(database):
+    old_scope = history.scoped_provider("deepseek", "old-token")
+    new_scope = "deepseek:new-token"
+    for scope in (old_scope, new_scope):
+        payload = [{"days": [{"date": "2026-09-20", "data": [{
+            "model": "deepseek-test",
+            "usage": [{"type": "RESPONSE_TOKEN", "amount": 7}],
+        }]}]}]
+        history.save_usage(payload, [], provider=scope)
+
+    assert not history.adopt_matching_account_history("deepseek", "new-token")
 
 
 @pytest.mark.parametrize("url", ["http://platform.deepseek.com", "https://u:p@platform.deepseek.com", "https://example.com:bad"])

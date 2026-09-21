@@ -1,7 +1,9 @@
 import threading
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import pytest
 
 os.environ["APPDATA"] = str(Path.cwd() / ".test-appdata")
 
@@ -38,6 +40,53 @@ def test_deepseek_cookie_acquisition_keeps_bearer_token_separate():
     assert acquire.call_args.kwargs["user_data_dir"] == str(
         config_manager.CONFIG_DIR / "deepseek-chrome"
     )
+
+
+def test_deepseek_browser_acquisition_captures_and_validates_platform_token():
+    session = Mock()
+    session.capture_request_headers.return_value = {
+        "Authorization": "Bearer fresh-platform-token"
+    }
+    session.fetch_json.return_value = browser_cookie.BrowserFetchResult(
+        200,
+        {"code": 0, "data": {"biz_code": 0, "biz_data": {"normal_wallets": []}}},
+        "session=active",
+    )
+    stop_event = threading.Event()
+    stop_event.set()
+
+    with patch("api.providers.deepseek.browser_cookie.open_chrome_session", return_value=session):
+        result = DeepSeekProvider.acquire_credentials_via_chrome(stop_event)
+
+    assert result == "Bearer fresh-platform-token"
+    assert DeepSeekProvider.acquired_credential_values(result) == {
+        "AUTH": "Bearer fresh-platform-token"
+    }
+    session.capture_request_headers.assert_called_once_with(
+        url_prefix="https://platform.deepseek.com/api/v0/",
+        timeout_seconds=10.0,
+    )
+    session.close.assert_called_once_with()
+
+
+def test_deepseek_browser_acquisition_rejects_invalid_platform_token():
+    session = Mock()
+    session.capture_request_headers.return_value = {"authorization": "raw-token"}
+    session.fetch_json.return_value = browser_cookie.BrowserFetchResult(
+        200,
+        {"code": 40003, "msg": "Authorization Failed (invalid token)"},
+        "",
+    )
+    stop_event = threading.Event()
+    stop_event.set()
+
+    with (
+        patch("api.providers.deepseek.browser_cookie.open_chrome_session", return_value=session),
+        pytest.raises(RuntimeError, match="DEEPSEEK_AUTH_INVALID"),
+    ):
+        DeepSeekProvider.acquire_credentials_via_chrome(stop_event)
+
+    session.close.assert_called_once_with()
 
 
 def test_browser_profiles_follow_the_active_application_data_directory():

@@ -49,6 +49,7 @@ def widget_stub():
     widget._thread_pool = Mock()
     widget._refresh_timer = Mock()
     widget._background_refresh_timer = Mock()
+    widget.ball = Mock()
     widget.panel = Mock()
     widget.tray = Mock()
     widget.open_settings = Mock()

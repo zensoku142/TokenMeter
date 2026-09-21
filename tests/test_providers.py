@@ -1248,6 +1248,45 @@ class DeepSeekProviderTests(unittest.TestCase):
         usage = payloads[0]["days"][0]["data"][0]["usage"]
         self.assertEqual(usage, [{"type": "cost_cny", "amount": "0.03"}])
 
+    @patch("api.providers.deepseek.platform_api.get_user_summary")
+    def test_current_summary_fields_do_not_report_missing_month_values_as_zero(self, get_summary):
+        get_summary.return_value = {
+            "total_available_token_estimation": "100",
+            "total_costs": [{"currency": "CNY", "amount": "12.5"}],
+        }
+        provider = DeepSeekProvider(self.provider_config())
+        try:
+            summary, error = provider.fetch_summary()
+        finally:
+            provider.close()
+
+        self.assertIsNone(error)
+        self.assertIsNone(summary.month_tokens)
+        self.assertIsNone(summary.month_cost)
+        self.assertEqual(str(summary.total_cost), "12.5")
+
+    def test_snapshot_identity_survives_platform_token_renewal(self):
+        import base64
+        import json
+
+        def token(subject, issued_at):
+            payload = base64.urlsafe_b64encode(
+                json.dumps({"sub": subject, "iat": issued_at}).encode()
+            ).decode().rstrip("=")
+            return f"header.{payload}.signature"
+
+        first = DeepSeekProvider({"DEEPSEEK_AUTH": token("same-user", 1)})
+        second = DeepSeekProvider({"DEEPSEEK_AUTH": token("same-user", 2)})
+        other = DeepSeekProvider({"DEEPSEEK_AUTH": token("other-user", 1)})
+        try:
+            self.assertEqual(first.snapshot_identity(), second.snapshot_identity())
+            self.assertNotEqual(first.snapshot_identity(), other.snapshot_identity())
+            self.assertNotEqual(first.legacy_snapshot_identity(), second.legacy_snapshot_identity())
+        finally:
+            first.close()
+            second.close()
+            other.close()
+
 
     @patch("api.providers.mimo.config_manager.get")
     def test_ph_is_extracted_from_cookie_and_appended_to_url(self, get):
