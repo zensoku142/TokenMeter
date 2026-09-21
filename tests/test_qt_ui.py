@@ -925,6 +925,33 @@ def test_codex_ball_uses_remaining_quota_and_compact_reset_time():
     widget.hide()
 
 
+def test_codex_ball_hides_clock_without_five_hour_quota():
+    reset = datetime(2026, 8, 22, 3, 58, tzinfo=timezone.utc)
+    window = QuotaWindow(
+        "codex-weekly", "每周额度", 9,
+        resets_at=reset, window_minutes=10_080,
+    )
+    data = TokenData(
+        status="ok",
+        quota_windows=[window],
+        per_provider=[
+            PerProviderData("codex", "Codex", quota_windows=[window], status="ok")
+        ],
+    )
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+        widget._data = data
+        widget._refreshing = False
+        widget._apply_update()
+
+    assert widget.ball._quota_remaining == 91
+    assert widget.ball._quota_title == "周额度"
+    assert widget.ball._quota_reset_clock == ""
+    assert widget.ball.toolTip() == "周额度 · 剩余 91% · 08-22 11:58"
+    widget._closed = True
+    widget.hide()
+
+
 def test_cursor_ball_reuses_quota_mode_for_success_and_unavailable_states():
     reset = datetime.now(timezone.utc) + timedelta(days=12)
     window = QuotaWindow("cursor-monthly", "每月额度", 42, resets_at=reset)
@@ -3724,6 +3751,28 @@ def test_codex_water_ball_renders_quota_level_in_dark_and_light_themes(qtbot):
     finally:
         controller.set_mode("dark")
         ball.close()
+
+
+def test_quota_value_recenters_when_reset_clock_is_hidden():
+    ball = FloatingUsageBall(88)
+    captured: list[tuple[QRectF, str]] = []
+
+    def capture_text(_painter, rect, text, _color, _shadow):
+        captured.append((QRectF(rect), text))
+
+    with patch.object(FloatingUsageBall, "_paint_centered_text", side_effect=capture_text):
+        ball.set_quota_state(0, "08-22 11:58", "周额度")
+        ball.grab()
+        single_line_center = captured[0][0].center().y()
+
+        captured.clear()
+        ball.set_quota_state(0, "11:58", "5 小时额度", reset_clock="11:58")
+        ball.grab()
+        two_line_center = captured[0][0].center().y()
+
+    assert single_line_center == 60
+    assert two_line_center == 53
+    ball.close()
 
 
 def test_codex_water_ball_uses_custom_accent_for_water_and_border():

@@ -34,7 +34,7 @@ Actual component screenshots in Chinese, using demo data. [Original images and s
 
 TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
 
-Current version：**v1.15.0** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.15.1** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
@@ -43,7 +43,7 @@ Current version：**v1.15.0** · VPet **v0.1.4** · [GitHub Pages](https://zenso
 - **Local analytics and Excel**: read local Codex (including archived sessions) and Claude logs, show cached results, then update in the background. Filter by date, project and model, compare daily usage, zoom charts and export `.xlsx` summaries, details and methodology. Local logs have unknown account attribution and do not represent subscription quotas or actual bills; accessible WSL directories can be selected without starting WSL.
 - **Provider management**: offline brand icons, search, favorites and removal of app-managed connections. Removing a provider preserves CLI logins and history.
 - **Refresh and alerts**: retry backoff, offline cache, optional low-quota and recovery alerts, forecasts and quiet hours. Forecasts require at least 10 minutes of valid samples from the same quota cycle; recovery alerts require low-quota alerts and a confirmed refresh. Alert state survives restarts.
-- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and optional VPet. Pet quota windows follow the app theme with pet v0.1.4 and app v1.15.0.
+- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and optional VPet. Pet quota windows follow the app theme with pet v0.1.4 and app v1.15.1.
 
 [Provider setup and limitations (Chinese)](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity statusline](docs/antigravity-statusline-2026-09-07.md)
 
@@ -113,7 +113,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.15.0`; optional pet extension: `0.1.4`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.15.1`; optional pet extension: `0.1.4`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

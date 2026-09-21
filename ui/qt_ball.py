@@ -914,6 +914,11 @@ class FloatingUsageBall(QWidget):
             self._liquid_surface.clear_motion()
         super().hideEvent(event)
 
+    def _primary_quota_radius(self) -> float:
+        radius = DESIGN_SIZE / 2 - (8 if self._peak_highlight else 3)
+        # 双额度模式为周额度液体槽预留真实空间，而不是把粗描边叠在主水球上。
+        return radius - 7 if self._quota_secondary_remaining is not None else radius
+
     def set_peak_highlight(self, enabled: bool) -> None:
         enabled = bool(enabled)
         if self._peak_highlight == enabled:
@@ -938,7 +943,7 @@ class FloatingUsageBall(QWidget):
         super().leaveEvent(event)
 
     def _liquid_inner_rect(self) -> QRectF:
-        ball_radius = DESIGN_SIZE / 2 - (8 if self._peak_highlight else 3)
+        ball_radius = self._primary_quota_radius()
         inner, _ = self._quota_geometry(ball_radius)
         return QRectF(inner)
 
@@ -959,7 +964,7 @@ class FloatingUsageBall(QWidget):
             position.x() * DESIGN_SIZE / side,
             position.y() * DESIGN_SIZE / side,
         )
-        ball_radius = DESIGN_SIZE / 2 - (8 if self._peak_highlight else 3)
+        ball_radius = self._primary_quota_radius()
         inner, clip = self._quota_geometry(ball_radius)
         if not clip.contains(design_position) or self._quota_remaining is None:
             return False
@@ -1549,34 +1554,35 @@ class FloatingUsageBall(QWidget):
     ) -> None:
         if self._quota_secondary_remaining is None:
             return
-        # 内层水位已经承载短期额度；周额度使用独立外环，避免在小球内继续堆叠数字。
+        # 周额度使用独立的玻璃液体槽；空槽和填充共同表达比例，避免依赖第二组文字或异色。
+        channel_width = 7.0
+        channel_radius = ball_radius - 6.0
         ring_rect = QRectF(
-            DESIGN_SIZE / 2 - ball_radius + 2.5,
-            DESIGN_SIZE / 2 - ball_radius + 2.5,
-            (ball_radius - 2.5) * 2,
-            (ball_radius - 2.5) * 2,
+            DESIGN_SIZE / 2 - channel_radius,
+            DESIGN_SIZE / 2 - channel_radius,
+            channel_radius * 2,
+            channel_radius * 2,
         )
-        background = QColor(theme.heat[1])
-        background.setAlpha(150)
+        track = QColor(theme.heat[2])
+        track.setAlpha(205)
         painter.save()
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(
             QPen(
-                background,
-                4.0,
+                track,
+                channel_width,
                 Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
             )
         )
         painter.drawEllipse(ring_rect)
 
-        # 与活动热力图共用强调色派生阶梯，并选最高色的前一档；自定义球体颜色时外环会同步变化且不会抢眼。
-        progress = QColor(theme.heat[-2])
-        progress.setAlpha(225)
+        deep = QColor(theme.accent).darker(132)
+        deep.setAlpha(235)
         painter.setPen(
             QPen(
-                progress,
-                4.0,
+                deep,
+                channel_width - 0.8,
                 Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
             )
@@ -1584,6 +1590,38 @@ class FloatingUsageBall(QWidget):
         span = -round(360 * 16 * self._quota_secondary_remaining / 100)
         if span:
             painter.drawArc(ring_rect, 90 * 16, span)
+
+        liquid = QColor(theme.accent_hover)
+        liquid.setAlpha(245)
+        painter.setPen(
+            QPen(
+                liquid,
+                channel_width - 2.1,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        if span:
+            painter.drawArc(ring_rect, 90 * 16, span)
+
+        highlight = QColor("#FFFFFF")
+        highlight.setAlpha(72)
+        painter.setPen(
+            QPen(
+                highlight,
+                1.0,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        if span:
+            painter.drawArc(ring_rect.adjusted(1.0, 1.0, -1.0, -1.0), 90 * 16, span)
+
+        rim = QColor(theme.accent_hover)
+        rim.setAlpha(105)
+        painter.setPen(QPen(rim, 0.9))
+        painter.drawEllipse(ring_rect.adjusted(-channel_width / 2, -channel_width / 2, channel_width / 2, channel_width / 2))
+        painter.drawEllipse(ring_rect.adjusted(channel_width / 2, channel_width / 2, -channel_width / 2, -channel_width / 2))
         painter.restore()
 
     def _paint_quota(self, painter: QPainter, theme, ball_radius: float) -> None:
@@ -1683,7 +1721,8 @@ class FloatingUsageBall(QWidget):
             if text_width > 96:
                 display_value_font = QFont(value_font)
                 display_value_font.setPointSizeF(value_font.pointSizeF() * 96 / text_width)
-        value_rect = QRectF(8, 29, 104, 48)
+        # 没有短周期重置时刻时恢复单行垂直居中，不能保留双行布局留下的上方位置。
+        value_rect = QRectF(8, 29 if self._quota_reset_clock else 36, 104, 48)
         reset_rect = QRectF(18, 72, 84, 19)
         reset_font = QFont("Microsoft YaHei UI", 10, QFont.Weight.DemiBold)
         empty_shadow = QColor("#000000" if theme.name == "dark" else "#FFFFFF")
@@ -1788,7 +1827,7 @@ class FloatingUsageBall(QWidget):
 
         if self._quota_mode:
             self._paint_secondary_quota_ring(painter, theme, ball_radius)
-            self._paint_quota(painter, theme, ball_radius)
+            self._paint_quota(painter, theme, self._primary_quota_radius())
             self._paint_glass_highlight(painter)
         else:
             highlight = QLinearGradient(0, 8, 0, side * 0.55)

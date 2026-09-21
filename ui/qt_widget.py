@@ -1977,6 +1977,16 @@ class FloatingWidget(QWidget):
                 if primary.resets_at is not None
                 else ""
             )
+            # 球内时刻只用于短周期额度；周/月额度只显示一个小时会丢失日期语境，完整时间留在悬浮提示中。
+            primary_reset_text = (
+                reset_clock
+                if primary.window_minutes == 300
+                else primary.resets_at.astimezone().strftime("%m-%d %H:%M")
+                if primary.resets_at is not None and primary.resets_at.tzinfo is not None
+                else primary.resets_at.strftime("%m-%d %H:%M")
+                if primary.resets_at is not None
+                else "重置时间未知"
+            )
             secondary_used = (
                 quota_used_percent(secondary.used_percent) if secondary is not None else None
             )
@@ -1991,9 +2001,13 @@ class FloatingWidget(QWidget):
             )
             self.ball.set_quota_state(
                 None if loading or used is None else max(0, 100 - used),
-                "正在更新额度" if loading else reset_clock or "重置时间未知",
+                "正在更新额度" if loading else primary_reset_text,
                 primary.title,
-                reset_clock="" if loading else reset_clock,
+                reset_clock=(
+                    reset_clock
+                    if not loading and primary.window_minutes == 300
+                    else ""
+                ),
                 secondary_remaining_percent=(
                     None
                     if loading or secondary_used is None
