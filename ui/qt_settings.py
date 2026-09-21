@@ -72,6 +72,7 @@ from ui.i18n import (
     add_tab,
     bind_text,
     configure_language,
+    current_language,
     language_controller,
     tr,
 )
@@ -83,10 +84,24 @@ from updater.client import (
 )
 
 _CARD_PADDING = 18
-_DEEPSEEK_2026_HOLIDAY_NOTICE_URL = (
-    "https://big5.www.gov.cn/gate/big5/www.gov.cn/yaowen/liebiao/202511/"
-    "content_7047099.htm"
+_DEEPSEEK_2026_HOLIDAY_NOTICE_URLS = {
+    "zh-cn": "https://www.gov.cn/yaowen/liebiao/202511/content_7047099.htm",
+    "zh-tw": (
+        "https://big5.www.gov.cn/gate/big5/www.gov.cn/yaowen/liebiao/202511/"
+        "content_7047099.htm"
+    ),
+}
+_DEEPSEEK_2026_HOLIDAY_NOTICE_EN_URL = (
+    "https://english.www.gov.cn/policies/featured/202511/04/"
+    "content_WS6909c915c6d00ca5f9a074f7.html"
 )
+
+
+def _deepseek_2026_holiday_notice_url() -> str:
+    # 英文站使用独立内容路径；非中文界面统一打开英文页，避免落入中文或繁体网关。
+    return _DEEPSEEK_2026_HOLIDAY_NOTICE_URLS.get(
+        current_language(), _DEEPSEEK_2026_HOLIDAY_NOTICE_EN_URL
+    )
 
 
 class _SettingsSpinBox(QSpinBox):
@@ -566,7 +581,7 @@ class SettingsWindow(QDialog):
         )
         self.deepseek_offpeak_source_button = bind_text(QPushButton(), "查看国务院通知")
         self.deepseek_offpeak_source_button.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(_DEEPSEEK_2026_HOLIDAY_NOTICE_URL))
+            lambda: QDesktopServices.openUrl(QUrl(_deepseek_2026_holiday_notice_url()))
         )
         official_actions_layout.addWidget(self.deepseek_offpeak_official_button)
         official_actions_layout.addWidget(self.deepseek_offpeak_source_button)

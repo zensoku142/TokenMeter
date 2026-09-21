@@ -62,7 +62,7 @@ from ui.qt_panel import (
     format_reset_countdown,
     format_token_axis,
 )
-from ui.qt_settings import SettingsWindow
+from ui.qt_settings import SettingsWindow, _deepseek_2026_holiday_notice_url
 from ui.qt_theme import DARK_THEME, LIGHT_THEME, configure_theme, current_theme
 from ui.qt_update import AppUpdateController, UpdatePromptDialog
 from ui.qt_widget import FloatingWidget
@@ -5230,6 +5230,40 @@ def test_settings_window_exposes_update_controls_without_controller():
         window.project_homepage_button.click()
     assert open_url.call_args.args[0].toString() == "https://github.com/zensoku142/TokenMeter"
     window.close()
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_url"),
+    (
+        (
+            "zh-cn",
+            "https://www.gov.cn/yaowen/liebiao/202511/content_7047099.htm",
+        ),
+        (
+            "zh-tw",
+            "https://big5.www.gov.cn/gate/big5/www.gov.cn/yaowen/liebiao/202511/"
+            "content_7047099.htm",
+        ),
+        (
+            "en",
+            "https://english.www.gov.cn/policies/featured/202511/04/"
+            "content_WS6909c915c6d00ca5f9a074f7.html",
+        ),
+        (
+            "ja",
+            "https://english.www.gov.cn/policies/featured/202511/04/"
+            "content_WS6909c915c6d00ca5f9a074f7.html",
+        ),
+        (
+            "ko",
+            "https://english.www.gov.cn/policies/featured/202511/04/"
+            "content_WS6909c915c6d00ca5f9a074f7.html",
+        ),
+    ),
+)
+def test_deepseek_holiday_notice_url_follows_current_language(language, expected_url):
+    with patch("ui.qt_settings.current_language", return_value=language):
+        assert _deepseek_2026_holiday_notice_url() == expected_url
 
 
 @pytest.mark.parametrize("incomplete", [False, True])
