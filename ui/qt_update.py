@@ -50,12 +50,14 @@ class PetExtensionWorker(QThread):
     progress_changed = Signal(object)
 
     def __init__(self, operation: str, parent=None, *, release: PetReleaseInfo | None = None,
-                 character: str | None = None):
+                 character: str | None = None, channel: str | None = None):
         super().__init__(parent)
         self.operation = operation
         self.error: Exception | None = None
         self.release = release
         self.character = character
+        self.channel = channel
+        self.discard_result = False
         self.releases: list[PetReleaseInfo] = []
 
     def run(self) -> None:
@@ -64,10 +66,14 @@ class PetExtensionWorker(QThread):
                 client = GitHubReleaseClient()
                 try:
                     if self.operation == "check":
-                        self.release = client.latest_pet_release(cancel_requested=self.isInterruptionRequested)
+                        self.release = client.latest_pet_release(
+                            cancel_requested=self.isInterruptionRequested,
+                            **({"channel": self.channel} if self.channel is not None else {}),
+                        )
                     else:
                         self.releases = client.available_pet_releases(
                             cancel_requested=self.isInterruptionRequested, limit=20,
+                            **({"channel": self.channel} if self.channel is not None else {}),
                         )
                         self.release = self.releases[0] if self.releases else None
                 finally:
@@ -77,6 +83,7 @@ class PetExtensionWorker(QThread):
                     self.progress_changed.emit, self.isInterruptionRequested,
                     release=self.release, replace_existing=self.operation == "update",
                     character=self.character, add_character=self.operation == "add-character",
+                    channel=self.channel,
                 )
             elif self.operation == "remove-character":
                 pet_extension.remove_character(self.character)
@@ -298,6 +305,16 @@ class AppUpdateController(QObject):
     def latest_pet_release(self) -> PetReleaseInfo | None:
         return self._latest_pet_release
 
+    def reset_pet_channel(self) -> None:
+        # 通道切换后旧检查结果不再代表当前选择，下一次自动检查需要重新请求。
+        if self._pet_check_worker is not None:
+            # QThread 结束会清除中断标志，另存失效状态供 finished 回调判断。
+            self._pet_check_worker.discard_result = True
+            self._pet_check_worker.requestInterruption()
+        self._latest_pet_release = None
+        self._pet_checked_in_session = False
+        self.latest_pet_release_changed.emit(None)
+
     def is_downloading(self) -> bool:
         return self._download_worker is not None
 
@@ -403,7 +420,8 @@ class AppUpdateController(QObject):
             return
         self._pet_checked_in_session = True
         self._pet_check_manual = manual
-        self._pet_check_worker = PetExtensionWorker("check", self)
+        self._pet_check_worker = PetExtensionWorker(
+            "check", self, channel=str(config_manager.get("PET_UPDATE_CHANNEL", "stable")))
         self._pet_check_worker.finished.connect(self._finish_pet_check)
         self._pet_check_worker.start()
 
@@ -414,7 +432,7 @@ class AppUpdateController(QObject):
         # 使用 finished 信号后才释放线程；退出时会等待取消完成，不能销毁运行中的 QThread。
         self._pet_check_worker = None
         worker.deleteLater()
-        if self._stopping:
+        if self._stopping or worker.discard_result:
             return
         if worker.error is not None:
             if self._pet_check_manual:

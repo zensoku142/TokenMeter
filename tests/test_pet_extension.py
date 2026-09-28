@@ -340,9 +340,10 @@ def test_settings_offers_add_and_remove_for_each_installed_character(tmp_path, m
         build_release.PET_MANIFEST, character_resources={"vup": {"revision": "a" * 40}})))
     window = SettingsWindow()
     try:
-        assert window.pet_vpet_button.text() == "删除VPet 默认角色"
-        assert window.pet_whale_button.text() == "下载鲸鱼娘"
+        assert window.pet_vpet_button.text() == "卸载"
+        assert window.pet_whale_button.text() == "安装"
         assert window.pet_whale_button.isEnabled()
+        assert window.pet_vpet_default_button.text() == "当前默认"
         with (patch("ui.qt_settings.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes),
               patch.object(window, "_start_pet_task") as start):
             window._manage_pet_character("whale")
@@ -456,20 +457,20 @@ def test_settings_missing_pack_and_uninstall_lifecycle(tmp_path, monkeypatch):
         window = SettingsWindow()
         assert not window.vpet_check.isEnabled()
         assert not window.vpet_check.isChecked()
-        assert window.pet_install_button.isEnabled()
+        assert window.pet_vpet_button.isEnabled()
         assert not window.pet_uninstall_button.isEnabled()
-        assert window.pet_version_label.text() == "桌宠版本：未安装"
+        assert window.pet_version_label.text() == "未安装"
     destination = pet.extension_directory()
     destination.mkdir(parents=True)
     window._refresh_pet_controls()
     assert not window.vpet_check.isEnabled()
-    assert window.pet_version_label.text() == "桌宠版本：不可用"
+    assert window.pet_version_label.text() == "不可用"
     payload(destination)
     window._refresh_pet_controls()
     assert window.vpet_check.isEnabled()
-    assert not window.pet_install_button.isEnabled()
+    assert not window.pet_vpet_button.isEnabled()
     assert window.pet_uninstall_button.isEnabled()
-    assert window.pet_version_label.text() == f"桌宠版本：v{build_release.PET_MANIFEST['version']}（已安装：VPet）"
+    assert window.pet_version_label.text() == f"v{build_release.PET_MANIFEST['version']}（已安装：萝莉斯）"
     events = []
     window.on_saved = lambda: events.append("stop-host")
     with (
@@ -729,7 +730,8 @@ def test_legacy_installed_pack_survives_host_upgrade_and_can_update(pack, tmp_pa
     }))
     assert pet.installed_executable() is not None
     pet.install_pack(pack, destination, replace_existing=True)
-    monkeypatch.setattr(pet, "APP_VERSION", "1.15.0")
+    # 模拟未来主程序升级，不能让固定旧版本低于新扩展的最低兼容版本。
+    monkeypatch.setattr(pet, "APP_VERSION", f"{int(pet.APP_VERSION.split('.')[0]) + 1}.0.0")
     assert pet.installed_manifest()["version"] == build_release.PET_MANIFEST["version"]
 
 
@@ -756,29 +758,27 @@ def test_latest_pet_selects_highest_compatible_stable_release(monkeypatch):
     download.assert_not_called()
 
 
-def test_manual_pet_check_returns_a_selectable_version_list():
+def test_manual_pet_check_uses_selected_channel():
     from ui.qt_update import PetExtensionWorker
 
-    releases = [release_info("0.2.0"), release_info("0.1.0")]
-    with (patch.object(GitHubReleaseClient, "available_pet_releases", return_value=releases) as discover,
-          patch.object(GitHubReleaseClient, "latest_pet_release") as latest):
-        worker = PetExtensionWorker("list")
+    release = release_info("0.2.0")
+    with patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release) as latest:
+        worker = PetExtensionWorker("check", channel="prerelease")
         worker.run()
-    discover.assert_called_once()
-    latest.assert_not_called()
+    assert latest.call_args.kwargs["channel"] == "prerelease"
     assert worker.error is None
-    assert worker.releases == releases
-    assert worker.release == releases[0]
+    assert worker.release == release
 
 
-@pytest.mark.parametrize("app_version,marked_prerelease,expected", [
-    ("1.14.0", True, "0.1.0"),
-    ("1.14.0", False, "0.1.0"),
-    ("1.14.0-beta.1", True, "0.2.0-beta.1"),
-    ("1.14.0-beta.1", False, "0.2.0-beta.1"),
+@pytest.mark.parametrize("app_version,channel,marked_prerelease,expected", [
+    ("1.14.0", "stable", True, "0.1.0"),
+    ("1.14.0", "prerelease", True, "0.2.0-beta.1"),
+    ("1.14.0", "prerelease", False, "0.2.0-beta.1"),
+    ("1.14.0-beta.1", "stable", True, "0.1.0"),
+    ("1.14.0-beta.1", "prerelease", True, "0.2.0-beta.1"),
 ])
-def test_pet_prereleases_only_available_to_preview_app(
-    monkeypatch, app_version, marked_prerelease, expected,
+def test_pet_release_channel_filters_preview_independently_of_app_channel(
+    monkeypatch, app_version, channel, marked_prerelease, expected,
 ):
     monkeypatch.setattr("updater.client.APP_VERSION", app_version)
     client = GitHubReleaseClient()
@@ -795,7 +795,7 @@ def test_pet_prereleases_only_available_to_preview_app(
     with (patch.object(client, "_request_json", return_value=data),
           patch.object(client, "_load_checksums", return_value=checksums),
           patch.object(client, "_load_pet_manifest", side_effect=manifest)):
-        assert client.latest_pet_release().version == expected
+        assert client.latest_pet_release(channel=channel).version == expected
 
 
 def test_pet_discovery_pages_past_main_releases_and_supports_cancellation():
@@ -892,7 +892,7 @@ def test_settings_worker_installs_without_auto_enabling_then_removes_pack(pack, 
         with (patch.object(GitHubReleaseClient, "download_pet_pack", side_effect=download),
               patch.object(GitHubReleaseClient, "latest_pet_release", return_value=release_info())):
             window._start_pet_task("install")
-            assert not window.pet_install_button.isEnabled()
+            assert not window.pet_vpet_button.isEnabled()
             assert not window.vpet_check.isEnabled()
             assert window._pet_worker.wait(5000)
             app.processEvents()
@@ -900,14 +900,14 @@ def test_settings_worker_installs_without_auto_enabling_then_removes_pack(pack, 
         assert window.vpet_check.isEnabled()
         assert not window.vpet_check.isChecked()
         assert window.pet_uninstall_button.isEnabled()
-        assert not window.pet_install_button.isEnabled()
+        assert window.pet_vpet_button.isEnabled()
         assert "已安装" in window.pet_status_label.text()
         window._start_pet_task("uninstall")
         assert window._pet_worker.wait(5000)
         app.processEvents()
         assert window._pet_worker is None
         assert not window.vpet_check.isEnabled()
-        assert window.pet_install_button.isEnabled()
+        assert window.pet_vpet_button.isEnabled()
         assert not pet.extension_directory().exists()
     finally:
         window.stop_pet_task()
@@ -1092,6 +1092,32 @@ def test_main_download_cancellation_resumes_pet_prompt(pet_update_ui):
     prompt.assert_called_once()
 
 
+def test_pet_channel_change_discards_inflight_result(pet_update_ui, qtbot):
+    from threading import Event
+
+    controller = pet_update_ui
+    payload(pet.extension_directory())
+    started = Event()
+    release = release_info(newer_pet_version())
+
+    def discover(*, cancel_requested, channel):
+        started.set()
+        while not cancel_requested():
+            Event().wait(0.005)
+        # 网络响应可能恰好在取消后返回；旧通道结果仍不能恢复到界面。
+        return release
+
+    with (patch.object(GitHubReleaseClient, "latest_pet_release", side_effect=discover),
+          patch("ui.qt_update.QMessageBox.question") as prompt):
+        controller.check_pet_updates()
+        qtbot.waitUntil(started.is_set)
+        controller.reset_pet_channel()
+        qtbot.waitUntil(lambda: controller._pet_check_worker is None)
+    assert controller.latest_pet_release() is None
+    assert not controller._pet_checked_in_session
+    prompt.assert_not_called()
+
+
 def test_pet_auto_check_shutdown_cancels_worker_and_suppresses_prompt(pet_update_ui, qtbot):
     from threading import Event
 
@@ -1099,7 +1125,8 @@ def test_pet_auto_check_shutdown_cancels_worker_and_suppresses_prompt(pet_update
     payload(pet.extension_directory())
     started = Event()
 
-    def discover(*, cancel_requested):
+    def discover(*, cancel_requested, channel):
+        assert channel == "stable"
         started.set()
         assert controller._pet_check_worker.isRunning()
         while not cancel_requested():

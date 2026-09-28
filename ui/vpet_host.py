@@ -278,7 +278,8 @@ class VPetHost(QObject):
                 source = self._source_tokens.get(token) if isinstance(token, str) and len(token) <= 80 else None
                 if source is not None:
                     self.source_requested.emit(source)
-            elif self.active and event in {"open_panel", "open_settings", "disable_pet", "quit"}:
+            elif self.active and event in {"open_panel", "open_settings", "disable_pet", "quit",
+                                           "add_pet_vpet", "add_pet_whale", "close_pet"}:
                 # 只接受固定的本地 UI 动作，子进程不能要求主程序执行命令或访问任意地址。
                 self.action_requested.emit(event)
 

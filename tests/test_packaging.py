@@ -375,3 +375,21 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     for relative in extra_frames:
         assert (output / "resources/pet/vup" / relative).read_bytes() == relative.encode()
     assert not (output / "resources/pet/vup/WORK").exists()
+
+
+def test_whale_action_keeps_standing_scale_and_baseline(tmp_path):
+    converter = os.environ.get("TOKENMETER_BUILD_FFMPEG") or shutil.which("ffmpeg")
+    if not converter:
+        pytest.skip("FFmpeg is required to verify real whale animation framing")
+    source = ROOT / "pet_host/whale/webm" / build_vpet.CUSTOM_WEBM_SAMPLE
+    frame = tmp_path / "action.png"
+    subprocess.run([
+        converter, "-y", "-loglevel", "error", "-c:v", "libvpx-vp9", "-i", str(source),
+        "-vf", build_vpet.WHALE_ANIMATION_FILTER, "-frames:v", "1", str(frame),
+    ], check=True, timeout=30)
+    with Image.open(ROOT / "pet_host/whale/idle.png") as standing, Image.open(frame) as action:
+        assert action.size == standing.size
+        # 比较实际可见人物的四条边，透明画布相同并不意味着人物比例或脚底对齐。
+        def bounds(image):
+            return image.convert("RGBA").getchannel("A").point(lambda alpha: 255 if alpha >= 16 else 0).getbbox()
+        assert all(abs(a - b) <= 1 for a, b in zip(bounds(action), bounds(standing)))

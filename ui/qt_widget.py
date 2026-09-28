@@ -241,10 +241,7 @@ class FloatingWidget(QWidget):
         self._closed = False
         self._vpet = VPetHost(self)
         self._vpet_extras: dict[tuple[str, int], VPetHost] = {}
-        self._vpet_pending = None
-        self._vpet_start_timer = QTimer(self)
-        self._vpet_start_timer.setSingleShot(True)
-        self._vpet_start_timer.timeout.connect(self._start_vpet_extra_batch)
+        self._vpet_primary_closed = False
         self._vpet_source_options: list[dict[str, str]] = [{"id": "active", "name": "跟随主程序"}]
         self._vpet_profiles: dict[str, dict] = {}
         self._vpet_profile_results: dict[str, tuple[str, TokenData]] = {}
@@ -253,7 +250,8 @@ class FloatingWidget(QWidget):
         self._vpet_updating = False
         self._vpet.ready.connect(self._on_vpet_ready)
         self._vpet.failed.connect(self._on_vpet_failed)
-        self._vpet.action_requested.connect(self._on_vpet_action)
+        self._vpet.action_requested.connect(
+            lambda action: self._on_vpet_action(action, self._vpet))
         self._vpet.source_requested.connect(
             lambda source: self._select_vpet_source(self._vpet, source))
         QApplication.instance().aboutToQuit.connect(self._vpet.stop)
@@ -457,75 +455,59 @@ class FloatingWidget(QWidget):
             return
         # 启动也检查安装状态，防止旧的启用配置绕过设置页限制并自动调用本地开发宿主。
         if config_manager.get("VPET_ENABLED", False) and pet_extension.installed_manifest() is not None:
-            self._vpet.start(config_manager.CONFIG_DIR / "vpet")
+            if not self._vpet_primary_closed:
+                self._vpet.start(config_manager.CONFIG_DIR / "vpet")
             if self._vpet._reported_failure:
                 return
             self._update_vpet_source_options()
             installed = pet_extension.installed_characters()
-            # 单独删除角色后保留数量偏好，但只启动当前确实已安装的角色。
-            counts = {"vpet": int(config_manager.get("VPET_EXTRA_VPET_COUNT", 0)) if "vpet" in installed else 0,
-                      "whale": int(config_manager.get("VPET_EXTRA_WHALE_COUNT", 0)) if "whale" in installed else 0}
             for key, host in list(self._vpet_extras.items()):
-                if key[1] >= counts[key[0]]:
+                if key[0] not in installed:
                     host.stop()
                     host.deleteLater()
                     del self._vpet_extras[key]
-            # 数量没有应用上限；按批次启动可避免较大输入阻塞设置页事件循环。
-            self._vpet_pending = ((character, index) for character in ("vpet", "whale")
-                                  for index in range(counts[character]))
-            self._vpet_start_timer.stop()
-            self._start_vpet_extra_batch()
+                else:
+                    host.start(config_manager.CONFIG_DIR / "vpet" / "instances" /
+                               f"{key[0]}-{key[1] + 1}", character=key[0],
+                               slot=2 * key[1] + (1 if key[0] == "vpet" else 2))
         else:
-            timer = getattr(self, "_vpet_start_timer", None)
-            if timer is not None:
-                timer.stop()
-            self._vpet_pending = None
             was_active = any(host.active for host in self._pet_hosts())
             for host in self._pet_hosts():
                 host.stop()
+            for host in self._vpet_extras.values():
+                host.deleteLater()
+            self._vpet_extras.clear()
+            self._vpet_primary_closed = False
             if was_active and not self._expanded:
                 self.show()
 
-    def _start_vpet_extra_batch(self) -> None:
-        if (self._closed or self._vpet_updating or self._vpet_pending is None
-                or not config_manager.get("VPET_ENABLED", False)):
+    def _add_vpet_instance(self, character: str) -> None:
+        if (self._closed or self._vpet_updating or not config_manager.get("VPET_ENABLED", False)
+                or character not in pet_extension.installed_characters()):
             return
-        for _ in range(8):
-            try:
-                character, index = next(self._vpet_pending)
-            except StopIteration:
-                self._vpet_pending = None
-                self._refresh_vpet_bound_sources()
-                return
-            key = (character, index)
-            host = self._vpet_extras.get(key)
-            if host is None:
-                host = VPetHost(self)
-                host.ready.connect(self._on_vpet_ready)
-                host.failed.connect(self._on_vpet_failed)
-                host.action_requested.connect(self._on_vpet_action)
-                host.source_requested.connect(
-                    lambda source, target=host: self._select_vpet_source(target, source))
-                QApplication.instance().aboutToQuit.connect(host.stop)
-                self._vpet_extras[key] = host
-            host.set_visible(self._vpet.visible)
-            slot = 2 * index + (1 if character == "vpet" else 2)
-            host.start(config_manager.CONFIG_DIR / "vpet" / "instances" /
-                       f"{character}-{index + 1}", character=character, slot=slot)
-            if self._vpet_pending is None:
-                # 启动可同步报错并清空队列；当前批次必须立即停止继续取下一个实例。
-                return
-            host.set_display_sources(self._vpet_source_options,
-                                     host.display_source if host.display_source in {
-                                         option["id"] for option in self._vpet_source_options} else "active")
+        index = 0
+        while (character, index) in self._vpet_extras:
+            index += 1
+        host = VPetHost(self)
+        host.ready.connect(self._on_vpet_ready)
+        host.failed.connect(self._on_vpet_failed)
+        host.action_requested.connect(lambda action, target=host: self._on_vpet_action(action, target))
+        host.source_requested.connect(
+            lambda source, target=host: self._select_vpet_source(target, source))
+        QApplication.instance().aboutToQuit.connect(host.stop)
+        self._vpet_extras[(character, index)] = host
+        host.set_visible(self._vpet.visible)
+        host.start(config_manager.CONFIG_DIR / "vpet" / "instances" /
+                   f"{character}-{index + 1}", character=character,
+                   slot=2 * index + (1 if character == "vpet" else 2))
+        host.set_display_sources(self._vpet_source_options,
+                                 host.display_source if host.display_source in {
+                                     option["id"] for option in self._vpet_source_options} else "active")
         self._refresh_vpet_bound_sources()
-        self._vpet_start_timer.start(100)
 
     def _pause_vpet_update(self) -> None:
         # 自动保存也会同步桌宠；更新期间必须禁止重启，避免 Windows 文件占用和替换竞态。
         self._vpet_updating = True
-        self._vpet_start_timer.stop()
-        self._vpet_pending = None
         for host in self._pet_hosts():
             host.stop()
         if not self._expanded and not self._closed:
@@ -543,10 +525,6 @@ class FloatingWidget(QWidget):
     def _on_vpet_failed(self, message: str) -> None:
         if self._closed:
             return
-        # 系统资源不足时继续批量拉起只会反复失败；保留已启动实例并等待用户调整数量。
-        if getattr(self, "_vpet_pending", None) is not None:
-            self._vpet_start_timer.stop()
-            self._vpet_pending = None
         config_manager.logger().warning("VPet: %s", message)
         self._set_theme_feedback(message, "danger")
         if not self._expanded and not any(host.active for host in self._pet_hosts()):
@@ -556,7 +534,7 @@ class FloatingWidget(QWidget):
             self._auth_expired_provider_id = None
             self.tray.showMessage(APP_DISPLAY_NAME, message, QSystemTrayIcon.MessageIcon.Warning, 6000)
 
-    def _on_vpet_action(self, action: str) -> None:
+    def _on_vpet_action(self, action: str, source: VPetHost | None = None) -> None:
         if self._closed:
             return
         if action == "open_panel":
@@ -568,6 +546,33 @@ class FloatingWidget(QWidget):
             self.activateWindow()
         elif action == "open_settings":
             self.open_settings()
+        elif action in {"add_pet_vpet", "add_pet_whale"}:
+            self._add_vpet_instance("whale" if action == "add_pet_whale" else "vpet")
+        elif action == "close_pet":
+            target = source or self._vpet
+            if target is self._vpet:
+                self._vpet_primary_closed = True
+                self._vpet.stop()
+            else:
+                for key, host in list(self._vpet_extras.items()):
+                    if host is target:
+                        host.stop()
+                        host.deleteLater()
+                        del self._vpet_extras[key]
+                        break
+            if self._vpet_primary_closed and not self._vpet_extras:
+                try:
+                    config_manager.save_config({"VPET_ENABLED": False})
+                except Exception:
+                    config_manager.logger().exception("VPet preference could not be saved")
+                    self._vpet_primary_closed = False
+                    self._sync_vpet()
+                    return
+                self._sync_vpet()
+                if not self._expanded:
+                    self.show()
+                if self._settings_window is not None:
+                    self._settings_window.vpet_check.setChecked(False)
         elif action == "disable_pet":
             try:
                 config_manager.save_config({"VPET_ENABLED": False})
@@ -2434,8 +2439,6 @@ class FloatingWidget(QWidget):
             x, y = self.x(), self.y()
         config_manager.save_widget_position(x, y)
         self._closed = True
-        self._vpet_start_timer.stop()
-        self._vpet_pending = None
         compact = self.__dict__.get("_compact_overview")
         if compact is not None:
             compact.close()

@@ -89,6 +89,17 @@ internal sealed partial class PetWindow
                     persisted.RootElement.GetProperty("cloudMode").GetString() == cloudMode;
             }
             checks["allCloudMenuModesApplyAndSave"] = menuModesWork;
+            SetCloudMode("off");
+            SaveState();
+            Preferences(File.ReadAllText(Path.Combine(dataDirectory, "layout.json")));
+            Normal();
+            TrySnapPetToEdge(true);
+            UpdateQuotaCloud();
+            checks["cloudOffPersistsAndStaysHiddenWhenDocked"] = cloudMode == "off" && !quotaCloud!.IsVisible;
+            quotaMenuItem!.IsChecked = true;
+            quotaMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            checks["manualShowReenablesCloud"] = cloudMode == "edge" && quotaCloud!.IsVisible;
+            Normal();
             var styleMenu = petMenu.Items.OfType<MenuItem>().Single(x => x.Header.ToString() == "额度气泡样式");
             bool stylesWork = true;
             foreach (var choice in styleMenu.Items.OfType<MenuItem>())
@@ -309,19 +320,17 @@ internal sealed partial class PetWindow
                 nextDrinkReminder = now;
                 nextRestReminder = now + 3600;
                 AdvanceNotifications(now);
-                checks[$"dockedReminderWaitsForManualUndock{left}"] = activeNotice == Notice.None &&
-                    manualDockedEdge == left && DockedEdge == left && new Point(Left, Top) == dockedPosition;
+                checks[$"dockedReminderStarts{left}"] = activeNotice == Notice.Drink &&
+                    notificationOrigin?.Edge == left && pet.MsgBar.Visibility == Visibility.Visible;
                 SaveState();
                 using (var layout = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "layout.json"))))
                     checks[$"dockedStateSaved{left}"] = layout.RootElement.GetProperty("dockedEdge").GetBoolean() == left;
-                // 自检直接模拟用户拖离后的状态；真实拖动路径由 RunDragChecks 覆盖。
-                manualDockedEdge = null;
-                pet.CleanState();
-                pet.DisplayToNomal();
+                pet.MsgBar.ForceClose();
                 AdvanceNotifications(now);
-                checks[$"pendingReminderStartsAfterManualUndock{left}"] = activeNotice == Notice.Drink;
-                FinishNotification();
+                checks[$"dockedReminderRestoresPosition{left}"] = activeNotice == Notice.None &&
+                    manualDockedEdge == left && DockedEdge == left && new Point(Left, Top) == dockedPosition;
             }
+            Normal();
             StartNotification(Notice.Rest, now);
             int previousGeneration = notificationGeneration;
             ResizePet(20);

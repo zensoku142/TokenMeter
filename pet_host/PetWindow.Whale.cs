@@ -113,7 +113,8 @@ internal sealed partial class PetWindow
     {
         string source = WhaleSource(name);
         // 文件内容参与缓存身份；用户同名覆盖或更新自定义 WebM 时不会继续播放旧帧。
-        string key = "whale-v1-" + Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source)));
+        // 取景比例修正后不能复用旧 WebM 转码，否则同一素材仍会在动作开始时缩小。
+        string key = "whale-v2-" + Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(source)));
         if (whaleActionCache.TryGetValue(key, out var cached)) return cached;
         if (whaleActionLoads.TryGetValue(key, out var loading)) return await loading;
         var task = LoadWhaleActionGraphAsync(name, source, key);
@@ -141,12 +142,12 @@ internal sealed partial class PetWindow
             string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                // Custom WebM remains optional and uses the user's FFmpeg; the public pack contains ready APNGs.
+                // 自定义 WebM 与 build_vpet.py 的预制动作使用相同固定取景，保持人物比例和脚底位置。
                 var start = new ProcessStartInfo("ffmpeg") {
                     UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true
                 };
                 foreach (string argument in new[] { "-y", "-loglevel", "error", "-c:v", "libvpx-vp9",
-                    "-i", source, "-vf", "fps=15,scale=250:141:flags=lanczos,format=rgba,pad=250:250:0:109:color=black@0",
+                    "-i", source, "-vf", "fps=15,crop=iw*3/4:ih,scale=250:188:flags=lanczos,format=rgba,pad=250:250:0:62:color=black@0",
                     "-plays", "0", "-f", "apng", temporary })
                     start.ArgumentList.Add(argument);
                 using var process = Process.Start(start) ?? throw new IOException("无法启动鲸鱼娘动画解码器");
@@ -300,7 +301,8 @@ internal sealed partial class PetWindow
     private void UpdateWhaleBalanceCard()
     {
         if (whaleCard == null) return;
-        if (character != "whale" || !ready || !visible || !IsVisible || closing ||
+        // 角落卡片也是额度展示；持久关闭必须同时隐藏卡片和普通气泡。
+        if (character != "whale" || !ready || !visible || !IsVisible || closing || cloudMode == "off" ||
             !whaleCardEligible || !WhaleAtBottomCorner())
         {
             whaleCard.Hide();

@@ -1,6 +1,6 @@
 {
-  "version": "0.2.1",
+  "version": "0.2.2",
   "protocol": 1,
   "platform": "win-x64",
-  "min_app_version": "1.14.0-beta.1"
+  "min_app_version": "1.16.2"
 }

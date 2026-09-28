@@ -260,21 +260,21 @@ def test_pet_page_and_version_state_follow_language(isolated_language):
         try:
             isolated_language.set_language("en")
             assert window.tabs.tabText(4) == "Pet"
-            assert window.pet_character_combo.itemText(1) == "Whale girl"
-            assert window.pet_character_hint.text() == "Takes effect the next time you enable the pet."
-            assert window.pet_release_combo.itemText(0) == "Check pet updates to choose a version"
-            assert window.pet_version_label.text() == "Pet version: Not installed"
+            assert window.pet_whale_button.text() == "Install"
+            assert "Right-click a pet" in window.pet_character_hint.text()
+            assert window.pet_channel_combo.itemText(1) == "Preview"
+            assert window.pet_version_label.text() == "Not installed"
             assert window.pet_source_label.text().startswith("Pet source code: ")
             assert 'href="https://github.com/LorisYounger/VPet"' in window.pet_source_label.text()
             assert window.pet_source_label.openExternalLinks()
             manifest.return_value = {"version": "0.1.0"}
             window._refresh_pet_controls()
-            assert window.pet_version_label.text() == "Pet version: v0.1.0"
+            assert window.pet_version_label.text() == "v0.1.0"
             isolated_language.set_language("zh-cn")
             assert window.tabs.tabText(4) == "桌宠"
-            assert window.pet_character_combo.itemText(1) == "鲸鱼娘"
-            assert window.pet_release_combo.itemText(0) == "检查桌宠更新后选择版本"
-            assert window.pet_version_label.text() == "桌宠版本：v0.1.0"
+            assert window.pet_whale_button.text() == "安装"
+            assert window.pet_channel_combo.itemText(1) == "体验版"
+            assert window.pet_version_label.text() == "v0.1.0"
             assert window.pet_source_label.text().startswith("桌宠源码来源：")
         finally:
             window.close()

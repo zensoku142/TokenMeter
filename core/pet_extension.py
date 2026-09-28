@@ -313,6 +313,7 @@ def download_and_install(
     progress: Callable[[dict[str, object]], None], cancel_requested: Callable[[], bool],
     *, release: PetReleaseInfo | None = None, replace_existing: bool = False,
     character: str | None = None, add_character: bool = False,
+    channel: str | None = None,
 ) -> None:
     if character is not None and character not in CHARACTER_PATHS:
         raise ValueError("未知桌宠角色")
@@ -324,7 +325,10 @@ def download_and_install(
     with tempfile.TemporaryDirectory(prefix=".vpet-download-", dir=destination.parent) as temporary:
         client = GitHubReleaseClient()
         try:
-            release = release or client.latest_pet_release(cancel_requested=cancel_requested)
+            release = release or client.latest_pet_release(
+                cancel_requested=cancel_requested,
+                **({"channel": channel} if channel is not None else {}),
+            )
             role = CHARACTER_PATHS[character] if character else None
             installed = installed_manifest()
             installed_roles = set(installed.get("installed_characters", [])) if installed else set()

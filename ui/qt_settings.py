@@ -418,7 +418,6 @@ class SettingsWindow(QDialog):
         self.update_controller = update_controller
         self._pet_worker: PetExtensionWorker | None = None
         self._pet_release: PetReleaseInfo | None = None
-        self._pet_versions_loaded = False
         QApplication.instance().aboutToQuit.connect(self.stop_pet_task)
         self._worker: ConnectionWorker | None = None
         self._cookie_acquire_worker: "_CookieAcquireWorker | None" = None
@@ -743,92 +742,79 @@ class SettingsWindow(QDialog):
             pet_layout, "启用 VPet 精简桌宠",
             "启用后替代悬浮球，面板和主题保持不变。", self.vpet_check
         )
-        self.pet_character_combo = _SettingsComboBox()
-        add_item(self.pet_character_combo, "VPet 默认角色", "vpet")
-        add_item(self.pet_character_combo, "鲸鱼娘", "whale")
-        self.pet_character_combo.setIconSize(QSize(28, 28))
-        for character in ("vpet", "whale"):
-            self.pet_character_combo.setItemIcon(self.pet_character_combo.findData(character),
-                                                 _pet_character_icon(character))
-        self.pet_character_combo.setMinimumWidth(180)
-        pet_character_row = QHBoxLayout()
-        pet_character_row.setSpacing(12)
-        pet_character_label = bind_text(QLabel(), "启动角色")
-        pet_character_label.setBuddy(self.pet_character_combo)
-        pet_character_row.addWidget(pet_character_label)
-        pet_character_row.addWidget(self.pet_character_combo)
-        pet_character_row.addStretch(1)
-        pet_layout.addLayout(pet_character_row)
-        self.pet_character_hint = bind_text(QLabel(), "选择后在下次启用桌宠时生效。")
+        pet_role_title = bind_text(QLabel(), "角色")
+        pet_role_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        pet_layout.addWidget(pet_role_title)
+        self.pet_vpet_button = bind_text(QPushButton(), "安装")
+        self.pet_whale_button = bind_text(QPushButton(), "下载鲸鱼娘")
+        self.pet_vpet_default_button = bind_text(QPushButton(), "设为默认")
+        self.pet_whale_default_button = bind_text(QPushButton(), "设为默认")
+        self.pet_vpet_button.clicked.connect(lambda: self._manage_pet_character("vpet"))
+        self.pet_whale_button.clicked.connect(lambda: self._manage_pet_character("whale"))
+        self.pet_vpet_default_button.clicked.connect(lambda: self._select_pet_default("vpet"))
+        self.pet_whale_default_button.clicked.connect(lambda: self._select_pet_default("whale"))
+        pet_role_rows = QVBoxLayout()
+        pet_role_rows.setSpacing(4)
+        for label, character, button, default_button in (
+            ("萝莉斯", "vpet", self.pet_vpet_button, self.pet_vpet_default_button),
+            ("鲸鱼娘", "whale", self.pet_whale_button, self.pet_whale_default_button),
+        ):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            portrait = QLabel()
+            portrait.setPixmap(_pet_character_icon(character).pixmap(28, 28))
+            title = bind_text(QLabel(), label)
+            row.addWidget(portrait)
+            row.addWidget(title)
+            row.addWidget(button)
+            row.addWidget(default_button)
+            row.addStretch(1)
+            pet_role_rows.addLayout(row)
+        pet_layout.addLayout(pet_role_rows)
+        self.pet_character_hint = bind_text(QLabel(), "选择默认角色后在下次启用桌宠时生效；多开请使用桌宠右键菜单。")
         self.pet_character_hint.setProperty("tone", "muted")
         pet_layout.addWidget(self.pet_character_hint)
-        pet_extra_row = QHBoxLayout()
-        pet_extra_row.setSpacing(10)
-        self.pet_extra_vpet_count = _SettingsSpinBox()
-        self.pet_extra_whale_count = _SettingsSpinBox()
-        for label, control in (
-            ("额外 VPet", self.pet_extra_vpet_count),
-            ("额外鲸鱼娘", self.pet_extra_whale_count),
-        ):
-            control.setRange(0, 2_147_483_647)
-            control.setFixedWidth(100)
-            control.setToolTip("每个额外实例独立保存位置；0 表示不额外启动")
-            title = bind_text(QLabel(), label)
-            title.setBuddy(control)
-            pet_extra_row.addWidget(title)
-            pet_extra_row.addWidget(control)
-        pet_extra_row.addStretch(1)
-        pet_layout.addLayout(pet_extra_row)
-        self.pet_character_combo.activated.connect(self._select_pet_character)
-        self.vpet_check.toggled.connect(lambda checked: self.pet_character_combo.setEnabled(
-            not checked and self._pet_worker is None))
+        pet_update_layout = QVBoxLayout()
+        pet_update_layout.setContentsMargins(0, 0, 0, 0)
+        pet_update_layout.setSpacing(6)
+        pet_update_title = bind_text(QLabel(), "桌宠更新")
+        pet_update_title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        pet_update_layout.addWidget(pet_update_title)
+        pet_update_form = QFormLayout()
+        pet_update_form.setHorizontalSpacing(16)
+        pet_update_form.setVerticalSpacing(6)
         self.pet_version_label = QLabel()
         self.pet_version_label.setWordWrap(True)
         self.pet_version_label.setProperty("tone", "muted")
-        pet_layout.addWidget(self.pet_version_label)
-        self.pet_release_combo = _SettingsComboBox()
-        self.pet_release_combo.addItem(tr("检查桌宠更新后选择版本"), None)
-        self.pet_release_combo.setMinimumWidth(190)
-        pet_release_row = QHBoxLayout()
-        pet_release_row.setSpacing(12)
-        pet_release_label = bind_text(QLabel(), "安装版本")
-        pet_release_label.setBuddy(self.pet_release_combo)
-        pet_release_row.addWidget(pet_release_label)
-        pet_release_row.addWidget(self.pet_release_combo)
-        pet_release_row.addStretch(1)
-        pet_layout.addLayout(pet_release_row)
-        self.pet_release_combo.activated.connect(self._select_pet_release)
+        pet_update_form.addRow(bind_text(QLabel(), "当前版本"), self.pet_version_label)
+        self.pet_channel_combo = _SettingsComboBox()
+        add_item(self.pet_channel_combo, "正式版", "stable")
+        add_item(self.pet_channel_combo, "体验版", "prerelease")
+        pet_channel_label = bind_text(QLabel(), "更新通道")
+        pet_channel_label.setBuddy(self.pet_channel_combo)
+        pet_update_form.addRow(pet_channel_label, self.pet_channel_combo)
+        self.pet_channel_combo.activated.connect(self._on_pet_channel_changed)
         self.pet_status_label = QLabel()
         self.pet_status_label.setWordWrap(True)
         self.pet_status_label.setProperty("tone", "muted")
-        pet_layout.addWidget(self.pet_status_label)
+        pet_update_form.addRow(bind_text(QLabel(), "检查状态"), self.pet_status_label)
+        pet_update_layout.addLayout(pet_update_form)
         pet_actions = QHBoxLayout()
         pet_actions.setSpacing(6)
-        self.pet_install_button = bind_text(QPushButton(), "下载所选角色")
         self.pet_uninstall_button = bind_text(QPushButton(), "卸载桌宠扩展包")
         self.pet_cancel_button = bind_text(QPushButton(), "取消下载")
-        self.pet_check_button = bind_text(QPushButton(), "检查桌宠更新")
-        self.pet_update_button = bind_text(QPushButton(), "切换桌宠版本")
-        self.pet_install_button.clicked.connect(self._install_pet)
+        self.pet_check_button = bind_text(QPushButton(), "检查更新")
+        self.pet_update_button = bind_text(QPushButton(), "下载并更新")
         self.pet_uninstall_button.clicked.connect(self._uninstall_pet)
         self.pet_cancel_button.clicked.connect(self._cancel_pet_download)
-        self.pet_check_button.clicked.connect(lambda: self._start_pet_task("list"))
+        self.pet_check_button.clicked.connect(lambda: self._start_pet_task("check"))
         self.pet_update_button.clicked.connect(self._update_pet)
-        for button in (self.pet_install_button, self.pet_update_button, self.pet_uninstall_button,
+        for button in (self.pet_update_button, self.pet_uninstall_button,
                        self.pet_check_button, self.pet_cancel_button):
             pet_actions.addWidget(button)
         pet_actions.addStretch(1)
-        pet_layout.addLayout(pet_actions)
-        pet_character_actions = QHBoxLayout()
-        pet_character_actions.setSpacing(6)
-        self.pet_vpet_button = bind_text(QPushButton(), "下载 VPet 默认角色")
-        self.pet_whale_button = bind_text(QPushButton(), "下载鲸鱼娘")
-        self.pet_vpet_button.clicked.connect(lambda: self._manage_pet_character("vpet"))
-        self.pet_whale_button.clicked.connect(lambda: self._manage_pet_character("whale"))
-        pet_character_actions.addWidget(self.pet_vpet_button)
-        pet_character_actions.addWidget(self.pet_whale_button)
-        pet_character_actions.addStretch(1)
-        pet_layout.addLayout(pet_character_actions)
+        pet_update_layout.addLayout(pet_actions)
+        pet_layout.addLayout(pet_update_layout)
         self.pet_source_label = bind_text(QLabel(), lambda: tr(
             "桌宠源码来源：{link}",
             link='<a href="https://github.com/LorisYounger/VPet">LorisYounger/VPet</a>',
@@ -1005,8 +991,6 @@ class SettingsWindow(QDialog):
 
         root.addWidget(self.tabs, 1)
         self.tabs.currentChanged.connect(lambda _index: self._sync_window_size())
-        self.tabs.currentChanged.connect(lambda index: self._sync_pet_character_choice()
-                                         if index == self._pet_tab_index else None)
         self._load_values()
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         self.sync_accent_check.toggled.connect(self._on_accent_sync_changed)
@@ -1047,7 +1031,6 @@ class SettingsWindow(QDialog):
             self.account_profiles_page.show_details(profile_id)
 
     def _refresh_pet_controls(self, message: str = "") -> None:
-        self._sync_pet_character_choice()
         busy = self._pet_worker is not None
         manifest = pet_extension.installed_manifest()
         characters = pet_extension.installed_characters()
@@ -1060,23 +1043,25 @@ class SettingsWindow(QDialog):
             # 状态刷新只纠正显示，不触发自动保存去改写其他设置。
             with QSignalBlocker(self.vpet_check):
                 self.vpet_check.setChecked(False)
-        self.pet_character_combo.setEnabled(not busy and not self.vpet_check.isChecked())
-        self.pet_extra_vpet_count.setEnabled(not busy and "vpet" in characters)
-        self.pet_extra_whale_count.setEnabled(not busy and "whale" in characters)
-        self.pet_install_button.setEnabled(not busy and not removable)
+        selected = pet_extension.selected_character()
         self.pet_uninstall_button.setEnabled(not busy and removable)
-        for character, button, name in (("vpet", self.pet_vpet_button, "VPet 默认角色"),
-                                        ("whale", self.pet_whale_button, "鲸鱼娘")):
-            bind_text(button, ("删除" if character in characters else "下载") + name)
-            button.setVisible(available)
-            button.setEnabled(not busy and supports_characters)
-            button.setToolTip("" if supports_characters else "请先更新桌宠扩展，才能单独管理角色")
+        for character, button, default_button in (
+            ("vpet", self.pet_vpet_button, self.pet_vpet_default_button),
+            ("whale", self.pet_whale_button, self.pet_whale_default_button),
+        ):
+            bind_text(button, "卸载" if character in characters else "安装")
+            button.setEnabled(not busy and (not removable or supports_characters))
+            button.setToolTip("" if not removable or supports_characters else
+                              tr("请先更新桌宠扩展，才能单独管理角色"))
+            bind_text(default_button, "当前默认" if character == selected and character in characters
+                      else "设为默认")
+            default_button.setEnabled(not busy and character in characters and character != selected)
         cancellable = busy and self._pet_worker.operation not in {"uninstall", "remove-character"}
         self.pet_cancel_button.setVisible(cancellable)
         self.pet_cancel_button.setEnabled(True)
         self.pet_check_button.setVisible(not cancellable)
         self.pet_check_button.setEnabled(not busy)
-        self.pet_release_combo.setEnabled(not busy and self.pet_release_combo.currentData() is not None)
+        self.pet_channel_combo.setEnabled(not busy)
         version = str(manifest.get("version") or "") if manifest else ""
         update_available = removable and self._pet_release is not None and (
             not version or compare_versions(version, self._pet_release.version) < 0
@@ -1084,61 +1069,40 @@ class SettingsWindow(QDialog):
         self.pet_update_button.setVisible(update_available)
         self.pet_update_button.setEnabled(not busy and removable and update_available)
         # 更新替换下载、取消替换检查，避免任务状态变化后把同一行挤成四五个按钮。
-        self.pet_install_button.setVisible(not update_available)
-        role_names = "、".join(name for role, name in (("vpet", "VPet"), ("whale", "鲸鱼娘"))
+        self.pet_uninstall_button.setVisible(removable)
+        role_names = "、".join(name for role, name in (("vpet", "萝莉斯"), ("whale", "鲸鱼娘"))
                               if role in characters)
-        bind_text(self.pet_version_label, (f"桌宠版本：v{version}（已安装：{role_names}）"
-                                           if role_names else f"桌宠版本：v{version}") if version else (
-            "桌宠版本：旧版（无版本号）" if available else
-            "桌宠版本：不可用" if removable else "桌宠版本：未安装"
+        bind_text(self.pet_version_label, (f"v{version}（已安装：{role_names}）"
+                                           if role_names else f"v{version}") if version else (
+            "旧版（无版本号）" if available else
+            "不可用" if removable else "未安装"
         ))
         if not message:
             message = (
-                "桌宠可用；启用后替代悬浮球，原有面板保持不变。" if available else
+                tr("发现桌宠新版本 v{version}，可单独更新。",
+                   version=self._pet_release.version) if update_available else
+                "桌宠已是当前主程序可用的最新版本。" if available and self._pet_release is not None else
+                "尚未检查桌宠更新。" if available else
                 "桌宠扩展包不完整，请卸载后重新下载。" if removable else
                 "未安装桌宠扩展包；默认使用原有悬浮球和面板，按需下载。"
             )
         bind_text(self.pet_status_label, message)
 
-    def _sync_pet_character_choice(self) -> None:
-        with QSignalBlocker(self.pet_character_combo):
-            selected = pet_extension.selected_character()
-            self.pet_character_combo.setCurrentIndex(max(0, self.pet_character_combo.findData(selected)))
-
-    def _select_pet_character(self, index: int) -> None:
+    def _select_pet_default(self, character: str) -> None:
         try:
-            pet_extension.save_selected_character(str(self.pet_character_combo.itemData(index)))
+            pet_extension.save_selected_character(character)
         except (OSError, ValueError) as exc:
-            self._sync_pet_character_choice()
             self._set_feedback(self.pet_character_hint,
                                tr("角色选择保存失败：{error}", error=str(exc)), "danger")
         else:
             self._set_feedback(self.pet_character_hint, "角色选择已保存；下次启用桌宠时生效。", "success")
+            self._refresh_pet_controls()
 
-    def _set_pet_releases(self, releases: list[PetReleaseInfo]) -> None:
-        selected_version = self._pet_release.version if self._pet_release is not None else None
-        with QSignalBlocker(self.pet_release_combo):
-            self.pet_release_combo.clear()
-            if not releases:
-                self.pet_release_combo.addItem(tr("检查桌宠更新后选择版本"), None)
-            else:
-                for release in releases:
-                    self.pet_release_combo.addItem(f"v{release.version}", release)
-                selected = next((index for index, release in enumerate(releases)
-                                 if release.version == selected_version), 0)
-                self.pet_release_combo.setCurrentIndex(selected)
-        self._pet_release = self.pet_release_combo.currentData()
-
-    def _select_pet_release(self, index: int) -> None:
-        release = self.pet_release_combo.itemData(index)
-        if isinstance(release, PetReleaseInfo):
-            self._pet_release = release
-            installed = pet_extension.installed_manifest() or {}
-            current = installed.get("version")
-            message = (tr("v{version} 早于已安装版本，暂不支持降级。", version=release.version)
-                       if current and compare_versions(current, release.version) > 0 else
-                       tr("已选择桌宠 v{version}。", version=release.version))
-            self._refresh_pet_controls(message)
+    def _on_pet_channel_changed(self, _index: int) -> None:
+        self._pet_release = None
+        if self.update_controller is not None:
+            self.update_controller.reset_pet_channel()
+        self._refresh_pet_controls("尚未检查桌宠更新。")
 
     def _update_pet(self) -> None:
         if self._pet_worker is not None or self._pet_release is None:
@@ -1148,8 +1112,8 @@ class SettingsWindow(QDialog):
         if current and compare_versions(current, self._pet_release.version) >= 0:
             return
         answer = QMessageBox.question(
-            self, tr("切换桌宠版本"),
-            tr("将安装桌宠 v{version}，期间暂停桌宠；主程序和主题保持不变。是否继续？",
+            self, tr("更新桌宠扩展包"),
+            tr("将更新桌宠至 v{version}，期间暂停桌宠；主程序和主题保持不变。是否继续？",
                version=self._pet_release.version),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1166,22 +1130,9 @@ class SettingsWindow(QDialog):
         if version and compare_versions(version, release.version) >= 0:
             return
         # 自动提示已取得确认；复用同一下载/回滚流程，并直接展示桌宠页的进度与取消入口。
-        self._pet_versions_loaded = False
-        self._set_pet_releases([release])
+        self._pet_release = release
         self.tabs.setCurrentIndex(self._pet_tab_index)
         self._start_pet_task("update")
-
-    def _install_pet(self) -> None:
-        if self._pet_worker is not None:
-            return
-        answer = QMessageBox.question(
-            self, tr("下载桌宠扩展包"),
-            tr("将从 GitHub 下载所选角色和桌宠运行时，安装完成后可手动启用。是否继续？"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes and self._pet_worker is None:
-            self._start_pet_task("install", str(self.pet_character_combo.currentData()))
 
     def _manage_pet_character(self, character: str) -> None:
         if self._pet_worker is not None:
@@ -1190,8 +1141,18 @@ class SettingsWindow(QDialog):
         if character in installed and len(installed) == 1:
             self._uninstall_pet()
             return
+        if not installed:
+            answer = QMessageBox.question(
+                self, tr("下载桌宠扩展包"),
+                tr("将从 GitHub 下载所选角色和桌宠运行时，安装完成后可手动启用。是否继续？"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._start_pet_task("install", character)
+            return
         adding = character not in installed
-        name = "鲸鱼娘" if character == "whale" else "VPet 默认角色"
+        name = "鲸鱼娘" if character == "whale" else "萝莉斯"
         action = "下载" if adding else "删除"
         answer = QMessageBox.question(
             self, tr("管理桌宠角色"),
@@ -1242,7 +1203,10 @@ class SettingsWindow(QDialog):
                 return
             # 安装器退出主程序前不能与扩展替换交叉执行，也不要在手动任务中弹出自动提示。
             self.update_controller.pet_task_active = True
-        worker = PetExtensionWorker(operation, self, release=self._pet_release, character=character)
+        worker = PetExtensionWorker(
+            operation, self, release=self._pet_release, character=character,
+            channel=str(self.pet_channel_combo.currentData() or "stable"),
+        )
         self._pet_worker = worker
         worker.progress_changed.connect(self._pet_progress)
         worker.finished.connect(self._pet_task_finished)
@@ -1251,7 +1215,7 @@ class SettingsWindow(QDialog):
             self.pet_update_started.emit()
         self._refresh_pet_controls({
             "install": "正在下载桌宠扩展包…", "update": "正在更新桌宠扩展包…",
-            "uninstall": "正在卸载桌宠扩展包…", "list": "正在检查桌宠更新…",
+            "uninstall": "正在卸载桌宠扩展包…", "check": "正在检查桌宠更新…",
             "add-character": "正在下载桌宠角色…", "remove-character": "正在删除桌宠角色…",
         }[operation])
         worker.start()
@@ -1277,17 +1241,21 @@ class SettingsWindow(QDialog):
             message = "已取消下载，继续使用原有面板。"
         elif worker.error is not None:
             message = f"桌宠扩展操作失败：{worker.error}"
-        elif worker.operation == "list":
-            self._pet_versions_loaded = True
-            self._set_pet_releases(worker.releases)
-            message = (tr("找到 {count} 个兼容的桌宠版本，可选择安装。", count=len(worker.releases))
-                       if worker.releases else "未找到与当前主程序兼容的桌宠版本。")
+        elif worker.operation == "check":
+            self._pet_release = worker.release
+            installed = pet_extension.installed_manifest() or {}
+            current = installed.get("version")
+            message = (tr("发现桌宠新版本 v{version}，可单独更新。", version=worker.release.version)
+                       if worker.release and current and compare_versions(current, worker.release.version) < 0
+                       else "桌宠已是当前主程序可用的最新版本。" if current
+                       else tr("找到桌宠版本 v{version}，可选择角色安装。", version=worker.release.version)
+                       if worker.release else "未找到与当前主程序兼容的桌宠版本。")
         elif worker.operation == "install":
             message = "桌宠扩展包已安装，可打开上方开关启用。"
         elif worker.operation == "update":
             message = "桌宠扩展已更新，主程序和主题保持不变。"
         elif worker.operation == "add-character":
-            message = "角色已安装，可在启动角色中选择。"
+            message = "角色已安装，可设为默认角色。"
         elif worker.operation == "remove-character":
             message = "角色已删除，其它已安装角色保持可用。"
         else:
@@ -1351,8 +1319,7 @@ class SettingsWindow(QDialog):
             if control is not self.sync_accent_check:
                 control.clicked.connect(self._schedule_save)
         for control in self.findChildren(QComboBox):
-            if control not in (self.theme_combo, self.language_combo,
-                               self.pet_character_combo, self.pet_release_combo):
+            if control not in (self.theme_combo, self.language_combo):
                 control.activated.connect(self._schedule_save)
         for control in self.findChildren(QSpinBox):
             control.setKeyboardTracking(False)
@@ -1420,7 +1387,7 @@ class SettingsWindow(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self._sync_pet_character_choice()
+        self._refresh_pet_controls()
         self._sync_window_size()
 
     def stop_connection_tasks(self) -> None:
@@ -1465,8 +1432,8 @@ class SettingsWindow(QDialog):
         self._on_pet_release_changed(self.update_controller.latest_pet_release())
 
     def _on_pet_release_changed(self, release: PetReleaseInfo | None) -> None:
-        if self._pet_worker is None and not self._pet_versions_loaded:
-            self._set_pet_releases([release] if release is not None else [])
+        if self._pet_worker is None:
+            self._pet_release = release
             self._refresh_pet_controls()
 
     def _set_update_status(self, text: str) -> None:
@@ -1611,9 +1578,6 @@ class SettingsWindow(QDialog):
         blocker = QSignalBlocker(self.language_combo)
         self.language_combo.setCurrentIndex(self.language_combo.findData(preference))
         del blocker
-        if self.pet_release_combo.count() == 1 and self.pet_release_combo.itemData(0) is None:
-            with QSignalBlocker(self.pet_release_combo):
-                self.pet_release_combo.setItemText(0, tr("检查桌宠更新后选择版本"))
 
     def _on_theme_state_changed(self, mode: str, resolved: str) -> None:
         self.set_theme_mode(mode, resolved)
@@ -2248,9 +2212,8 @@ class SettingsWindow(QDialog):
             bool(values.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
         )
         self.vpet_check.setChecked(bool(values.get("VPET_ENABLED", False)))
-        self.pet_extra_vpet_count.setValue(int(values.get("VPET_EXTRA_VPET_COUNT", 0)))
-        self.pet_extra_whale_count.setValue(int(values.get("VPET_EXTRA_WHALE_COUNT", 0)))
-        self._sync_pet_character_choice()
+        self.pet_channel_combo.setCurrentIndex(max(
+            0, self.pet_channel_combo.findData(str(values.get("PET_UPDATE_CHANNEL", "stable")))))
         self.panel_auto_collapse_check.setChecked(
             bool(values.get("PANEL_AUTO_COLLAPSE_ON_DEACTIVATE", True))
         )
@@ -2352,8 +2315,7 @@ class SettingsWindow(QDialog):
                 self.quota_ring_counterclockwise_check.isChecked()
             ),
             "VPET_ENABLED": self.vpet_check.isChecked(),
-            "VPET_EXTRA_VPET_COUNT": self.pet_extra_vpet_count.value(),
-            "VPET_EXTRA_WHALE_COUNT": self.pet_extra_whale_count.value(),
+            "PET_UPDATE_CHANNEL": str(self.pet_channel_combo.currentData() or "stable"),
             "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": self.panel_auto_collapse_check.isChecked(),
             "AUTO_START_ENABLED": self.autostart_check.isChecked(),
             "UPDATE_AUTO_CHECK_ENABLED": self.auto_check_updates.isChecked(),

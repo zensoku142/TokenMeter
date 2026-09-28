@@ -38,6 +38,7 @@ ANIMATION_DIRS = (
 )
 ANIMATION_RESOLUTION = 250
 CUSTOM_WEBM_SAMPLE = "待机呼吸休闲.webm"
+WHALE_ANIMATION_FILTER = "fps=15,crop=iw*3/4:ih,scale=250:188:flags=lanczos,format=rgba,pad=250:250:0:62:color=black@0"
 
 
 def run(*args: str, cwd: Path = ROOT, env=None) -> None:
@@ -113,10 +114,11 @@ def stage_resources() -> dict:
         raise RuntimeError("FFmpeg is required to build the whale animation resources")
     animations = pet / "whale" / "apng"
     animations.mkdir()
-    # Convert before packaging so users can play every bundled action without redistributing FFmpeg.
+    # 与现有站立帧使用相同比例和脚底基线；固定取景避免逐帧按轮廓缩放造成跳跃、伸展时人物忽大忽小。
+    # 复用站立素材的中央 3/4 取景，缩放为 250×188 并在上方补 62px，保持脚底基线。
     for source in webms:
         run(converter, "-y", "-loglevel", "error", "-c:v", "libvpx-vp9", "-i", str(source),
-            "-vf", "fps=15,scale=250:141:flags=lanczos,format=rgba,pad=250:250:0:109:color=black@0",
+            "-vf", WHALE_ANIMATION_FILTER,
             "-plays", "0", "-f", "apng", str(animations / (source.stem + ".png")))
         # 动作播放使用已转换的 APNG；仅保留一个 WebM 供自定义动画路径的冒烟检查。
         if source.name != CUSTOM_WEBM_SAMPLE:

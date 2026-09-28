@@ -17,7 +17,7 @@ internal sealed partial class PetWindow
 {
     private const string DrinkText = "该喝点水啦，记得补充水分。";
     private const string RestText = "休息一下吧，起来活动活动，看看远处。";
-    private static readonly string[] CloudModes = { "edge", "hover", "random", "hover_random" };
+    private static readonly string[] CloudModes = { "edge", "hover", "random", "hover_random", "off" };
     private static readonly int[] RandomMinutes = { 3, 5, 10 };
     private static readonly int[] DrinkMinutes = { 15, 30, 45, 60 };
     private static readonly int[] RestMinutes = { 30, 45, 60, 90 };
@@ -89,7 +89,7 @@ internal sealed partial class PetWindow
     {
         var mode = new MenuItem { Header = "额度气泡展示" };
         petMenu!.Items.Add(mode);
-        string[] labels = { "贴边自动", "悬停展示", "随机展示", "悬停＋随机" };
+        string[] labels = { "贴边自动", "悬停展示", "随机展示", "悬停＋随机", "关闭" };
         for (int i = 0; i < CloudModes.Length; i++)
         {
             string value = CloudModes[i];
@@ -156,7 +156,7 @@ internal sealed partial class PetWindow
         if (!CloudModes.Contains(value)) return;
         if (activeNotice == Notice.Quota) FinishNotification();
         cloudMode = value;
-        cloudManualChoice = null;
+        cloudManualChoice = value == "off" ? false : null;
         ResetCloudHover();
         nextRandomQuota = notificationNow() + NextRandomQuotaDelay();
         UpdateCloudPointer();
@@ -220,7 +220,6 @@ internal sealed partial class PetWindow
 
     private bool CanStartNotification => ready && visible && IsVisible && !closing && !notificationsSuspended &&
         !petPointerDown && petMenu?.IsOpen != true && !warningSpeechPending && activeNotice == Notice.None &&
-        !LogicalDockedEdge.HasValue &&
         pet!.MsgBar.Visibility != Visibility.Visible && pet.DisplayType.Type is
             GraphType.Default or GraphType.Idel or GraphType.StateONE or GraphType.StateTWO or
             GraphType.SideHide_Left_Main or GraphType.SideHide_Left_Rise or
@@ -238,6 +237,7 @@ internal sealed partial class PetWindow
             return;
         }
         if (!CanStartNotification) return;
+        // 贴边不应阻止已启用的生活提醒；提示结束后恢复原位置，随机额度仍不打断贴边。
         Notice due = Notice.None;
         if (drinkReminderEnabled && now >= nextDrinkReminder) due |= Notice.Drink;
         if (restReminderEnabled && now >= nextRestReminder) due |= Notice.Rest;
@@ -249,7 +249,7 @@ internal sealed partial class PetWindow
             // 生活提醒之后重新抽取额度间隔，避免刚说完话又马上弹出另一种提示。
             nextRandomQuota = now + NextRandomQuotaDelay();
         }
-        else if (HasRandomCloud && now >= nextRandomQuota)
+        else if (HasRandomCloud && !LogicalDockedEdge.HasValue && now >= nextRandomQuota)
         {
             nextRandomQuota = now + NextRandomQuotaDelay();
             if (cloudManualChoice != false && quotaCloud?.IsVisible != true && pendingUsage != null)
@@ -264,7 +264,7 @@ internal sealed partial class PetWindow
         activeNotice = notice;
         ++notificationGeneration;
         SyncAutonomy();
-        if (DockedEdge is bool edge) notificationOrigin = (new Point(Left, Top), edge);
+        if (LogicalDockedEdge is bool edge) notificationOrigin = (new Point(Left, Top), edge);
         pet!.CleanState();
         // 临时回到屏幕内才能完整显示原版文字框；保存和自动显隐仍使用原始贴边状态。
         ClampPosition();

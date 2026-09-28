@@ -2664,136 +2664,70 @@ def test_vpet_bound_provider_refreshes_without_background_provider_toggle(tmp_pa
         widget.deleteLater()
 
 
-def test_vpet_can_run_multiple_copies_of_the_same_role(monkeypatch):
-    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
-    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
-    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 2,
-                                "VPET_EXTRA_WHALE_COUNT": 1})
-    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
-        widget = FloatingWidget()
-    try:
-        assert set(widget._vpet_extras) == {("vpet", 0), ("vpet", 1)}
-        assert start.call_count == 3
-        directories = [call.args[0] for call in start.call_args_list]
-        assert len(set(directories)) == 3
-        assert start.call_args_list[1].kwargs == {"character": "vpet", "slot": 1}
-        assert start.call_args_list[2].kwargs == {"character": "vpet", "slot": 3}
-
-        for host in widget._pet_hosts():
-            host.active = True
-        widget._sync_vpet_usage()
-        widget.set_visible_from_tray()
-        assert all(not host.visible for host in widget._pet_hosts())
-        widget.set_visible_from_tray()
-        assert all(host.visible for host in widget._pet_hosts())
-        widget._pause_vpet_update()
-        assert all(not host.active for host in widget._pet_hosts())
-        with patch.object(VPetHost, "start") as resume:
-            widget._resume_vpet_update()
-        assert resume.call_count == 3
-        config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 1})
-        extra = widget._vpet_extras[("vpet", 1)]
-        with patch.object(VPetHost, "start"), patch.object(extra, "stop") as stop:
-            widget._sync_vpet()
-        stop.assert_called_once()
-    finally:
-        widget._closed = True
-        widget.hide()
-        widget.deleteLater()
-
-
-def test_vpet_extra_instances_can_mix_both_roles(monkeypatch):
+def test_vpet_context_menu_adds_and_closes_individual_instances(monkeypatch):
     monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
     monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet", "whale"})
-    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 1,
-                                "VPET_EXTRA_WHALE_COUNT": 2})
-    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
+    # Old saved counts must not create pets on startup; new instances come from menu actions.
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 2,
+                                "VPET_EXTRA_WHALE_COUNT": 1})
+    start_patcher = patch.object(VPetHost, "start")
+    start = start_patcher.start()
+    with patch.object(FloatingWidget, "refresh"):
         widget = FloatingWidget()
     try:
-        assert set(widget._vpet_extras) == {("vpet", 0), ("whale", 0), ("whale", 1)}
+        assert widget._vpet_extras == {}
+        widget._on_vpet_action("add_pet_vpet")
+        widget._on_vpet_action("add_pet_whale")
+        widget._on_vpet_action("add_pet_vpet")
+        assert set(widget._vpet_extras) == {("vpet", 0), ("whale", 0), ("vpet", 1)}
         assert [call.kwargs for call in start.call_args_list[1:]] == [
             {"character": "vpet", "slot": 1},
             {"character": "whale", "slot": 2},
-            {"character": "whale", "slot": 4},
+            {"character": "vpet", "slot": 3},
         ]
+        first_extra = widget._vpet_extras[("vpet", 0)]
+        widget._on_vpet_action("close_pet", first_extra)
+        assert set(widget._vpet_extras) == {("whale", 0), ("vpet", 1)}
+        with patch.object(VPetHost, "start") as resume:
+            widget._pause_vpet_update()
+            widget._resume_vpet_update()
+        assert resume.call_count == 3
+        widget._on_vpet_action("close_pet", widget._vpet)
+        assert widget._vpet_primary_closed
+        assert config_manager.get("VPET_ENABLED")
+        widget._on_vpet_action("close_pet", widget._vpet_extras[("whale", 0)])
+        widget._on_vpet_action("close_pet", widget._vpet_extras[("vpet", 1)])
+        assert not config_manager.get("VPET_ENABLED")
     finally:
+        start_patcher.stop()
         widget._closed = True
         widget.hide()
         widget.deleteLater()
 
 
-def test_vpet_large_instance_count_starts_in_batches(monkeypatch, qtbot):
+def test_vpet_menu_rejects_uninstalled_role(monkeypatch):
     monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
     monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
-    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 12})
+    config_manager.save_config({"VPET_ENABLED": True})
     with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
         widget = FloatingWidget()
-        try:
-            assert len(widget._vpet_extras) == 8
-            qtbot.waitUntil(lambda: len(widget._vpet_extras) == 12, timeout=2000)
-            assert start.call_count == 13
-            config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 3})
-            widget._sync_vpet()
-            assert len(widget._vpet_extras) == 3
-        finally:
-            widget._closed = True
-            widget.hide()
-            widget.deleteLater()
-
-
-def test_vpet_large_pending_count_can_be_cancelled_immediately(monkeypatch, qtbot):
-    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
-    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
-    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 100_000})
-    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start"):
-        widget = FloatingWidget()
-        try:
-            assert len(widget._vpet_extras) == 8
-            widget._on_vpet_failed("系统资源不足")
-            assert not widget._vpet_start_timer.isActive()
-            config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 0})
-            widget._sync_vpet()
-            qtbot.wait(150)
-            assert not widget._vpet_extras
-            assert not widget._vpet_start_timer.isActive()
-        finally:
-            widget._closed = True
-            widget.hide()
-            widget.deleteLater()
-
-
-def test_vpet_immediate_extra_start_failure_stops_the_batch(monkeypatch):
-    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
-    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
-    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 100})
-    calls = []
-
-    def start(host, _directory, **kwargs):
-        calls.append(kwargs)
-        if kwargs.get("character") == "vpet":
-            host.failed.emit("无法启动桌宠")
-
-    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start", start):
-        widget = FloatingWidget()
     try:
-        assert len(calls) == 2  # 主实例与首个额外实例
-        assert len(widget._vpet_extras) == 1
-        assert widget._vpet_pending is None
-        assert not widget._vpet_start_timer.isActive()
+        widget._on_vpet_action("add_pet_whale")
+        assert widget._vpet_extras == {}
+        start.assert_called_once()
     finally:
         widget._closed = True
         widget.hide()
         widget.deleteLater()
 
 
-def test_pet_extra_instance_counts_roundtrip_through_settings():
+def test_pet_settings_no_longer_saves_preselected_instance_counts():
     config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 12, "VPET_EXTRA_WHALE_COUNT": 7})
     window = SettingsWindow()
     try:
-        assert window.pet_extra_vpet_count.value() == 12
-        assert window.pet_extra_whale_count.value() == 7
-        assert window._values()["VPET_EXTRA_VPET_COUNT"] == 12
-        assert window._values()["VPET_EXTRA_WHALE_COUNT"] == 7
+        assert not hasattr(window, "pet_extra_vpet_count")
+        assert "VPET_EXTRA_VPET_COUNT" not in window._values()
+        assert "VPET_EXTRA_WHALE_COUNT" not in window._values()
     finally:
         window._autosave_ready = False
         window.close()
@@ -5382,7 +5316,7 @@ def test_settings_groups_configuration_into_scrolling_pages_with_separate_pet_pa
         (3, window.quota_ring_counterclockwise_check),
         (4, window.vpet_check),
         (4, window.pet_version_label),
-        (4, window.pet_install_button),
+        (4, window.pet_channel_combo),
         (5, window.refresh_seconds),
         (5, window.deepseek_peak_pricing_card),
         (6, window.minute_usage_retention_days),
@@ -5472,9 +5406,9 @@ def test_settings_vpet_switch_persists_without_changing_ball_preferences(autosav
     window, values, saved, refreshed = autosave_settings
     with patch("ui.qt_settings.pet_extension.installed_manifest", return_value={"version": "0.1.0"}):
         window._refresh_pet_controls()
-    assert window.pet_character_combo.isEnabled()
+    assert window.pet_channel_combo.isEnabled()
     window.vpet_check.click()
-    assert not window.pet_character_combo.isEnabled()
+    assert window.pet_channel_combo.isEnabled()
     window.flush_pending_saves()
     assert values["VPET_ENABLED"] is True
     assert values["EDGE_HIDE_ENABLED"] is True
@@ -5483,8 +5417,7 @@ def test_settings_vpet_switch_persists_without_changing_ball_preferences(autosav
     refreshed.assert_called_once()
 
 
-def test_pet_character_can_be_preselected_before_install(tmp_path, monkeypatch):
-    monkeypatch.setattr(config_manager, "CONFIG_DIR", tmp_path)
+def test_pet_roles_are_managed_directly_without_preselected_counts(tmp_path):
     with (
         patch("ui.qt_settings.pet_extension.installed_manifest", return_value=None),
         patch("ui.qt_settings.pet_extension.removable_directories", return_value=[]),
@@ -5492,61 +5425,40 @@ def test_pet_character_can_be_preselected_before_install(tmp_path, monkeypatch):
         window = SettingsWindow()
         try:
             assert not window.vpet_check.isEnabled()
-            assert window.pet_character_combo.isEnabled()
-            assert not window.pet_character_combo.itemIcon(0).isNull()
-            assert not window.pet_character_combo.itemIcon(1).isNull()
-            whale = window.pet_character_combo.findData("whale")
-            window.pet_character_combo.setCurrentIndex(whale)
-            window.pet_character_combo.activated.emit(whale)
-            assert json.loads((tmp_path / "vpet/layout.json").read_text(encoding="utf-8")) == {
-                "character": "whale",
-            }
-            assert not window._save_timer.isActive()
+            assert window.pet_vpet_button.text() == "安装"
+            assert window.pet_whale_button.text() == "安装"
+            assert not window.pet_vpet_default_button.isEnabled()
+            assert not window.pet_whale_default_button.isEnabled()
+            assert not hasattr(window, "pet_extra_vpet_count")
+            assert not hasattr(window, "pet_character_combo")
         finally:
             window.close()
 
-        reopened = SettingsWindow()
-        try:
-            assert reopened.pet_character_combo.currentData() == "whale"
-        finally:
-            reopened.close()
 
-
-def test_pet_version_list_selects_a_target_and_keeps_downgrade_blocked(autosave_settings, tmp_path):
-    window, _values, saved, _refreshed = autosave_settings
-    releases = [
-        PetReleaseInfo(version, {"version": version},
-                       ReleaseAsset(f"pet-{version}.zip", "https://example.com/pet.zip", 1), "a" * 64)
-        for version in ("0.4.0", "0.3.0", "0.1.0")
-    ]
+def test_pet_update_channel_uses_latest_release_without_version_list(autosave_settings, tmp_path):
+    window, values, _saved, _refreshed = autosave_settings
+    release = PetReleaseInfo("0.4.0", {"version": "0.4.0"},
+                             ReleaseAsset("pet.zip", "https://example.com/pet.zip", 1), "a" * 64)
     with (
         patch("ui.qt_settings.pet_extension.installed_manifest", return_value={"version": "0.2.0"}),
         patch("ui.qt_settings.pet_extension.removable_directories", return_value=[tmp_path]),
     ):
-        window._pet_worker = Mock(operation="list", error=None, releases=releases)
+        window._pet_worker = Mock(operation="check", error=None, release=release)
         window._pet_task_finished()
-        assert [window.pet_release_combo.itemText(index) for index in range(3)] == [
-            "v0.4.0", "v0.3.0", "v0.1.0",
-        ]
-        window.pet_release_combo.setCurrentIndex(2)
-        window.pet_release_combo.activated.emit(2)
-        assert window.pet_update_button.isHidden()
-        assert "不支持降级" in window.pet_status_label.text()
-        with patch.object(window, "_start_pet_task") as blocked:
-            window._update_pet()
-        blocked.assert_not_called()
-        window.pet_release_combo.setCurrentIndex(1)
-        window.pet_release_combo.activated.emit(1)
-        assert window._pet_release == releases[1]
+        assert window._pet_release == release
         assert not window.pet_update_button.isHidden()
-        assert not window._save_timer.isActive()
+        assert not hasattr(window, "pet_release_combo")
         with (
             patch("ui.qt_settings.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes),
             patch.object(window, "_start_pet_task") as start,
         ):
             window._update_pet()
         start.assert_called_once_with("update")
-    saved.assert_not_called()
+        window.pet_channel_combo.setCurrentIndex(window.pet_channel_combo.findData("prerelease"))
+        window.pet_channel_combo.activated.emit(window.pet_channel_combo.currentIndex())
+        window.flush_pending_saves()
+        assert values["PET_UPDATE_CHANNEL"] == "prerelease"
+        assert window._pet_release is None
 
 
 @pytest.mark.parametrize("width", [560, 820])
@@ -5571,9 +5483,9 @@ def test_pet_actions_stay_in_one_row_with_visible_version(width, state, tmp_path
             parent.show()
             APP.processEvents()
             assert window.width() == width
-            first = window.pet_update_button if state == "update" else window.pet_install_button
+            first = window.pet_update_button if state == "update" else window.pet_uninstall_button
             last = window.pet_cancel_button if state == "download" else window.pet_check_button
-            buttons = [first, window.pet_uninstall_button, last]
+            buttons = [first, last] if state != "update" else [first, window.pet_uninstall_button, last]
             assert all(button.isVisible() for button in buttons)
             positions = [button.mapTo(window, QPoint(0, 0)) for button in buttons]
             assert len({point.y() for point in positions}) == 1
@@ -5581,10 +5493,9 @@ def test_pet_actions_stay_in_one_row_with_visible_version(width, state, tmp_path
                 assert left.x() + button.width() < right.x()
             assert positions[-1].x() + last.width() <= window.width()
             assert window.pet_version_label.isVisible()
-            assert window.pet_version_label.text() == "桌宠版本：v0.1.0"
+            assert window.pet_version_label.text() == "v0.1.0"
             assert window.pet_source_label.isVisible()
-            assert window.rect().contains(window.pet_source_label.mapTo(window, window.pet_source_label.rect().bottomRight()))
-            assert window.pet_install_button.isHidden() == (state == "update")
+            assert not hasattr(window, "pet_install_button")
             assert window.pet_check_button.isHidden() == (state == "download")
         finally:
             window._pet_worker = None
@@ -5594,9 +5505,9 @@ def test_pet_actions_stay_in_one_row_with_visible_version(width, state, tmp_path
 
 
 @pytest.mark.parametrize(("manifest", "expected"), [
-    (None, "桌宠版本：未安装"),
-    ({"version": "0.1.0"}, "桌宠版本：v0.1.0"),
-    ({"app_version": "1.13.2"}, "桌宠版本：旧版（无版本号）"),
+    (None, "未安装"),
+    ({"version": "0.1.0"}, "v0.1.0"),
+    ({"app_version": "1.13.2"}, "旧版（无版本号）"),
 ])
 def test_pet_version_always_describes_installation_state(autosave_settings, manifest, expected):
     window, _values, saved, _refreshed = autosave_settings
@@ -5612,7 +5523,7 @@ def test_pet_version_always_describes_installation_state(autosave_settings, mani
     assert window.pet_version_label.isVisible()
     assert window.pet_version_label.text() == expected
     assert window.vpet_check.isEnabled() == (manifest is not None)
-    assert not window.pet_install_button.isHidden()
+    assert window.pet_vpet_button.isVisible()
     saved.assert_not_called()
 
 

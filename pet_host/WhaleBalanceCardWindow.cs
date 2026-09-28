@@ -169,14 +169,15 @@ internal sealed class WhaleBalanceCardWindow : Window
         var offset = new TranslateTransform();
         notice.RenderTransform = offset;
         offset.BeginAnimation(TranslateTransform.YProperty,
-            new DoubleAnimation(0, -16, TimeSpan.FromSeconds(1.7)) {
+            new DoubleAnimation(0, -16, TimeSpan.FromSeconds(4)) {
                 EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
             });
         var fade = new DoubleAnimationUsingKeyFrames();
         fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
         fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(0.12))));
-        fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(0.85))));
-        fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(1.7))));
+        // 小额扣款需要留出读数时间：前三秒保持清晰，最后一秒再淡出。
+        fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(3))));
+        fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(4))));
         fade.Completed += (_, _) => {
             deductionLayer.Children.Remove(notice);
             deductionItems.Remove(notice);

@@ -353,6 +353,8 @@ internal sealed partial class PetWindow : Window, IController
         }
         Add("查看用量面板", () => Request("open_panel"));
         quotaMenuItem = Add("显示额度气泡", () => {
+            // 手动重新显示同时退出持久关闭模式，避免下一次贴边变化又隐藏气泡。
+            if (quotaMenuItem!.IsChecked && cloudMode == "off") cloudMode = "edge";
             // 以点击时的状态应用手动选择，避免尚未处理的动画回调把本次开关覆盖掉。
             cloudDockedState = LogicalDockedEdge.HasValue;
             cloudManualChoice = quotaMenuItem!.IsChecked;
@@ -385,7 +387,7 @@ internal sealed partial class PetWindow : Window, IController
             var defaultPortrait = new CroppedBitmap(defaultFrame, new Int32Rect(
                 (int)(320 * portraitScale), (int)(30 * portraitScale),
                 (int)(380 * portraitScale), (int)(480 * portraitScale)));
-            defaultCharacterMenuItem = new MenuItem { Header = CharacterHeader("VPet 默认角色",
+            defaultCharacterMenuItem = new MenuItem { Header = CharacterHeader("萝莉斯",
                 defaultPortrait), IsCheckable = true };
             defaultCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("vpet");
             characters.Items.Add(defaultCharacterMenuItem);
@@ -402,6 +404,21 @@ internal sealed partial class PetWindow : Window, IController
             if (defaultCharacterMenuItem != null) defaultCharacterMenuItem.IsChecked = character == "vpet";
             if (whaleCharacterMenuItem != null) whaleCharacterMenuItem.IsChecked = character == "whale";
         };
+        var addPet = new MenuItem { Header = "再开一只桌宠" };
+        if (File.Exists(Path.Combine(resources, "pet", "vup.lps")))
+        {
+            var item = new MenuItem { Header = "萝莉斯" };
+            item.Click += (_, _) => Request("add_pet_vpet");
+            addPet.Items.Add(item);
+        }
+        if (File.Exists(Path.Combine(resources, "pet", "whale.lps")))
+        {
+            var item = new MenuItem { Header = "鲸鱼娘" };
+            item.Click += (_, _) => Request("add_pet_whale");
+            addPet.Items.Add(item);
+        }
+        petMenu.Items.Add(addPet);
+        Add("关闭这只桌宠", () => Request("close_pet"));
         displaySourcesMenu = new MenuItem { Header = "显示来源" };
         petMenu.Items.Add(displaySourcesMenu);
         if (whaleCharacterMenuItem != null) AddWhaleActionMenus();
@@ -414,12 +431,10 @@ internal sealed partial class PetWindow : Window, IController
             SaveState();
         });
         autonomyMenuItem.IsCheckable = true;
-        Add("放大桌宠", () => ResizePet(20));
-        Add("缩小桌宠", () => ResizePet(-20));
         Add("TokenMeter 设置", () => Request("open_settings"));
         Add("返回悬浮球", () => Request("disable_pet"));
         petMenu.Items.Add(new Separator());
-        Add("默认角色来源与授权", ShowCredits);
+        Add("萝莉斯来源与授权", ShowCredits);
         Add("退出 TokenMeter", () => Request("quit"));
         petMenu.Opened += (_, _) => {
             CancelAutonomousSequence();
@@ -662,7 +677,7 @@ internal sealed partial class PetWindow : Window, IController
     }
 
     private void ShowCredits() => MessageBox.Show(this,
-        "默认角色与动画：虚拟主播模拟器制作组 / VPet\nhttps://github.com/LorisYounger/VPet\n\n" +
+        "萝莉斯角色与动画：虚拟主播模拟器制作组 / VPet\nhttps://github.com/LorisYounger/VPet\n\n" +
         "鲸鱼娘图片与动画：PC2005-cloud/dsh-pet\nhttps://github.com/PC2005-cloud/dsh-pet\n" +
         "参考项目素材允许开源使用、禁止商用；本次仅供本地开发验证。\n\n" +
         "当前为非商业集成试用。代码遵循 Apache-2.0；动画另行授权。\n" +
@@ -819,8 +834,8 @@ internal sealed partial class PetWindow : Window, IController
             graph.FindGraph("eat", AnimatType.Single, save.Mode) == null;
         checks["noBottomToolbar"] = !pet!.UIGrid.Children.Contains(pet.ToolBar) && pet.DefaultClickAction == null;
         var expectedMenu = new List<string> { "查看用量面板", "显示额度气泡", "额度气泡展示", "额度气泡样式", "额度随机间隔", "喝水提醒", "休息提醒",
-            "角色", "显示来源", "自主活动", "放大桌宠", "缩小桌宠", "TokenMeter 设置", "返回悬浮球", "默认角色来源与授权", "退出 TokenMeter" };
-        if (whaleCharacterMenuItem != null) expectedMenu.Insert(9, "鲸鱼娘动作");
+            "角色", "再开一只桌宠", "关闭这只桌宠", "显示来源", "自主活动", "TokenMeter 设置", "返回悬浮球", "萝莉斯来源与授权", "退出 TokenMeter" };
+        if (whaleCharacterMenuItem != null) expectedMenu.Insert(11, "鲸鱼娘动作");
         checks["contextMenuActions"] = petMenu!.Items.OfType<MenuItem>().Select(item => item.Header.ToString())
             .SequenceEqual(expectedMenu);
         double strengthBefore = save.Strength, feelingBefore = save.Feeling, expBefore = save.Exp;
@@ -967,6 +982,9 @@ internal sealed partial class PetWindow : Window, IController
             whaleCard.AmountText == "CNY 128.60" && whaleCard.FeedbackText == "-¥0.04" &&
             quotaCloud!.IsVisible == false;
         checks["balanceDeductionUsesFloatingNotice"] = whaleCard.DeductionCount == 1;
+        SetCloudMode("off");
+        checks["cloudOffAlsoHidesWhaleCard"] = !whaleCard.IsVisible && !quotaCloud!.IsVisible;
+        SetCloudMode("edge");
         GetWindowRect(new WindowInteropHelper(whaleCard).Handle, out var cardRect);
         GetWindowRect(new WindowInteropHelper(this).Handle, out var dockedPetRect);
         var dockedPixels = WhaleVisiblePixels();

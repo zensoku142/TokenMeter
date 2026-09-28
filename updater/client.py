@@ -483,19 +483,24 @@ class GitHubReleaseClient:
 
     def latest_pet_release(
         self, *, cancel_requested: Callable[[], bool] | None = None,
+        channel: str | None = None,
     ) -> PetReleaseInfo:
-        releases = self.available_pet_releases(cancel_requested=cancel_requested, limit=1)
+        releases = self.available_pet_releases(cancel_requested=cancel_requested, limit=1,
+                                               channel=channel)
         if releases:
             return releases[0]
         raise UpdateError("尚未发布与当前主程序兼容的桌宠扩展包")
 
     def available_pet_releases(
         self, *, cancel_requested: Callable[[], bool] | None = None, limit: int | None = None,
+        channel: str | None = None,
     ) -> list[PetReleaseInfo]:
         candidates = []
         page = 1
         # 体验版需要能安装同批次的预发布桌宠；正式版继续排除预发布包，避免误升级。
-        allow_prerelease = bool(SemVer.parse(APP_VERSION).prerelease)
+        # 未指定通道的旧调用方沿用主程序预发布判断；设置页明确指定桌宠自己的通道。
+        allow_prerelease = (bool(SemVer.parse(APP_VERSION).prerelease)
+                            if channel is None else channel == "prerelease")
         # 主程序与扩展共用仓库；分页避免主程序发版较多后找不到仍兼容的桌宠版本。
         while True:
             if cancel_requested and cancel_requested():

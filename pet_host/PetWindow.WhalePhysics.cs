@@ -271,9 +271,11 @@ internal sealed partial class PetWindow
             var pointer = new Point(rect.Left + 100, rect.Top + 100);
             if (!StartPetGesture(pointer, new Point(250, 250))) return false;
             UpdatePetGesture(pointer + new Vector(60, -20));
-            await Task.Delay(30);
+            // 自检没有真实按下鼠标；让出 Dispatcher 会收到未按键的 MouseMove 并取消模拟手势。
+            // 仅在这段 60ms 的合成采样中阻塞，松手后仍由真实物理计时器验证位移。
+            System.Threading.Thread.Sleep(30);
             UpdatePetGesture(pointer + new Vector(180, -75));
-            await Task.Delay(30);
+            System.Threading.Thread.Sleep(30);
             UpdatePetGesture(pointer + new Vector(320, -130));
             EndPetGesture(cancel: false);
             bool launched = whaleThrowTimer.IsEnabled;

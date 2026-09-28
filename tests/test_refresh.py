@@ -41,6 +41,8 @@ def widget_stub():
     widget._quota_alerted_windows = {}
     widget._closed = False
     widget._vpet = Mock(active=False)
+    widget._vpet_extras = {}
+    widget._vpet_primary_closed = False
     widget._vpet_updating = False
     widget._data = TokenData()
     widget._expanded = False
