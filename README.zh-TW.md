@@ -34,7 +34,7 @@
 
 TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 15 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
 
-目前版本：**v1.15.2** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+目前版本：**v1.16.0** · 桌寵 **v0.2.0** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
@@ -43,7 +43,7 @@ TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提�
 - **本機統計與 Excel**：讀取 Codex（含封存）與 Claude 本機日誌，先顯示快取，再背景更新。支援日期、專案、模型篩選、每日比較、圖表縮放，並匯出 `.xlsx` 摘要、明細與統計口徑。本機日誌無法確認帳戶歸屬，不代表訂閱額度或實際帳單；可選擇已可存取的 WSL 目錄，不啟動 WSL。
 - **平台管理**：離線品牌圖示、搜尋、收藏及移除應用程式保存的連線；保留 CLI 登入與歷史記錄。
 - **更新與提醒**：失敗退避、離線快取、可選低額度與恢復提醒、消耗預測及靜默時段。預測需要同週期至少 10 分鐘的有效樣本；恢復提醒需先開啟低額度提醒，並以實際更新確認。提醒狀態可跨重啟保留。
-- **桌面顯示**：可拖曳懸浮球、滾輪縮放、貼邊隱藏、系統匣、明暗與系統主題、顏色與透明度、五種語言、自動更新和選用 VPet。主程式 v1.15.2 搭配桌寵 v0.1.4 可同步額度視窗主題。
+- **桌面顯示**：可拖曳懸浮球、滾輪縮放、貼邊隱藏、系統匣、明暗與系統主題、顏色與透明度、五種語言、自動更新和選用多角色桌寵。主程式 v1.16.0 搭配桌寵 v0.2.0 可同步額度視窗主題。
 
 [平台設定與限制](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity 狀態列](docs/antigravity-statusline-2026-09-07.md)
 
@@ -57,15 +57,20 @@ TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提�
 
 > 資料依賴平台介面與登入狀態，介面變更或風控可能暫時影響取得。請只使用自己的帳戶憑據。
 
-## VPet 桌寵（選用）
+## 桌寵（選用）
 
 主安裝程式不含桌寵。在「設定 → 桌寵」下載擴充套件，完整安裝後再啟用；無需另裝 .NET。啟用後桌寵取代懸浮球，停用或解除安裝後恢復球體，不影響帳戶與面板。
 
 - 支援輕觸互動、拖曳縮放、自主活動和貼邊額度氣泡；按兩下氣泡可開啟用量面板。
+- 啟動前可選擇 VPet 預設角色或[鯨魚娘](https://github.com/PC2005-cloud/dsh-pet)；設定頁提供角色縮圖與可安裝的相容版本。
 - 右鍵選單可設定氣泡顯示方式，以及預設關閉的喝水、休息提醒；桌寵選單目前為簡體中文。
 - 精簡版不含餵食、工作、養成、Steam 或連線功能。擴充套件可獨立更新，主程式結束時桌寵一同結束。
 
 實作細節與獨立建置見 [桌寵開發說明](pet_host/README.md)，使用素材前請閱讀 [來源與授權](pet_host/THIRD_PARTY_NOTICES.md)。
+
+![鯨魚娘桌寵角色展示](site/assets/pet-whale-transparent.png)
+
+鯨魚娘素材來源：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，僅限非商業用途。
 
 ## 資料、隱私與更新
 
@@ -113,7 +118,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.15.2`，選用桌寵擴充套件 `0.1.4`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.16.0`，選用桌寵擴充套件 `0.2.0`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

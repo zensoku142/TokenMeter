@@ -34,7 +34,7 @@ Actual component screenshots in Chinese, using demo data. [Original images and s
 
 TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
 
-Current version：**v1.15.2** · VPet **v0.1.4** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.16.0** · Pet **v0.2.0** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
@@ -43,7 +43,7 @@ Current version：**v1.15.2** · VPet **v0.1.4** · [GitHub Pages](https://zenso
 - **Local analytics and Excel**: read local Codex (including archived sessions) and Claude logs, show cached results, then update in the background. Filter by date, project and model, compare daily usage, zoom charts and export `.xlsx` summaries, details and methodology. Local logs have unknown account attribution and do not represent subscription quotas or actual bills; accessible WSL directories can be selected without starting WSL.
 - **Provider management**: offline brand icons, search, favorites and removal of app-managed connections. Removing a provider preserves CLI logins and history.
 - **Refresh and alerts**: retry backoff, offline cache, optional low-quota and recovery alerts, forecasts and quiet hours. Forecasts require at least 10 minutes of valid samples from the same quota cycle; recovery alerts require low-quota alerts and a confirmed refresh. Alert state survives restarts.
-- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and optional VPet. Pet quota windows follow the app theme with pet v0.1.4 and app v1.15.2.
+- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and an optional multi-character pet. Pet quota windows follow the app theme with pet v0.2.0 and app v1.16.0.
 
 [Provider setup and limitations (Chinese)](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity statusline](docs/antigravity-statusline-2026-09-07.md)
 
@@ -57,15 +57,20 @@ Requires Windows 10 / 11 and at least one supported account.
 
 > Data depends on platform endpoints and login state. API or risk-control changes may interrupt collection. Use only your own credentials.
 
-## VPet desktop pet (optional)
+## Desktop pet (optional)
 
 The main installer does not include the pet. Download it in Settings → Pet, then enable it after installation completes; no separate .NET installation is needed. The pet replaces the floating widget. Disabling or uninstalling it restores the widget without affecting accounts or the panel.
 
 - Touch interactions, dragging, resizing, autonomous activity, and an edge quota bubble. Double-click the bubble to open the usage panel.
+- Choose the default VPet character or [Whale Girl](https://github.com/PC2005-cloud/dsh-pet) before starting the pet. The settings page shows character thumbnails and compatible versions available for installation or update.
 - The context menu controls bubble visibility and optional water / break reminders, which are off by default. The pet's menu is currently in Chinese.
 - The lite extension omits feeding, work, progression, Steam, and online features. It updates independently and exits with the main app.
 
 See [pet development](pet_host/README.md) for implementation and build details, and read the [source and licensing notices](pet_host/THIRD_PARTY_NOTICES.md) before reusing assets.
+
+![Whale Girl desktop pet preview](site/assets/pet-whale-transparent.png)
+
+Whale Girl assets: [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet); non-commercial use only.
 
 ## Data, privacy, and updates
 
@@ -113,7 +118,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.15.2`; optional pet extension: `0.1.4`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.16.0`; optional pet extension: `0.2.0`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

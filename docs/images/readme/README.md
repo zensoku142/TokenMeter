@@ -43,3 +43,5 @@ GitHub Pages 会随界面语言切换对应的 Codex 浅色、Codex 深色和 De
 ## 桌宠素材声明
 
 桌宠核心、默认角色和动画来源：[LorisYounger/VPet](https://github.com/LorisYounger/VPet)。默认角色与动画版权归虚拟主播模拟器制作组所有。核心代码使用 Apache License 2.0，角色、动画及图片另有授权，详见 [来源与授权](../../../pet_host/THIRD_PARTY_NOTICES.md) 及 [上游完整声明](../../../third_party/VPet/README.md)。这些素材不属于 TokenMeter 自有代码的 MIT 授权范围。
+
+README 与官网展示的鲸鱼娘透明截图来自本仓库桌宠实测画面，原始动画与角色图片来源：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，固定素材提交 `a2993705466438f82954b9547f7b4f151e1f773f`。素材仅限非商业用途，详见同一份[来源与授权](../../../pet_host/THIRD_PARTY_NOTICES.md)。
