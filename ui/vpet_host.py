@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -99,6 +100,16 @@ def usage_message(
     # 可选展示字段兼容旧宿主；仅 DeepSeek 余额使用分时描边，不把峰谷状态带到其它账户。
     if provider == "deepseek" and not data.quota_windows and pricing_peak is not None:
         message["pricing_peak"] = pricing_peak
+    if provider == "deepseek" and not data.quota_windows:
+        # 余额卡片只接收有限数值，不向桌宠管道传账户标识、凭据或账单明细。
+        for field, value in (("balance_amount", data.balance_cny),
+                             ("total_cost_amount", data.total_cost_cny)):
+            try:
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    message[field] = str(value)
+            except OverflowError:
+                # 异常大的缓存数字不应使桌宠更新中断或变成虚假的扣款。
+                pass
     return message
 
 
@@ -126,6 +137,7 @@ class VPetHost(QObject):
         self._reported_failure = False
         self._buffer = bytearray()
         self._latest_usage: dict | None = None
+        self._latest_work_status: dict | None = None
 
     def start(self, data_directory: Path) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:
@@ -154,6 +166,14 @@ class VPetHost(QObject):
         self._latest_usage = message
         if self.active:
             self._send(message)
+
+    def update_work_status(self, status: str | None, text: str = "") -> None:
+        # 当前主程序没有任务生命周期来源；可选事件只在调用方提供真实状态时发送。
+        if status not in {None, "thinking", "working", "result", "waiting", "success", "error"}:
+            return
+        self._latest_work_status = {"type": "work_status", "status": status, "text": text[:200]}
+        if self.active:
+            self._send(self._latest_work_status)
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
@@ -194,6 +214,8 @@ class VPetHost(QObject):
                 self.animations = count if isinstance(count, int) else 0
                 if self._latest_usage is not None:
                     self._send(self._latest_usage)
+                if self._latest_work_status is not None:
+                    self._send(self._latest_work_status)
                 self._send({"type": "visibility", "visible": self.visible})
                 self.ready.emit()
             elif event == "error":

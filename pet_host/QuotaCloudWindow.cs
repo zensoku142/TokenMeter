@@ -34,6 +34,16 @@ internal sealed class QuotaCloudWindow : Window
     private readonly Stopwatch waveClock = new();
     private readonly StackPanel text = new() { Width = 132, VerticalAlignment = VerticalAlignment.Top };
     private readonly Viewbox surface;
+    private readonly Viewbox whaleSurface;
+    private readonly Border whaleCard = new();
+    private readonly Path whaleTail = new();
+    private readonly TextBlock whalePrimary = new() { FontSize = 25, FontWeight = FontWeights.SemiBold,
+        TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Ellipse whaleStatusDot = new() { Width = 7, Height = 7,
+        HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+        Margin = new Thickness(0, 7, 9, 0) };
+    private bool whaleStyle;
+    private string bubbleStyle = "speech";
     private Color accentColor = Color.FromRgb(47, 114, 232);
     private Color peakColor = Color.FromRgb(255, 176, 0);
     private Color textColor = Color.FromRgb(68, 81, 92);
@@ -44,7 +54,7 @@ internal sealed class QuotaCloudWindow : Window
     private Rect? lastBounds;
     private Point? lastPointerPosition;
     internal string PrimaryText => primary.Text;
-    internal double DisplayOpacity => surface.Opacity;
+    internal double DisplayOpacity => ActiveSurface.Opacity;
     internal double? RemainingPercent { get; private set; }
     internal bool IsWaveRunning => waveTimer.IsEnabled;
     internal bool IsIdleTimerRunning => idleTimer.IsEnabled;
@@ -54,10 +64,12 @@ internal sealed class QuotaCloudWindow : Window
     internal Color LiquidColor => ((LinearGradientBrush)frontWater.Fill).GradientStops[2].Color;
     internal Color SurfaceColor => ((SolidColorBrush)silhouette.Fill).Color;
     internal Color TextColor => ((SolidColorBrush)primary.Foreground).Color;
+    internal bool UsesWhaleStyle => whaleStyle;
+    private Viewbox ActiveSurface => whaleStyle ? whaleSurface : surface;
 
     public QuotaCloudWindow(bool demo, Action openPanel)
     {
-        Title = "TokenMeter · 贴边额度云朵";
+        Title = "TokenMeter · 额度气泡";
         Width = BaseWidth;
         Height = BaseHeight;
         WindowStyle = WindowStyle.None;
@@ -104,12 +116,37 @@ internal sealed class QuotaCloudWindow : Window
         canvas.Children.Add(waterText);
         canvas.Children.Add(statusDot);
         surface = new Viewbox { Child = canvas, Opacity = 1 };
+        var whaleCanvas = new Grid { Width = 100, Height = 56 };
+        whaleTail.Data = Geometry.Parse("M 0,0 L 12,0 L 6,13 Z");
+        whaleTail.Fill = new SolidColorBrush(Color.FromArgb(245, 255, 255, 255));
+        whaleTail.Stroke = new SolidColorBrush(Color.FromRgb(211, 221, 235));
+        whaleTail.StrokeThickness = 1;
+        whaleTail.HorizontalAlignment = HorizontalAlignment.Center;
+        whaleTail.VerticalAlignment = VerticalAlignment.Bottom;
+        whaleTail.Margin = new Thickness(0, 0, 0, 4);
+        whaleCanvas.Children.Add(whaleTail);
+        whaleCard.Width = 94;
+        whaleCard.Height = 43;
+        whaleCard.VerticalAlignment = VerticalAlignment.Top;
+        whaleCard.Margin = new Thickness(3, 1, 3, 0);
+        whaleCard.CornerRadius = new CornerRadius(15);
+        whaleCard.BorderThickness = new Thickness(1);
+        whaleCard.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 7,
+            ShadowDepth = 2, Opacity = 0.13 };
+        var whaleContent = new Grid();
+        whaleContent.Children.Add(new Viewbox { Stretch = Stretch.Uniform,
+            StretchDirection = StretchDirection.DownOnly, Margin = new Thickness(10, 4, 10, 4),
+            Child = whalePrimary });
+        whaleContent.Children.Add(whaleStatusDot);
+        whaleCard.Child = whaleContent;
+        whaleCanvas.Children.Add(whaleCard);
+        whaleSurface = new Viewbox { Child = whaleCanvas, Opacity = 1 };
         Content = surface;
         waveTimer.Tick += (_, _) => DrawWater();
         idleTimer.Tick += (_, _) => {
             idleTimer.Stop();
             if (IsVisible)
-                surface.BeginAnimation(OpacityProperty, new DoubleAnimation(0.65, TimeSpan.FromMilliseconds(250)));
+                ActiveSurface.BeginAnimation(OpacityProperty, new DoubleAnimation(0.65, TimeSpan.FromMilliseconds(250)));
         };
         IsVisibleChanged += (_, _) => {
             UpdateWaveTimer();
@@ -118,8 +155,8 @@ internal sealed class QuotaCloudWindow : Window
             {
                 // 隐藏或关闭后取消淡化，不能让已排队的动画影响下次显示。
                 idleTimer.Stop();
-                surface.BeginAnimation(OpacityProperty, null);
-                surface.Opacity = 1;
+                ActiveSurface.BeginAnimation(OpacityProperty, null);
+                ActiveSurface.Opacity = 1;
             }
         };
         Closed += (_, _) => { idleTimer.Stop(); waveTimer.Stop(); waveClock.Stop(); };
@@ -141,6 +178,33 @@ internal sealed class QuotaCloudWindow : Window
         SetUsage(demo ? "Codex · 演示数据" : "等待用量数据", demo ? "剩余 65%" : "--", "", "", false);
     }
 
+    internal void SetWhaleStyle(bool enabled)
+    {
+        if (whaleStyle == enabled) return;
+        whaleStyle = enabled;
+        surface.BeginAnimation(OpacityProperty, null);
+        whaleSurface.BeginAnimation(OpacityProperty, null);
+        surface.Opacity = whaleSurface.Opacity = 1;
+        Content = enabled ? whaleSurface : surface;
+        lastBounds = null;
+        UpdateWaveTimer();
+        NotifyActivity();
+    }
+
+    internal void SetBubbleStyle(string value)
+    {
+        if (value is not ("speech" or "compact")) return;
+        bubbleStyle = value;
+        // 两个可选外观只使用对白框画布；原云朵水位不再作为用户可见样式。
+        SetWhaleStyle(true);
+        whaleTail.Visibility = value == "speech" ? Visibility.Visible : Visibility.Collapsed;
+        whaleCard.CornerRadius = new CornerRadius(value == "speech" ? 15 : 9);
+        whaleCard.BorderThickness = new Thickness(value == "speech" ? 1 : 1.5);
+        whaleCard.Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = value == "speech" ? 7 : 3,
+            ShadowDepth = value == "speech" ? 2 : 1, Opacity = value == "speech" ? 0.13 : 0.08 };
+        whaleCard.BorderBrush = new SolidColorBrush(value == "speech" ? borderColor : accentColor);
+    }
+
     internal void SetTheme(JsonElement theme)
     {
         Color Read(string key, Color fallback) => ReadThemeColor(theme, key, fallback);
@@ -148,11 +212,19 @@ internal sealed class QuotaCloudWindow : Window
         peakColor = Read("peak", peakColor);
         // 旧主程序缺少这些可选字段时保留旧外观；新主程序让云朵底色、文字和提示一起跟随主题。
         silhouette.Fill = new SolidColorBrush(Read("surface", SurfaceColor));
+        var cardColor = Read("surface", Colors.White);
+        whaleCard.Background = new SolidColorBrush(Color.FromArgb(245, cardColor.R, cardColor.G, cardColor.B));
+        whaleCard.BorderBrush = new SolidColorBrush(Read("border", borderColor));
+        whaleTail.Fill = whaleCard.Background;
+        whaleTail.Stroke = whaleCard.BorderBrush;
         textColor = Read("text", textColor);
         borderColor = Read("border", borderColor);
         mutedColor = Read("subtext", mutedColor);
         warningColor = Read("warning", warningColor);
         warningDotColor = Read("warning", warningDotColor);
+        whalePrimary.Foreground = new SolidColorBrush(textColor);
+        whaleCard.BorderBrush = new SolidColorBrush(bubbleStyle == "speech" ? borderColor : accentColor);
+        whaleTail.Stroke = whaleCard.BorderBrush;
         var previous = frontWater.Fill as LinearGradientBrush;
         var gradient = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(0, 1) };
         gradient.GradientStops.Add(new GradientStop(Read("water_top", previous?.GradientStops[0].Color ?? Color.FromRgb(132, 174, 243)), 0));
@@ -181,6 +253,8 @@ internal sealed class QuotaCloudWindow : Window
         // 小云朵仅保留数值；刷新/异常用小圆点提示，完整说明仍在原额度窗口和辅助功能文本中。
         statusDot.Visibility = hasStatus ? Visibility.Visible : Visibility.Collapsed;
         statusDot.Fill = new SolidColorBrush(warning ? warningDotColor : mutedColor);
+        whaleStatusDot.Visibility = statusDot.Visibility;
+        whaleStatusDot.Fill = statusDot.Fill;
         text.Margin = new Thickness(0, 40, 0, 0);
         primary.Text = string.IsNullOrWhiteSpace(value) ? "--" : value;
         // 保留现有管道和独立额度窗口的文案，只在云朵里把旧格式“剩余 65%”简化成“65%”。
@@ -197,6 +271,8 @@ internal sealed class QuotaCloudWindow : Window
             else primary.Text = "--";
         }
         primary.Foreground = new SolidColorBrush(warning ? warningColor : textColor);
+        whalePrimary.Text = primary.Text;
+        whalePrimary.Foreground = new SolidColorBrush(warning ? warningColor : textColor);
         // 外轮廓进一步缩小时保住百分比字号，避免小气泡虽然不遮挡却读不清核心数值。
         primary.FontSize = RemainingPercent.HasValue ? 32 : 23;
         bool showPricing = RemainingPercent == null && pricingPeak.HasValue &&
@@ -216,8 +292,8 @@ internal sealed class QuotaCloudWindow : Window
     {
         if (!IsVisible) return;
         idleTimer.Stop();
-        surface.BeginAnimation(OpacityProperty, null);
-        surface.Opacity = 1;
+        ActiveSurface.BeginAnimation(OpacityProperty, null);
+        ActiveSurface.Opacity = 1;
         idleTimer.Start();
     }
 
@@ -229,7 +305,7 @@ internal sealed class QuotaCloudWindow : Window
         NotifyActivity();
     }
 
-    internal void ShowNextTo(Rect pet, Rect work, bool? left, double scale, DpiScale dpi)
+    internal void ShowNextTo(Rect pet, Rect work, bool? left, double scale, DpiScale dpi, Rect? visibleCharacter = null)
     {
         if ((artwork.RenderTransform as ScaleTransform)?.ScaleX != (left == true ? -1 : 1))
         {
@@ -238,7 +314,9 @@ internal sealed class QuotaCloudWindow : Window
         }
         // 云朵只轻微跟随角色大小，放大桌宠不能把信息提示也变成一张大卡片。
         scale = Math.Clamp(scale, 0.95, 1.0);
-        var bounds = BoundsFor(pet, work, new Size(BaseWidth * scale * dpi.DpiScaleX, BaseHeight * scale * dpi.DpiScaleY), left);
+        var bounds = whaleStyle && visibleCharacter is { } character
+            ? BoundsForWhale(character, work, dpi)
+            : BoundsFor(pet, work, new Size(BaseWidth * scale * dpi.DpiScaleX, BaseHeight * scale * dpi.DpiScaleY), left);
         bool moved = lastBounds != bounds;
         lastBounds = bounds;
         var handle = new WindowInteropHelper(this).EnsureHandle();
@@ -254,7 +332,7 @@ internal sealed class QuotaCloudWindow : Window
     private void UpdateWaveTimer()
     {
         // 云朵隐藏、显示金额或额度未知时不跑动画；0% 和 100% 也保持真实的全空/全满状态。
-        if (IsVisible && RemainingPercent is > 0 and < 100)
+        if (!whaleStyle && IsVisible && RemainingPercent is > 0 and < 100)
         {
             waveClock.Start();
             waveTimer.Start();
@@ -338,6 +416,24 @@ internal sealed class QuotaCloudWindow : Window
                 if (x + width > work.Right) x = pet.Left - width - 4;
                 y = pet.Top + pet.Height * 0.08;
             }
+        }
+        return new Rect(Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - width)),
+            Math.Clamp(y, work.Top + 4, Math.Max(work.Top + 4, work.Bottom - height - 4)), width, height);
+    }
+
+    internal static Rect BoundsForWhale(Rect character, Rect work, DpiScale dpi)
+    {
+        // 鲸鱼娘只占透明动画画布中央；气泡按可见像素宽度缩放并贴近头顶，而非按整个窗口定位。
+        double width = Math.Clamp(character.Width * 0.7, 54 * dpi.DpiScaleX, 108 * dpi.DpiScaleX);
+        double height = width * 0.56;
+        double gap = Math.Max(4 * dpi.DpiScaleY, character.Height * 0.03);
+        double x = character.Left + (character.Width - width) / 2;
+        double y = character.Top - height - gap;
+        if (y < work.Top + 4)
+        {
+            x = character.Right + gap;
+            if (x + width > work.Right) x = character.Left - width - gap;
+            y = character.Top;
         }
         return new Rect(Math.Clamp(x, work.Left, Math.Max(work.Left, work.Right - width)),
             Math.Clamp(y, work.Top + 4, Math.Max(work.Top + 4, work.Bottom - height - 4)), width, height);

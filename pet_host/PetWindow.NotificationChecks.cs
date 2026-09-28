@@ -64,17 +64,17 @@ internal sealed partial class PetWindow
             var work = WorkArea();
             Left = work.Left + (work.Width - Width) / 2;
             Top = work.Top + (work.Height - Height) / 2;
-            checks["notificationLegacyDefaults"] = cloudMode == "edge" && cloudRandomMinutes == 5 &&
+            checks["notificationLegacyDefaults"] = cloudMode == "edge" && bubbleStyle == "speech" && cloudRandomMinutes == 5 &&
                 !drinkReminderEnabled && !restReminderEnabled && drinkReminderMinutes == 30 && restReminderMinutes == 60;
-            Preferences("{\"cloudMode\":17,\"cloudRandomMinutes\":-3,\"drinkReminderEnabled\":\"yes\",\"drinkReminderMinutes\":15.5,\"restReminderMinutes\":99999999999}");
-            checks["notificationInvalidPreferencesUseDefaults"] = cloudMode == "edge" && cloudRandomMinutes == 5 &&
+            Preferences("{\"cloudMode\":17,\"bubbleStyle\":\"cloud\",\"cloudRandomMinutes\":-3,\"drinkReminderEnabled\":\"yes\",\"drinkReminderMinutes\":15.5,\"restReminderMinutes\":99999999999}");
+            checks["notificationInvalidPreferencesUseDefaults"] = cloudMode == "edge" && bubbleStyle == "speech" && cloudRandomMinutes == 5 &&
                 !drinkReminderEnabled && drinkReminderMinutes == 30 && restReminderMinutes == 60;
-            Preferences("{\"cloudMode\":\"hover_random\",\"cloudRandomMinutes\":10,\"drinkReminderEnabled\":true,\"drinkReminderMinutes\":45,\"restReminderEnabled\":true,\"restReminderMinutes\":90}");
+            Preferences("{\"cloudMode\":\"hover_random\",\"bubbleStyle\":\"compact\",\"cloudRandomMinutes\":10,\"drinkReminderEnabled\":true,\"drinkReminderMinutes\":45,\"restReminderEnabled\":true,\"restReminderMinutes\":90}");
             SaveState();
             string changedPreferences = File.ReadAllText(Path.Combine(dataDirectory, "layout.json"));
             Preferences("{}");
             Preferences(changedPreferences);
-            checks["notificationPreferencesRoundTrip"] = cloudMode == "hover_random" && cloudRandomMinutes == 10 &&
+            checks["notificationPreferencesRoundTrip"] = cloudMode == "hover_random" && bubbleStyle == "compact" && cloudRandomMinutes == 10 &&
                 drinkReminderEnabled && drinkReminderMinutes == 45 && restReminderEnabled && restReminderMinutes == 90;
             checks["notificationTransientStateNotSaved"] = !changedPreferences.Contains("nextDrinkReminder") &&
                 !changedPreferences.Contains("cloudManualChoice") && !changedPreferences.Contains("randomCloudUntil");
@@ -89,6 +89,23 @@ internal sealed partial class PetWindow
                     persisted.RootElement.GetProperty("cloudMode").GetString() == cloudMode;
             }
             checks["allCloudMenuModesApplyAndSave"] = menuModesWork;
+            var styleMenu = petMenu.Items.OfType<MenuItem>().Single(x => x.Header.ToString() == "额度气泡样式");
+            bool stylesWork = true;
+            foreach (var choice in styleMenu.Items.OfType<MenuItem>())
+            {
+                choice.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                using var persisted = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "layout.json")));
+                stylesWork &= choice.IsChecked && styleMenu.Items.OfType<MenuItem>().Count(x => x.IsChecked) == 1 &&
+                    persisted.RootElement.GetProperty("bubbleStyle").GetString() == bubbleStyle &&
+                    quotaCloud!.UsesWhaleStyle;
+                cloudDockedState = LogicalDockedEdge.HasValue;
+                cloudManualChoice = true;
+                UpdateQuotaCloud();
+                Capture(quotaCloud!, Path.Combine(output, $"bubble-{bubbleStyle}.png"));
+                cloudManualChoice = null;
+                UpdateQuotaCloud();
+            }
+            checks["bubbleStylesApplyAndSave"] = stylesWork;
             var drinkMenu = petMenu.Items.OfType<MenuItem>().Single(x => x.Header.ToString() == "喝水提醒");
             var enableDrink = drinkMenu.Items.OfType<MenuItem>().First();
             enableDrink.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));

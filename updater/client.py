@@ -479,6 +479,14 @@ class GitHubReleaseClient:
     def latest_pet_release(
         self, *, cancel_requested: Callable[[], bool] | None = None,
     ) -> PetReleaseInfo:
+        releases = self.available_pet_releases(cancel_requested=cancel_requested, limit=1)
+        if releases:
+            return releases[0]
+        raise UpdateError("尚未发布与当前主程序兼容的桌宠扩展包")
+
+    def available_pet_releases(
+        self, *, cancel_requested: Callable[[], bool] | None = None, limit: int | None = None,
+    ) -> list[PetReleaseInfo]:
         candidates = []
         page = 1
         # 体验版需要能安装同批次的预发布桌宠；正式版继续排除预发布包，避免误升级。
@@ -507,6 +515,7 @@ class GitHubReleaseClient:
             if len(payload) < 100:
                 break
             page += 1
+        releases: list[PetReleaseInfo] = []
         for version, item in sorted(candidates, key=lambda entry: entry[0], reverse=True):
             if cancel_requested and cancel_requested():
                 raise DownloadCancelled("已取消下载")
@@ -542,11 +551,13 @@ class GitHubReleaseClient:
             if host_sha is None or not isinstance(manifest.get("resources"), dict):
                 host_asset = None
                 host_sha = None
-            return PetReleaseInfo(
+            releases.append(PetReleaseInfo(
                 version.normalized(), manifest, by_name[name], checksums[name.lower()],
                 host_asset, host_sha,
-            )
-        raise UpdateError("尚未发布与当前主程序兼容的桌宠扩展包")
+            ))
+            if limit is not None and len(releases) >= limit:
+                break
+        return releases
 
     def _load_pet_manifest(
         self, asset: ReleaseAsset, expected_sha: str, cancel_requested: Callable[[], bool] | None,

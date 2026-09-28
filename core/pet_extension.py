@@ -34,6 +34,32 @@ def extension_directory() -> Path:
     return config_manager.CONFIG_DIR / "extensions" / "vpet"
 
 
+def selected_character() -> str:
+    layout = config_manager.CONFIG_DIR / "vpet" / "layout.json"
+    try:
+        value = json.loads(layout.read_text(encoding="utf-8"))
+        return "whale" if isinstance(value, dict) and value.get("character") == "whale" else "vpet"
+    except (OSError, ValueError):
+        return "vpet"
+
+
+def save_selected_character(character: str) -> None:
+    if character not in {"vpet", "whale"}:
+        raise ValueError("未知桌宠角色")
+    layout = config_manager.CONFIG_DIR / "vpet" / "layout.json"
+    if layout.exists():
+        value = json.loads(layout.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("桌宠布局格式无效")
+    else:
+        value = {}
+    value["character"] = character
+    layout.parent.mkdir(parents=True, exist_ok=True)
+    temporary = layout.with_name(layout.name + ".selection.tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(layout)
+
+
 def removable_directories() -> list[Path]:
     paths = [extension_directory()]
     if getattr(sys, "frozen", False):

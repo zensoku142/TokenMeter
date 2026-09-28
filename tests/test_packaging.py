@@ -54,6 +54,13 @@ def test_runtime_icon_is_packaged_for_qt_windows_and_tray():
     assert ("../../assets/TokenMeter.ico", "assets") in options["datas"]
 
 
+def test_pet_character_thumbnails_are_packaged_with_the_main_app():
+    options = _call_keywords("packaging/pyinstaller/TokenMeter.spec", "Analysis")
+    assert ("../../assets/pet", "assets/pet") in options["datas"]
+    assert (ROOT / "assets/pet/vpet-preview.png").is_file()
+    assert (ROOT / "assets/pet/whale-portrait.png").is_file()
+
+
 def test_updater_executable_is_packaged_separately():
     options = _call_keywords("packaging/pyinstaller/TokenMeterUpdater.spec", "EXE")
 
@@ -297,6 +304,11 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     notices = tmp_path / "pet_host/THIRD_PARTY_NOTICES.md"
     notices.parent.mkdir()
     notices.write_text("integration notices", encoding="utf-8")
+    whale = tmp_path / "pet_host/whale"
+    whale.mkdir()
+    (whale / "info.lps").write_text("apnganimation#whale.idle:|path#idle.png:|", encoding="utf-8")
+    (whale / "idle.png").write_bytes(b"whale animation")
+    (whale.parent / "whale.lps").write_text("pet: whale", encoding="utf-8")
     stale = output / "resources/pet/obsolete.png"
     stale.parent.mkdir(parents=True)
     stale.write_bytes(b"old animation")
@@ -311,11 +323,13 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     assert not stale.exists()
     assert (output / "resources/pet/vup/Default/frame.png").read_bytes() == b"animation"
     assert (output / "resources/pet/vup.lps").read_text(encoding="utf-8") == "pet: vup"
+    assert (output / "resources/pet/whale.lps").read_text(encoding="utf-8") == "pet: whale"
+    assert (output / "resources/pet/whale/idle.png").read_bytes() == b"whale animation"
     assert (output / "VPet-LICENSE.txt").read_text(encoding="utf-8") == "vendored license"
     assert (output / "VPet-README.md").read_text(encoding="utf-8") == "upstream animation notices"
     assert (output / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8") == "integration notices"
     assert report["revision"] == build_vpet.REVISION
-    assert report["resource_files"] == 2 + len(extra_frames)
+    assert report["resource_files"] == 5 + len(extra_frames)
     for relative in extra_frames:
         assert (output / "resources/pet/vup" / relative).read_bytes() == relative.encode()
     assert not (output / "resources/pet/vup/WORK").exists()

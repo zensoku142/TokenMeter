@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 from config import runtime as config_manager
 from config.defaults import DEFAULT_CONFIG, PROVIDER_IDS
 from api.providers.base import QuotaMetric, QuotaWindow
-from updater.client import CheckResult, ReleaseAsset, ReleaseInfo, SemVer
+from updater.client import CheckResult, PetReleaseInfo, ReleaseAsset, ReleaseInfo, SemVer
 from data.store import PerProviderData, TokenData
 from ui.geometry import WorkArea
 from ui.qt_ball import CodexLiquidMotion, FloatingUsageBall, LiquidSurfaceState
@@ -2441,6 +2441,21 @@ def test_vpet_pipe_buffers_frames_and_accepts_only_fixed_ui_actions():
         host.stop()
         host._consume_output(b'{"event":"open_settings"}\n')
         assert actions == ["open_panel", "quit"]
+
+
+def test_vpet_optional_work_status_is_buffered_and_validated():
+    host = VPetHost()
+    with patch.object(host, "_send") as send:
+        host.update_work_status("thinking", "正在思考")
+        host.update_work_status("unknown", "ignored")
+        assert send.call_count == 0
+        host._consume_output(b'{"event":"ready","animations":34}\n')
+        assert send.call_args_list[0].args[0] == {
+            "type": "work_status", "status": "thinking", "text": "正在思考"
+        }
+        host.update_work_status("success", "完成")
+        assert send.call_args_list[-1].args[0]["status"] == "success"
+    host.stop()
 
 
 @pytest.mark.parametrize("invalid", [b'{"event":[]}', b'{"event":{}}', b'[' * 10000 + b']' * 10000])
@@ -5142,13 +5157,81 @@ def test_settings_vpet_switch_persists_without_changing_ball_preferences(autosav
     window, values, saved, refreshed = autosave_settings
     with patch("ui.qt_settings.pet_extension.installed_manifest", return_value={"version": "0.1.0"}):
         window._refresh_pet_controls()
+    assert window.pet_character_combo.isEnabled()
     window.vpet_check.click()
+    assert not window.pet_character_combo.isEnabled()
     window.flush_pending_saves()
     assert values["VPET_ENABLED"] is True
     assert values["EDGE_HIDE_ENABLED"] is True
     assert values["WIDGET_COMPACT_SIZE"] == 88
     saved.assert_called_once()
     refreshed.assert_called_once()
+
+
+def test_pet_character_can_be_preselected_before_install(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_manager, "CONFIG_DIR", tmp_path)
+    with (
+        patch("ui.qt_settings.pet_extension.installed_manifest", return_value=None),
+        patch("ui.qt_settings.pet_extension.removable_directories", return_value=[]),
+    ):
+        window = SettingsWindow()
+        try:
+            assert not window.vpet_check.isEnabled()
+            assert window.pet_character_combo.isEnabled()
+            assert not window.pet_character_combo.itemIcon(0).isNull()
+            assert not window.pet_character_combo.itemIcon(1).isNull()
+            whale = window.pet_character_combo.findData("whale")
+            window.pet_character_combo.setCurrentIndex(whale)
+            window.pet_character_combo.activated.emit(whale)
+            assert json.loads((tmp_path / "vpet/layout.json").read_text(encoding="utf-8")) == {
+                "character": "whale",
+            }
+            assert not window._save_timer.isActive()
+        finally:
+            window.close()
+
+        reopened = SettingsWindow()
+        try:
+            assert reopened.pet_character_combo.currentData() == "whale"
+        finally:
+            reopened.close()
+
+
+def test_pet_version_list_selects_a_target_and_keeps_downgrade_blocked(autosave_settings, tmp_path):
+    window, _values, saved, _refreshed = autosave_settings
+    releases = [
+        PetReleaseInfo(version, {"version": version},
+                       ReleaseAsset(f"pet-{version}.zip", "https://example.com/pet.zip", 1), "a" * 64)
+        for version in ("0.4.0", "0.3.0", "0.1.0")
+    ]
+    with (
+        patch("ui.qt_settings.pet_extension.installed_manifest", return_value={"version": "0.2.0"}),
+        patch("ui.qt_settings.pet_extension.removable_directories", return_value=[tmp_path]),
+    ):
+        window._pet_worker = Mock(operation="list", error=None, releases=releases)
+        window._pet_task_finished()
+        assert [window.pet_release_combo.itemText(index) for index in range(3)] == [
+            "v0.4.0", "v0.3.0", "v0.1.0",
+        ]
+        window.pet_release_combo.setCurrentIndex(2)
+        window.pet_release_combo.activated.emit(2)
+        assert window.pet_update_button.isHidden()
+        assert "不支持降级" in window.pet_status_label.text()
+        with patch.object(window, "_start_pet_task") as blocked:
+            window._update_pet()
+        blocked.assert_not_called()
+        window.pet_release_combo.setCurrentIndex(1)
+        window.pet_release_combo.activated.emit(1)
+        assert window._pet_release == releases[1]
+        assert not window.pet_update_button.isHidden()
+        assert not window._save_timer.isActive()
+        with (
+            patch("ui.qt_settings.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes),
+            patch.object(window, "_start_pet_task") as start,
+        ):
+            window._update_pet()
+        start.assert_called_once_with("update")
+    saved.assert_not_called()
 
 
 @pytest.mark.parametrize("width", [560, 820])

@@ -39,3 +39,13 @@ def test_pet_display_whitelist_preserves_low_quota_and_rejects_private_fields():
     assert "不足" in message["status"]
     serialized = json.dumps(message)
     assert "synthetic-secret" not in serialized and "private/auth" not in serialized
+
+
+def test_deepseek_whale_card_receives_numbers_without_account_identity():
+    data = TokenData(status="ok", balance_cny=128.60, total_cost_cny=12.38,
+                     account_key="private-account-identity")
+    message = usage_message(data, False, "deepseek", True)
+    assert message["balance_amount"] == "128.6"
+    assert message["total_cost_amount"] == "12.38"
+    assert message["pricing_peak"] is True
+    assert "private-account-identity" not in json.dumps(message)

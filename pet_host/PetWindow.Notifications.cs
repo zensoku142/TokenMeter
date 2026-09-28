@@ -22,6 +22,7 @@ internal sealed partial class PetWindow
     private static readonly int[] DrinkMinutes = { 15, 30, 45, 60 };
     private static readonly int[] RestMinutes = { 30, 45, 60, 90 };
     private string cloudMode = "edge";
+    private string bubbleStyle = "speech";
     private int cloudRandomMinutes = 5;
     private bool drinkReminderEnabled;
     private int drinkReminderMinutes = 30;
@@ -50,13 +51,23 @@ internal sealed partial class PetWindow
 
     private bool HasHoverCloud => cloudMode is "hover" or "hover_random";
     private bool HasRandomCloud => cloudMode is "random" or "hover_random";
-    private bool CanMoveAutonomously => ready && visible && !closing && !notificationsSuspended &&
-        allowMove && !petPointerDown && petMenu?.IsOpen != true && activeNotice == Notice.None &&
+    // 新角色图池异步加载期间停下旧角色移动，避免旧计时器与切换后的动作争抢画布。
+    private bool CanMoveAutonomously => ready && visible && !closing && !switchingCharacter && !notificationsSuspended &&
+        allowMove && !petPointerDown && !WhaleMotionActive && petMenu?.IsOpen != true && activeNotice == Notice.None &&
         !LogicalDockedEdge.HasValue;
     private bool? LogicalDockedEdge => notificationOrigin?.Edge ?? manualDockedEdge ?? DockedEdge;
 
     private void SyncAutonomy()
     {
+        SyncWhaleEvents();
+        if (character == "whale")
+        {
+            ambientTimer.Stop();
+            pet?.SetMoveMode(false, false, 1200000);
+            if (CanMoveAutonomously) TryStartWhaleChain();
+            else CancelWhaleChain();
+            return;
+        }
         ambientTimer.IsEnabled = CanMoveAutonomously;
         pet?.SetMoveMode(CanMoveAutonomously, false, 1200000);
     }
@@ -84,6 +95,11 @@ internal sealed partial class PetWindow
             string value = CloudModes[i];
             AddNotificationChoice(mode, labels[i], () => cloudMode == value, () => SetCloudMode(value));
         }
+        var style = new MenuItem { Header = "额度气泡样式" };
+        petMenu.Items.Add(style);
+        AddNotificationChoice(style, "对白框", () => bubbleStyle == "speech", () => SetBubbleStyle("speech"));
+        AddNotificationChoice(style, "简洁卡片", () => bubbleStyle == "compact", () => SetBubbleStyle("compact"));
+        style.SubmenuOpened += (_, _) => RefreshNotificationMenus();
         var frequency = new MenuItem { Header = "额度随机间隔" };
         petMenu.Items.Add(frequency);
         foreach (int minutes in RandomMinutes)
@@ -145,6 +161,13 @@ internal sealed partial class PetWindow
         nextRandomQuota = notificationNow() + NextRandomQuotaDelay();
         UpdateCloudPointer();
         UpdateQuotaCloud();
+    }
+
+    private void SetBubbleStyle(string value)
+    {
+        if (value is not ("speech" or "compact")) return;
+        bubbleStyle = value;
+        quotaCloud?.SetBubbleStyle(value);
     }
 
     private static int RandomMaximum(int minutes) => minutes == 3 ? 5 : minutes * 2;
@@ -237,6 +260,7 @@ internal sealed partial class PetWindow
     private void StartNotification(Notice notice, double now)
     {
         CancelAutonomousSequence();
+        if (character == "whale") CancelWhaleChain();
         activeNotice = notice;
         ++notificationGeneration;
         SyncAutonomy();
@@ -286,6 +310,7 @@ internal sealed partial class PetWindow
         // 贴边是用户锁定状态；自动警告不能借说话动画把角色带回屏幕内。
         if (LogicalDockedEdge.HasValue) return;
         CancelAutonomousSequence();
+        if (character == "whale") CancelWhaleChain();
         FinishNotification();
         if (!visible || notificationsSuspended) return;
         int generation = ++notificationGeneration;
@@ -312,6 +337,7 @@ internal sealed partial class PetWindow
     private void PauseNotifications()
     {
         CancelAutonomousSequence();
+        if (character == "whale") CancelWhaleChain();
         notificationTimer.Stop();
         ResetCloudHover();
         FinishNotification();
@@ -358,6 +384,10 @@ internal sealed partial class PetWindow
         // 旧布局和手工损坏的单个偏好都回退默认，不能影响其它布局字段或阻止桌宠启动。
         cloudMode = root.TryGetProperty("cloudMode", out var mode) && mode.ValueKind == JsonValueKind.String &&
             CloudModes.Contains(mode.GetString()) ? mode.GetString()! : "edge";
+        // 旧布局没有样式字段；云朵移除后统一使用对白框，避免升级时回到已移除的外观。
+        bubbleStyle = root.TryGetProperty("bubbleStyle", out var style) && style.ValueKind == JsonValueKind.String &&
+            style.GetString() == "compact" ? "compact" : "speech";
+        quotaCloud?.SetBubbleStyle(bubbleStyle);
         cloudRandomMinutes = Minutes("cloudRandomMinutes", RandomMinutes, 5);
         drinkReminderEnabled = Enabled("drinkReminderEnabled");
         drinkReminderMinutes = Minutes("drinkReminderMinutes", DrinkMinutes, 30);

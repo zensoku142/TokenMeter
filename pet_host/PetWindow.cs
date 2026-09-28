@@ -36,11 +36,19 @@ internal sealed partial class PetWindow : Window, IController
     private readonly GameSave save = new("萝莉斯");
     private PetMain? pet;
     private GraphCore? graph;
+    private GraphCore? defaultGraph;
+    private GraphCore? whaleGraph;
+    private string character = "vpet";
+    private bool switchingCharacter;
+    private Rect? whaleVisiblePixels;
     private QuotaWindow? quota;
     private QuotaCloudWindow? quotaCloud;
+    private WhaleBalanceCardWindow? whaleCard;
     private ContextMenu? petMenu;
     private MenuItem? quotaMenuItem;
     private MenuItem? autonomyMenuItem;
+    private MenuItem? defaultCharacterMenuItem;
+    private MenuItem? whaleCharacterMenuItem;
     private bool closing;
     private bool ready;
     private bool visible = true;
@@ -86,6 +94,12 @@ internal sealed partial class PetWindow : Window, IController
         Closing += (_, _) => {
             if (closing) return;
             closing = true;
+            CancelWhaleChain();
+            CancelWhaleStatus();
+            ClearWhaleTransition();
+            ++whaleActionGeneration;
+            whaleWhisperTimer.Stop();
+            StopWhaleMotion();
             if (petMenu != null) petMenu.IsOpen = false;
             EndPetGesture(cancel: true);
             DisposeNotifications();
@@ -94,9 +108,12 @@ internal sealed partial class PetWindow : Window, IController
             ambientTimer.Stop();
             if (pet != null) pet.GraphDisplayHandler -= OnPetGraphDisplayed;
             quotaCloud?.Close();
+            whaleCard?.Close();
             quota?.CloseForShutdown();
             pet?.Dispose();
-            graph?.Dispose();
+            defaultGraph?.Dispose();
+            whaleGraph?.Dispose();
+            whaleCatalog?.Dispose();
         };
     }
 
@@ -105,10 +122,11 @@ internal sealed partial class PetWindow : Window, IController
         try
         {
             GraphCore.CachePath = Path.Combine(dataDirectory, "cache");
-            var loader = new PetLoader(new LpsDocument(File.ReadAllText(Path.Combine(resources, "pet", "vup.lps"))),
-                new DirectoryInfo(Path.Combine(resources, "pet")));
             // 250px 足够常驻显示；直接使用原版内核的分辨率缓存，不修改原始动画素材。
-            graph = await Task.Run(() => loader.Graph(250, Dispatcher));
+            graph = await LoadCharacterGraph(character);
+            if (character == "whale") whaleGraph = graph;
+            else defaultGraph = graph;
+            if (character == "whale") Title = "TokenMeter · 鲸鱼娘";
             if (closing) { graph.Dispose(); return; }
             pet = new PetMain(new GameCore { Controller = this, Graph = graph, Save = save });
             // 原版事件计时器混合了睡眠和养成逻辑；改用宿主计时器仅触发走动与待机动作。
@@ -150,6 +168,8 @@ internal sealed partial class PetWindow : Window, IController
                 }
             }
             quotaCloud = new QuotaCloudWindow(demo, () => Request("open_panel")) { Owner = this };
+            quotaCloud.SetBubbleStyle(bubbleStyle);
+            whaleCard = new WhaleBalanceCardWindow(() => Request("open_panel")) { Owner = this };
             pet.GraphDisplayHandler += OnPetGraphDisplayed;
             pet.MouseEnter += (_, _) => quotaCloud.NotifyActivity();
             pet.MouseMove += (_, e) => quotaCloud.NotifyPointerMovement(PointToScreen(e.GetPosition(this)));
@@ -162,8 +182,19 @@ internal sealed partial class PetWindow : Window, IController
                 if (!closing) TrySnapPetToEdge(edge);
             }
             InitializeNotifications();
+            InitializeWhaleEvents();
+            InitializeWhalePhysics();
             if (pendingUsage is { } usage) UpdateUsage(usage);
             UpdateQuotaCloud();
+            if (demo && character == "whale")
+            {
+                // 独立演示默认展示新气泡，便于直接检查角色轮廓定位；正式模式仍遵守用户的气泡偏好。
+                cloudDockedState = LogicalDockedEdge.HasValue;
+                cloudManualChoice = true;
+                whaleCardEligible = true;
+                whaleCard!.SetBalance("余额 ¥128.64", 128.64m, 12.34m, false, true);
+                UpdateQuotaCloud();
+            }
             saveTimer.Tick += (_, _) => SaveState();
             saveTimer.Start();
             // 冒烟检查会主动调用真实动作；后台随机不能干扰其坐标和生命周期断言。
@@ -179,6 +210,84 @@ internal sealed partial class PetWindow : Window, IController
             Program.Send(new { @event = "error", message = "桌宠资源加载失败，已返回悬浮球。" });
             Application.Current.Shutdown(1);
         }
+    }
+
+    private Task<GraphCore> LoadCharacterGraph(string selected)
+    {
+        string file = selected == "whale" ? "whale.lps" : "vup.lps";
+        var loader = new PetLoader(new LpsDocument(File.ReadAllText(Path.Combine(resources, "pet", file))),
+            new DirectoryInfo(Path.Combine(resources, "pet")));
+        return Task.Run(() => loader.Graph(250, Dispatcher));
+    }
+
+    private async Task ChangeCharacterAsync(string selected)
+    {
+        if (switchingCharacter || selected == character || pet == null || graph == null) return;
+        switchingCharacter = true;
+        CancelWhaleChain();
+        CancelWhaleStatus();
+        ClearWhaleTransition();
+        ++whaleActionGeneration;
+        StopWhaleMotion();
+        lastWhaleBalanceTier = null;
+        lastWhaleQuotaSource = null;
+        lastWhaleRemaining = null;
+        ambientTimer.Stop();
+        pet.SetMoveMode(false, false, 1200000);
+        try
+        {
+            var next = selected == "whale" ? whaleGraph : defaultGraph;
+            if (next == null)
+            {
+                next = await LoadCharacterGraph(selected);
+                // APNG 帧表由内核异步准备；全部就绪后才切图，避免出现旧角色或空白帧。
+                while (!closing && next.GraphsALL.Any(animation => !animation.IsReady && !animation.IsFail))
+                    await Task.Delay(50);
+                var errors = next.GraphsALL.Where(animation => animation.IsFail)
+                    .Select(animation => animation.FailMessage).ToArray();
+                if (errors.Length != 0)
+                {
+                    next.Dispose();
+                    throw new InvalidDataException(string.Join("\n", errors));
+                }
+                if (closing) { next.Dispose(); return; }
+                if (selected == "whale") whaleGraph = next;
+                else defaultGraph = next;
+            }
+            PauseNotifications();
+            EndPetGesture(cancel: true);
+            pet.CleanState();
+            foreach (var animation in graph.GraphsALL) animation.Stop(true);
+            graph = next;
+            pet.Core.Graph = next;
+            if (selected == "whale") SetWhaleFacing(whaleFacingRight);
+            else
+            {
+                // 鲸鱼娘镜像只属于其图池；返回 VPet 时清掉画布变换与点击挤压。
+                pet.PetGrid.RenderTransform = Transform.Identity;
+                pet.PetGrid2.RenderTransform = Transform.Identity;
+                pet.RenderTransform = Transform.Identity;
+            }
+            // 触摸区域来自角色配置；只换图池会把新角色的点击判定留在旧坐标。
+            pet.Core.TouchEvent.Clear();
+            pet.Load_2_TouchEvent();
+            character = selected;
+            Title = selected == "whale" ? "TokenMeter · 鲸鱼娘" : "TokenMeter · VPet 精简版";
+            if (manualDockedEdge is bool edge && !TrySnapPetToEdge(edge)) pet.DisplayToNomal();
+            else if (manualDockedEdge == null) pet.DisplayToNomal();
+            ResumeNotifications();
+            SyncAutonomy();
+            SyncWhaleEvents();
+            UpdateQuotaCloud();
+            SaveState();
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText(Path.Combine(dataDirectory, "host-error.log"), ex + "\n");
+            MessageBox.Show(this, "角色资源加载失败：" + ex.Message, "角色切换失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally { switchingCharacter = false; SyncAutonomy(); }
     }
 
     private void BuildMenus()
@@ -211,6 +320,35 @@ internal sealed partial class PetWindow : Window, IController
         quotaMenuItem.IsCheckable = true;
         AddNotificationMenus();
         petMenu.Items.Add(new Separator());
+        var characters = new MenuItem { Header = "角色" };
+        petMenu.Items.Add(characters);
+        // 勾选项会用勾号替换 Icon；把角色形象放进 Header，切换前后都能看到缩略图。
+        StackPanel CharacterHeader(string title, ImageSource portrait) => new() {
+            Orientation = Orientation.Horizontal,
+            Children = {
+                new Image { Source = portrait, Width = 24, Height = 24,
+                    Margin = new Thickness(0, 0, 6, 0) },
+                new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center }
+            }
+        };
+        var defaultFrame = new BitmapImage(new Uri(Path.Combine(resources, "pet", "vup", "Default",
+            "Nomal", "1", "_000_250.png")));
+        // 原帧是 1000 方形画布，截取头肩区域才能在 24 像素菜单中辨认角色。
+        var defaultPortrait = new CroppedBitmap(defaultFrame, new Int32Rect(320, 30, 380, 480));
+        defaultCharacterMenuItem = new MenuItem { Header = CharacterHeader("VPet 默认角色",
+            defaultPortrait), IsCheckable = true };
+        defaultCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("vpet");
+        characters.Items.Add(defaultCharacterMenuItem);
+        whaleCharacterMenuItem = new MenuItem { Header = CharacterHeader("鲸鱼娘",
+            new BitmapImage(new Uri(Path.Combine(resources, "pet", "whale", "portrait.png")))), IsCheckable = true };
+        whaleCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("whale");
+        characters.Items.Add(whaleCharacterMenuItem);
+        characters.SubmenuOpened += (_, _) => {
+            defaultCharacterMenuItem.IsChecked = character == "vpet";
+            whaleCharacterMenuItem.IsChecked = character == "whale";
+        };
+        AddWhaleActionMenus();
+        petMenu.Items.Add(new Separator());
         autonomyMenuItem = Add("自主活动", () => {
             allowMove = autonomyMenuItem!.IsChecked;
             if (!allowMove) CancelAutonomousSequence();
@@ -228,6 +366,8 @@ internal sealed partial class PetWindow : Window, IController
         Add("退出 TokenMeter", () => Request("quit"));
         petMenu.Opened += (_, _) => {
             CancelAutonomousSequence();
+            CancelWhaleChain();
+            whaleActionMenu!.IsEnabled = character == "whale";
             UpdateQuotaCloud();
             quotaMenuItem.IsChecked = cloudEnabled;
             quotaCloud?.NotifyActivity();
@@ -269,13 +409,16 @@ internal sealed partial class PetWindow : Window, IController
                 // 打开用量面板也会发送 visible=true；只有真正切换显隐才重置提醒，避免频繁查看用量让提醒一直延期。
                 if (requestedVisible == visible) break;
                 visible = requestedVisible;
+                if (!visible) { CancelWhaleChain(); StopWhaleMotion(); ++whaleActionGeneration; }
+                if (!visible) CancelWhaleStatus();
                 if (!visible) EndPetGesture(cancel: true);
                 if (!visible && petMenu != null) petMenu.IsOpen = false;
                 if (visible) ResumeNotifications();
                 else PauseNotifications();
                 SyncAutonomy();
+                SyncWhaleEvents();
                 if (visible) Show();
-                else { quotaCloud?.Hide(); Hide(); quota?.Hide(); }
+                else { quotaCloud?.Hide(); whaleCard?.Hide(); Hide(); quota?.Hide(); }
                 if (pet != null)
                 {
                     pet.EventTimer.Stop();
@@ -294,6 +437,14 @@ internal sealed partial class PetWindow : Window, IController
                 }
                 break;
             case "shutdown": Application.Current.Shutdown(); break;
+            case "work_status":
+                if (character == "whale")
+                    _ = ShowWhaleWorkStatusAsync(
+                        command.TryGetProperty("status", out var workStatus) && workStatus.ValueKind == JsonValueKind.String
+                            ? workStatus.GetString() : null,
+                        command.TryGetProperty("text", out var workText) && workText.ValueKind == JsonValueKind.String
+                            ? workText.GetString() : null);
+                break;
         }
     }
 
@@ -311,6 +462,8 @@ internal sealed partial class PetWindow : Window, IController
             quotaCloud!.SetTheme(theme);
         }
         quotaCloud!.SetUsage(Text("provider"), Text("primary"), Text("secondary"), Text("status"), warning, peak);
+        UpdateWhaleCardData(usage, peak);
+        OnWhaleUsage(Text("provider"));
         string key = Text("provider") + ":" + Text("status");
         // 仅在警告首次出现时提示，不能每次额度轮询都打断宠物动作。
         if (warning && key != lastWarning) ShowUsageWarning(Text("status"));
@@ -325,11 +478,15 @@ internal sealed partial class PetWindow : Window, IController
 
     private void OnPetGraphDisplayed(GraphInfo _)
     {
+        if (character == "whale" && ready && !Dispatcher.HasShutdownStarted)
+            Dispatcher.Invoke(BeginWhaleTransition);
         // 动画回调可能来自后台线程；排回 UI 后读取最新状态，避免过期回调重新显示已隐藏的云朵。
         if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(() => {
             // 挥手等内核互动也会切换动画；保留新动作，同时取消未走完的自主序列。
             if (autonomousSequence != null && pet?.DisplayType != autonomousFrame?.GraphInfo)
                 CancelAutonomousSequence(returnToNormal: false);
+            if (whaleChainFrame != null && pet?.DisplayType != whaleChainFrame.GraphInfo)
+                CancelWhaleChain();
             // 用户互动可能中断警告的开场动作；不能让等待标记永久阻止后续生活提醒。
             if (warningSpeechPending && pet?.DisplayType.Name != pendingWarningAnimation)
             {
@@ -337,12 +494,20 @@ internal sealed partial class PetWindow : Window, IController
                 ++notificationGeneration;
             }
             UpdateQuotaCloud();
+            TryStartWhaleChain();
         });
     }
 
     private void UpdateQuotaCloud()
     {
+        UpdateWhaleBalanceCard();
         if (quotaCloud == null || closing) return;
+        if (character == "whale" && whaleCard?.IsVisible == true)
+        {
+            // 仅在底角卡片实际可见时隐藏气泡，其他贴边位置仍展示原有额度提示。
+            quotaCloud.Hide();
+            return;
+        }
         if (!ready || !visible || !IsVisible || petDragging || notificationsSuspended)
         {
             quotaCloud.Hide();
@@ -365,8 +530,41 @@ internal sealed partial class PetWindow : Window, IController
         var handle = new WindowInteropHelper(this).Handle;
         if (!GetWindowRect(handle, out var rect)) return;
         var work = System.Windows.Forms.Screen.FromHandle(handle).WorkingArea;
+        Rect? visibleCharacter = null;
+        if (character == "whale")
+        {
+            var pixels = WhaleVisiblePixels();
+            visibleCharacter = new Rect(rect.Left + pixels.X * (rect.Right - rect.Left),
+                rect.Top + pixels.Y * (rect.Bottom - rect.Top),
+                pixels.Width * (rect.Right - rect.Left), pixels.Height * (rect.Bottom - rect.Top));
+        }
         quotaCloud.ShowNextTo(new Rect(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top),
-            new Rect(work.X, work.Y, work.Width, work.Height), edge, size / 220.0, VisualTreeHelper.GetDpi(this));
+            new Rect(work.X, work.Y, work.Width, work.Height), edge, size / 220.0,
+            VisualTreeHelper.GetDpi(this), visibleCharacter);
+    }
+
+    private Rect WhaleVisiblePixels()
+    {
+        if (whaleVisiblePixels is { } cached) return cached;
+        var frame = BitmapFrame.Create(new Uri(Path.Combine(resources, "pet", "whale", "idle.png")),
+            BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+        var bitmap = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+        int width = bitmap.PixelWidth, height = bitmap.PixelHeight;
+        var pixels = new byte[width * height * 4];
+        bitmap.CopyPixels(pixels, width * 4, 0);
+        int minX = width, minY = height, maxX = -1, maxY = -1;
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+        {
+            // VP9 Alpha 边缘有极低透明度噪点；只用真正可见的像素确定角色轮廓。
+            if (pixels[(y * width + x) * 4 + 3] < 16) continue;
+            minX = Math.Min(minX, x); minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
+        }
+        whaleVisiblePixels = maxX < minX ? new Rect(0, 0, 1, 1) :
+            new Rect(minX / (double)width, minY / (double)height,
+                (maxX - minX + 1) / (double)width, (maxY - minY + 1) / (double)height);
+        return whaleVisiblePixels.Value;
     }
 
     private void Request(string name)
@@ -383,6 +581,8 @@ internal sealed partial class PetWindow : Window, IController
 
     private void ShowCredits() => MessageBox.Show(this,
         "默认角色与动画：虚拟主播模拟器制作组 / VPet\nhttps://github.com/LorisYounger/VPet\n\n" +
+        "鲸鱼娘图片与动画：PC2005-cloud/dsh-pet\nhttps://github.com/PC2005-cloud/dsh-pet\n" +
+        "参考项目素材允许开源使用、禁止商用；本次仅供本地开发验证。\n\n" +
         "当前为非商业集成试用。代码遵循 Apache-2.0；动画另行授权。\n" +
         "商业用途需联系原作者，分发动画须保留授权信息且不得收费分发。\n" +
         "完整授权见程序目录 THIRD_PARTY_NOTICES.md 与 VPet-README.md。",
@@ -398,10 +598,13 @@ internal sealed partial class PetWindow : Window, IController
     private void ResizePet(int delta)
     {
         CancelAutonomousSequence();
+        if (character == "whale") StopWhaleMotion();
         FinishNotification(restorePosition: false);
-        bool? edge = DockedEdge;
+        bool? edge = LogicalDockedEdge;
+        double? bottomOffset = WhaleAtBottomCorner() ? WorkArea().Bottom - Top - Height : null;
         size = Math.Clamp(size + delta, 160, 320);
         Width = Height = size;
+        if (bottomOffset is double offset) Top = WorkArea().Bottom - Height - offset;
         // 贴边角色缩放后仍需使用对应侧的锚点；普通回正会使角色与云朵脱离屏幕边缘。
         if (edge == null || !TrySnapPetToEdge(edge)) ClampPosition();
         UpdateQuotaCloud();
@@ -418,14 +621,20 @@ internal sealed partial class PetWindow : Window, IController
             if (!File.Exists(layout)) return;
             using var data = JsonDocument.Parse(File.ReadAllText(layout));
             LoadNotificationPreferences(data.RootElement);
-            Left = data.RootElement.GetProperty("x").GetDouble();
-            Top = data.RootElement.GetProperty("y").GetDouble();
-            size = Math.Clamp(data.RootElement.GetProperty("size").GetInt32(), 160, 320);
+            // 设置页可在首次启动前只保存角色；其余布局字段继续使用默认值。
+            if (data.RootElement.TryGetProperty("character", out var savedCharacter) &&
+                savedCharacter.ValueKind == JsonValueKind.String && savedCharacter.GetString() == "whale")
+                character = "whale";
+            if (data.RootElement.TryGetProperty("x", out var savedX)) Left = savedX.GetDouble();
+            if (data.RootElement.TryGetProperty("y", out var savedY)) Top = savedY.GetDouble();
+            if (data.RootElement.TryGetProperty("size", out var savedSize))
+                size = Math.Clamp(savedSize.GetInt32(), 160, 320);
             allowMove = !data.RootElement.TryGetProperty("allowMove", out var autonomous) || autonomous.GetBoolean();
             if (data.RootElement.TryGetProperty("dockedEdge", out var docked) &&
                 docked.ValueKind is JsonValueKind.True or JsonValueKind.False)
                 manualDockedEdge = docked.GetBoolean();
-            quotaPinned = data.RootElement.GetProperty("quotaPinned").GetBoolean();
+            if (data.RootElement.TryGetProperty("quotaPinned", out var pinned))
+                quotaPinned = pinned.GetBoolean();
             // 手动显隐是临时覆盖；只恢复展示模式和提醒偏好。
             if (data.RootElement.TryGetProperty("quotaX", out var qx) &&
                 data.RootElement.TryGetProperty("quotaY", out var qy) &&
@@ -445,9 +654,9 @@ internal sealed partial class PetWindow : Window, IController
         try
         {
             var position = notificationOrigin?.Position ?? new Point(Left, Top);
-            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, allowMove,
+            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, allowMove, character,
                 dockedEdge = manualDockedEdge, quotaPinned,
-                cloudMode, cloudRandomMinutes, drinkReminderEnabled, drinkReminderMinutes, restReminderEnabled, restReminderMinutes,
+                cloudMode, bubbleStyle, cloudRandomMinutes, drinkReminderEnabled, drinkReminderMinutes, restReminderEnabled, restReminderMinutes,
                 quotaX = quota?.Left ?? quotaPosition?.X ?? 0, quotaY = quota?.Top ?? quotaPosition?.Y ?? 0 }));
         }
         catch (IOException ex) { Console.Error.WriteLine("Pet state could not be saved: " + ex.Message); }
@@ -502,8 +711,11 @@ internal sealed partial class PetWindow : Window, IController
         Directory.CreateDirectory(output);
         await Task.Delay(1600);
         Capture(this, Path.Combine(output, "pet.png"));
+        if (character == "whale" && quotaCloud?.IsVisible == true)
+            Capture(quotaCloud, Path.Combine(output, "whale-bubble.png"));
         if (quota?.IsVisible == true) Capture(quota, Path.Combine(output, "quota.png"));
         if (!smoke) return;
+        if (character == "whale") { await RunWhaleVisualCheck(output); return; }
         var checks = new Dictionary<string, bool>();
         var handle = new WindowInteropHelper(this).Handle;
         int style = GetWindowLong(handle, -20);
@@ -525,8 +737,8 @@ internal sealed partial class PetWindow : Window, IController
             graph.FindGraph("eat", AnimatType.Single, save.Mode) == null;
         checks["noBottomToolbar"] = !pet!.UIGrid.Children.Contains(pet.ToolBar) && pet.DefaultClickAction == null;
         checks["contextMenuActions"] = petMenu!.Items.OfType<MenuItem>().Select(item => item.Header.ToString())
-            .SequenceEqual(new[] { "查看用量面板", "显示额度气泡", "额度气泡展示", "额度随机间隔", "喝水提醒", "休息提醒",
-                "自主活动", "放大桌宠", "缩小桌宠",
+            .SequenceEqual(new[] { "查看用量面板", "显示额度气泡", "额度气泡展示", "额度气泡样式", "额度随机间隔", "喝水提醒", "休息提醒",
+                "角色", "鲸鱼娘动作", "自主活动", "放大桌宠", "缩小桌宠",
                 "TokenMeter 设置", "返回悬浮球", "默认角色来源与授权", "退出 TokenMeter" });
         double strengthBefore = save.Strength, feelingBefore = save.Feeling, expBefore = save.Exp;
         await RunDragChecks(checks);
@@ -572,6 +784,201 @@ internal sealed partial class PetWindow : Window, IController
             animations = graph!.GraphsALL.Count, checks, errors = pet.ErrorMessage,
             memoryMiB = Process.GetCurrentProcess().WorkingSet64 / 1048576.0,
             layoutWritten = File.Exists(Path.Combine(dataDirectory, "layout.json"))
+        }, new JsonSerializerOptions { WriteIndented = true }));
+        Application.Current.Shutdown(checks.Values.All(x => x) ? 0 : 1);
+    }
+
+    private async Task RunWhaleVisualCheck(string output)
+    {
+        var checks = new Dictionary<string, bool>();
+        checks["whaleLoaded"] = graph == whaleGraph && character == "whale" &&
+            graph!.FindGraph("whale.idle", AnimatType.Single, save.Mode) is APNGAnimation &&
+            graph.FindName(GraphType.Touch_Head) != null && graph.FindName(GraphType.Raised_Static) != null;
+        checks["menuHasBothCharacters"] = defaultCharacterMenuItem != null && whaleCharacterMenuItem != null;
+        Capture(this, Path.Combine(output, "whale-frame-a.png"));
+        await Task.Delay(400);
+        Capture(this, Path.Combine(output, "whale-frame-b.png"));
+        checks["whaleFramesChange"] = !File.ReadAllBytes(Path.Combine(output, "whale-frame-a.png"))
+            .SequenceEqual(File.ReadAllBytes(Path.Combine(output, "whale-frame-b.png")));
+        cloudDockedState = LogicalDockedEdge.HasValue;
+        cloudManualChoice = true;
+        quotaCloud!.SetUsage("Codex · 演示数据", "剩余 65%", "", "", false);
+        UpdateQuotaCloud();
+        await Task.Delay(100);
+        if (quotaCloud!.ActualWidth > 0 && quotaCloud.ActualHeight > 0)
+            Capture(quotaCloud, Path.Combine(output, "whale-bubble.png"));
+        GetWindowRect(new WindowInteropHelper(quotaCloud).Handle, out var bubbleRect);
+        GetWindowRect(new WindowInteropHelper(this).Handle, out var petRect);
+        var visual = WhaleVisiblePixels();
+        double headY = petRect.Top + visual.Y * (petRect.Bottom - petRect.Top);
+        double characterWidth = visual.Width * (petRect.Right - petRect.Left);
+        checks["bubbleFollowsVisibleHead"] = quotaCloud!.IsVisible && quotaCloud.UsesWhaleStyle &&
+            bubbleRect.Bottom <= headY + 2 && headY - bubbleRect.Bottom <= 12 &&
+            bubbleRect.Right - bubbleRect.Left >= characterWidth * 0.65 &&
+            bubbleRect.Right - bubbleRect.Left <= characterWidth * 0.75;
+        if (!checks["bubbleFollowsVisibleHead"])
+            Console.Error.WriteLine($"Whale bubble check: visible={quotaCloud.IsVisible}, " +
+                $"bubble={bubbleRect.Left},{bubbleRect.Top},{bubbleRect.Right},{bubbleRect.Bottom}, " +
+                $"head={headY:0}, characterWidth={characterWidth:0}");
+        cloudManualChoice = null;
+        UpdateQuotaCloud();
+        string bundledWebm = Path.Combine(resources, "pet", "whale", "webm");
+        checks["all106WebmPackaged"] = Directory.EnumerateFiles(bundledWebm, "*.webm").Count() == 106 &&
+            WhaleCatalog.GetProperty("sourceRevision").GetString() == "a2993705466438f82954b9547f7b4f151e1f773f";
+        var fireworks = await WhaleActionGraphAsync("放烟花");
+        pet!.Display(fireworks, pet.DisplayToNomal);
+        await Task.Delay(300);
+        Capture(this, Path.Combine(output, "whale-fireworks.png"));
+        checks["webmConvertsAndPlays"] = fireworks.IsReady && pet.DisplayType.Name == "放烟花";
+        pet.DisplayToNomal();
+        string customDirectory = Path.Combine(dataDirectory, "main-animation", "webm");
+        Directory.CreateDirectory(customDirectory);
+        string customFireworks = Path.Combine(customDirectory, "放烟花.webm");
+        File.Copy(Path.Combine(bundledWebm, "待机呼吸休闲.webm"), customFireworks, true);
+        var customAnimation = await WhaleActionGraphAsync("放烟花");
+        checks["customWebmOverridesBundle"] = WhaleSource("放烟花") == customFireworks &&
+            customAnimation.Path != fireworks.Path;
+        File.Delete(customFireworks);
+        using (var work = JsonDocument.Parse("{\"type\":\"work_status\",\"status\":\"thinking\",\"text\":\"正在思考\"}"))
+            Receive(work.RootElement);
+        var workDeadline = DateTime.UtcNow.AddSeconds(15);
+        while (pet.DisplayType.Name != "工作状态-思考冒泡" && DateTime.UtcNow < workDeadline)
+            await Task.Delay(50);
+        checks["workStatusAnimation"] = pet.DisplayType.Name == "工作状态-思考冒泡";
+        using (var idle = JsonDocument.Parse("{\"type\":\"work_status\",\"status\":null}"))
+            Receive(idle.RootElement);
+        using (var balance = JsonDocument.Parse("{\"type\":\"usage\",\"provider\":\"Codex · 演示数据\",\"primary\":\"剩余 65%\",\"secondary\":\"\",\"status\":\"\",\"warning\":false}"))
+            Receive(balance.RootElement);
+        var balanceDeadline = DateTime.UtcNow.AddSeconds(15);
+        while (pet.DisplayType.Name != "余额-金袋叮当" && DateTime.UtcNow < balanceDeadline)
+            await Task.Delay(50);
+        checks["balanceTierAnimation"] = pet.DisplayType.Name == "余额-金袋叮当";
+        pet.DisplayToNomal();
+        checks["rightBottomDragSurvives"] = await CheckWhaleCornerDrag();
+        checks["throwMovesAfterRelease"] = await CheckWhaleThrow();
+        Top = WorkArea().Bottom - Height;
+        whaleCardEligible = true;
+        whaleCard!.SetBalance("余额 ¥128.64", 128.64m, 12.34m, false, true);
+        checks["rightDockForBalanceCard"] = TrySnapPetToEdge(false);
+        checks["cardVisibleImmediatelyAfterBottomSnap"] = whaleCard.IsVisible;
+        Top = WorkArea().Top + 40;
+        void DeepSeekUsage(decimal balance, decimal cost, bool peak, bool reset)
+        {
+            using var update = JsonDocument.Parse(JsonSerializer.Serialize(new {
+                type = "usage", provider = "DeepSeek · 演示数据", primary = $"余额 ¥{balance:0.00}",
+                secondary = "今日使用", status = "", warning = false, pricing_peak = peak,
+                balance_amount = balance, total_cost_amount = cost, balance_reset = reset
+            }));
+            Receive(update.RootElement.Clone());
+        }
+        DeepSeekUsage(128.64m, 12.34m, false, true);
+        DeepSeekUsage(128.60m, 12.38m, true, false);
+        checks["sideDockDoesNotShowCard"] = !whaleCard!.IsVisible;
+        Top = WorkArea().Bottom - Height;
+        UpdateQuotaCloud();
+        await Task.Delay(100);
+        if (whaleCard!.ActualWidth > 0 && whaleCard.ActualHeight > 0)
+            Capture(whaleCard, Path.Combine(output, "whale-balance-card.png"));
+        checks["balancePeakAndDebit"] = whaleCard.IsVisible && whaleCard.PeakText == "峰" &&
+            whaleCard.AmountText == "CNY 128.60" && whaleCard.FeedbackText == "-¥0.04" &&
+            quotaCloud!.IsVisible == false;
+        checks["balanceDeductionUsesFloatingNotice"] = whaleCard.DeductionCount == 1;
+        GetWindowRect(new WindowInteropHelper(whaleCard).Handle, out var cardRect);
+        GetWindowRect(new WindowInteropHelper(this).Handle, out var dockedPetRect);
+        var dockedPixels = WhaleVisiblePixels();
+        var cardDpi = VisualTreeHelper.GetDpi(whaleCard);
+        checks["balanceCardCompactSize"] =
+            Math.Abs(cardRect.Right - cardRect.Left - 146 * cardDpi.DpiScaleX) <= 1 &&
+            Math.Abs(cardRect.Bottom - cardRect.Top - 94 * cardDpi.DpiScaleY) <= 1;
+        checks["balanceCardBottomLeft"] = cardRect.Left < dockedPetRect.Left + dockedPixels.Left *
+            (dockedPetRect.Right - dockedPetRect.Left) && cardRect.Top > dockedPetRect.Top +
+            dockedPixels.Top * (dockedPetRect.Bottom - dockedPetRect.Top);
+        ResizePet(20);
+        GetWindowRect(new WindowInteropHelper(whaleCard).Handle, out var enlargedCardRect);
+        checks["balanceCardFixedAcrossResize"] = whaleCard.IsVisible &&
+            enlargedCardRect.Right - enlargedCardRect.Left == cardRect.Right - cardRect.Left &&
+            enlargedCardRect.Bottom - enlargedCardRect.Top == cardRect.Bottom - cardRect.Top;
+        ResizePet(-20);
+        checks["leftDockForBalanceCard"] = TrySnapPetToEdge(true);
+        UpdateQuotaCloud();
+        GetWindowRect(new WindowInteropHelper(whaleCard).Handle, out var leftCardRect);
+        GetWindowRect(new WindowInteropHelper(this).Handle, out var leftPetRect);
+        checks["leftCornerCardOnRight"] = whaleCard.IsVisible &&
+            leftCardRect.Left > leftPetRect.Left + dockedPixels.Left * (leftPetRect.Right - leftPetRect.Left) +
+                dockedPixels.Width * (leftPetRect.Right - leftPetRect.Left) / 2;
+        TrySnapPetToEdge(false);
+        UpdateQuotaCloud();
+        await Task.Delay(300);
+        if (whaleCard.ActualWidth > 0 && whaleCard.ActualHeight > 0)
+            Capture(whaleCard, Path.Combine(output, "whale-balance-card-later.png"));
+        checks["debitFeedbackMoves"] = File.Exists(Path.Combine(output, "whale-balance-card.png")) &&
+            File.Exists(Path.Combine(output, "whale-balance-card-later.png")) &&
+            !File.ReadAllBytes(Path.Combine(output, "whale-balance-card.png"))
+                .SequenceEqual(File.ReadAllBytes(Path.Combine(output, "whale-balance-card-later.png")));
+        using (var quotaUsage = JsonDocument.Parse("{\"type\":\"usage\",\"provider\":\"Codex · 演示数据\",\"primary\":\"剩余 9%\",\"secondary\":\"\",\"status\":\"\",\"warning\":true}"))
+            Receive(quotaUsage.RootElement.Clone());
+        await Task.Delay(100);
+        checks["quotaCardReplacesDockedBubble"] = whaleCard.IsVisible && whaleCard.LabelText == "额度" &&
+            whaleCard.AmountText == "9%" && whaleCard.PeakText == "" && !whaleCard.FeedbackVisible &&
+            quotaCloud!.IsVisible == false;
+        GetWindowRect(new WindowInteropHelper(whaleCard).Handle, out var quotaCardRect);
+        checks["quotaCardNarrow"] = Math.Abs(quotaCardRect.Right - quotaCardRect.Left -
+            106 * cardDpi.DpiScaleX) <= 1;
+        if (whaleCard.ActualWidth > 0 && whaleCard.ActualHeight > 0)
+            Capture(whaleCard, Path.Combine(output, "whale-quota-card.png"));
+        int actionGeneration = whaleActionGeneration;
+        using (var decreasedQuota = JsonDocument.Parse("{\"type\":\"usage\",\"provider\":\"Codex · 演示数据\",\"primary\":\"剩余 8%\",\"secondary\":\"\",\"status\":\"\",\"warning\":true}"))
+            Receive(decreasedQuota.RootElement.Clone());
+        checks["quotaDecreaseFeedbackAndAction"] = whaleCard.AmountText == "8%" &&
+            whaleCard.FeedbackText == "-1%" && whaleCard.FeedbackVisible &&
+            whaleActionGeneration > actionGeneration;
+        await Task.Delay(120);
+        if (whaleCard.ActualWidth > 0 && whaleCard.ActualHeight > 0)
+            Capture(whaleCard, Path.Combine(output, "whale-quota-decrease.png"));
+        using (var nextQuota = JsonDocument.Parse("{\"type\":\"usage\",\"provider\":\"Codex · 演示数据\",\"primary\":\"剩余 7%\",\"secondary\":\"\",\"status\":\"\",\"warning\":true}"))
+            Receive(nextQuota.RootElement.Clone());
+        checks["quotaFeedbackStacks"] = whaleCard.DeductionCount == 2 && whaleCard.AmountText == "7%";
+        await Task.Delay(100);
+        if (whaleCard.ActualWidth > 0 && whaleCard.ActualHeight > 0)
+            Capture(whaleCard, Path.Combine(output, "whale-quota-stacked.png"));
+        DeepSeekUsage(128.60m, 12.38m, true, true);
+        GetWindowRect(new WindowInteropHelper(whaleCard).Handle, out var restoredCardRect);
+        checks["balanceCardRestoresAfterQuota"] = whaleCard.LabelText == "余额" &&
+            whaleCard.PeakText == "峰" && whaleCard.DeductionCount == 0 &&
+            Math.Abs(restoredCardRect.Right - restoredCardRect.Left - 146 * cardDpi.DpiScaleX) <= 1;
+        manualDockedEdge = null;
+        pet!.DisplayToNomal();
+        UpdateQuotaCloud();
+        checks["balanceCardHidesWhenUndocked"] = !whaleCard.IsVisible;
+        SetWhaleFacing(true);
+        defaultCharacterMenuItem!.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        while (switchingCharacter) await Task.Delay(50);
+        checks["switchToDefault"] = character == "vpet" && graph == defaultGraph &&
+            graph!.FindName(GraphType.Default) != null && pet.PetGrid.RenderTransform == Transform.Identity;
+        Capture(this, Path.Combine(output, "vpet-after-switch.png"));
+        whaleCharacterMenuItem!.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        while (switchingCharacter) await Task.Delay(50);
+        checks["switchBackToWhale"] = character == "whale" && graph == whaleGraph &&
+            graph!.FindName(GraphType.Default) != null;
+        checks["whaleFacingAfterSwitch"] = pet.PetGrid.RenderTransform is ScaleTransform mirror &&
+            mirror.ScaleX == (whaleFacingRight ? -1 : 1);
+        using (var hidden = JsonDocument.Parse("{\"type\":\"visibility\",\"visible\":false}"))
+            Receive(hidden.RootElement);
+        using (var shown = JsonDocument.Parse("{\"type\":\"visibility\",\"visible\":true}"))
+            Receive(shown.RootElement);
+        await Task.Delay(150);
+        Capture(this, Path.Combine(output, "whale-restored-a.png"));
+        await Task.Delay(400);
+        Capture(this, Path.Combine(output, "whale-restored-b.png"));
+        checks["hideAndRestore"] = visible && IsVisible && pet!.IsWorking && pet.Core.Graph == whaleGraph &&
+            !File.ReadAllBytes(Path.Combine(output, "whale-restored-a.png"))
+                .SequenceEqual(File.ReadAllBytes(Path.Combine(output, "whale-restored-b.png")));
+        SaveState();
+        using (var state = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "layout.json"))))
+            checks["characterSaved"] = state.RootElement.GetProperty("character").GetString() == "whale";
+        File.WriteAllText(Path.Combine(output, "report.json"), JsonSerializer.Serialize(new {
+            animations = graph!.GraphsALL.Count, checks, errors = pet!.ErrorMessage,
+            memoryMiB = Process.GetCurrentProcess().WorkingSet64 / 1048576.0
         }, new JsonSerializerOptions { WriteIndented = true }));
         Application.Current.Shutdown(checks.Values.All(x => x) ? 0 : 1);
     }

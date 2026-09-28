@@ -1,0 +1,8 @@
+pet#whale:|intor#鲸鱼娘:|path#whale:|petname#鲸鱼娘:|
+touchhead:|px#180:|py#155:|sw#140:|sh#130:|
+touchbody:|px#170:|py#285:|sw#160:|sh#130:|
+touchraised:|happy_px#0:|happy_py#0:|happy_sw#500:|happy_sh#500:|nomal_px#0:|nomal_py#0:|nomal_sw#500:|nomal_sh#500:|poorcondition_px#0:|poorcondition_py#0:|poorcondition_sw#500:|poorcondition_sh#500:|ill_px#0:|ill_py#0:|ill_sw#500:|ill_sh#500:|
+raisepoint:|happy_x#250:|happy_y#200:|nomal_x#250:|nomal_y#200:|poorcondition_x#250:|poorcondition_y#200:|ill_x#250:|ill_y#200:|
+move:|graph#whale.move.left:|TriggerLeft#200:|TriggerType#16:|CheckLeft#100:|CheckType#16:|SpeedX#-14:|Distance#7:|ModeType#14:|
+move:|graph#whale.move.right:|TriggerRight#200:|TriggerType#32:|CheckRight#100:|CheckType#32:|SpeedX#14:|Distance#7:|ModeType#14:|
+side:|left#138:|right#360:|

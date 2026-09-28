@@ -1,7 +1,7 @@
 """Regression cases for account boundaries and bounded history/log reads."""
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import Mock
 
@@ -95,14 +95,15 @@ def test_deepseek_stable_identity_adopts_old_and_current_token_scopes(database):
     old_scope = history.scoped_provider("deepseek", "old-token-fingerprint")
     current_scope = "deepseek:current-token-fingerprint"
     stable_key = "deepseek-jwt-v1-stable-account"
-    usage_day = date(2026, 9, 20)
+    # recent_daily(7) uses a rolling window, so this fixture must remain inside it.
+    usage_day = date.today()
     totals = {token_type: 1 for token_type in history.MINUTE_TOKEN_TYPES}
     history.save_estimated_minute_usage(
-        old_scope, usage_day, totals, datetime(2026, 9, 20, 9, 0)
+        old_scope, usage_day, totals, datetime.combine(usage_day, time(9, 0))
     )
     totals["RESPONSE_TOKEN"] = 4
     history.save_estimated_minute_usage(
-        old_scope, usage_day, totals, datetime(2026, 9, 20, 9, 1)
+        old_scope, usage_day, totals, datetime.combine(usage_day, time(9, 1))
     )
     history.save_usage(
         [{"days": [{"date": usage_day.isoformat(), "data": [{

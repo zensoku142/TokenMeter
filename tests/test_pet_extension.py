@@ -44,6 +44,22 @@ def payload(directory):
     return directory
 
 
+def test_character_can_be_selected_before_install_without_losing_layout(tmp_path, monkeypatch):
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path)
+    assert pet.selected_character() == "vpet"
+
+    pet.save_selected_character("whale")
+    layout = tmp_path / "vpet/layout.json"
+    assert json.loads(layout.read_text(encoding="utf-8")) == {"character": "whale"}
+    assert pet.selected_character() == "whale"
+
+    layout.write_text(json.dumps({"character": "whale", "size": 220, "x": 20}))
+    pet.save_selected_character("vpet")
+    assert json.loads(layout.read_text(encoding="utf-8")) == {
+        "character": "vpet", "size": 220, "x": 20,
+    }
+
+
 @pytest.fixture
 def pack(tmp_path, monkeypatch):
     source = payload(tmp_path / "source")
@@ -571,7 +587,23 @@ def test_latest_pet_selects_highest_compatible_stable_release(monkeypatch):
           patch.object(client, "_load_pet_manifest", side_effect=manifest),
           patch.object(client, "_download_asset") as download):
         assert client.latest_pet_release().version == "0.2.0"
+        assert [release.version for release in client.available_pet_releases()] == ["0.2.0", "0.1.0"]
     download.assert_not_called()
+
+
+def test_manual_pet_check_returns_a_selectable_version_list():
+    from ui.qt_update import PetExtensionWorker
+
+    releases = [release_info("0.2.0"), release_info("0.1.0")]
+    with (patch.object(GitHubReleaseClient, "available_pet_releases", return_value=releases) as discover,
+          patch.object(GitHubReleaseClient, "latest_pet_release") as latest):
+        worker = PetExtensionWorker("list")
+        worker.run()
+    discover.assert_called_once()
+    latest.assert_not_called()
+    assert worker.error is None
+    assert worker.releases == releases
+    assert worker.release == releases[0]
 
 
 @pytest.mark.parametrize("app_version,marked_prerelease,expected", [

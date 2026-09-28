@@ -69,11 +69,13 @@ internal sealed partial class PetWindow
         petPointerDown = true;
         petDragging = false;
         CancelAutonomousSequence();
+        if (character == "whale") { CancelWhaleChain(); CancelWhaleStatus(); ++whaleActionGeneration; }
         FinishNotification(restorePosition: false);
         ResetCloudHover();
         petPressScreen = screenPoint;
         petPressLocal = localPoint;
         petWindowScreen = new Point(window.Left, window.Top);
+        if (character == "whale") StartWhaleGesture(screenPoint);
         var dpi = VisualTreeHelper.GetDpi(this);
         petDragThreshold = new Size(SystemParameters.MinimumHorizontalDragDistance * dpi.DpiScaleX,
             SystemParameters.MinimumVerticalDragDistance * dpi.DpiScaleY);
@@ -122,9 +124,12 @@ internal sealed partial class PetWindow
         if (!petDragging && (Math.Abs(delta.X) >= petDragThreshold.Width ||
                             Math.Abs(delta.Y) >= petDragThreshold.Height)) BeginPetDrag();
         if (petDragging)
-            SetWindowPos(new WindowInteropHelper(this).Handle, IntPtr.Zero,
+        {
+            if (character == "whale") UpdateWhaleGesture(screenPoint, delta);
+            else SetWindowPos(new WindowInteropHelper(this).Handle, IntPtr.Zero,
                 (int)Math.Round(petWindowScreen.X + delta.X), (int)Math.Round(petWindowScreen.Y + delta.Y),
                 0, 0, DragPositionFlags);
+        }
     }
 
     private void EndPetGesture(bool cancel)
@@ -136,6 +141,19 @@ internal sealed partial class PetWindow
         // 先清状态再释放捕获，避免 LostMouseCapture 重入触发第二次点击或结束动画。
         if (Mouse.Captured == this) Mouse.Capture(null);
         pet!.isPress = false;
+        if (character == "whale")
+        {
+            if (closing || !visible) { StopWhaleMotion(); return; }
+            if (dragged) { FinishWhaleGesture(cancel); SaveState(); }
+            else if (!cancel)
+            {
+                PulseWhale();
+                _ = PlayWhaleActionAsync(PickWhaleName(WhaleNames(WhaleCatalog.GetProperty("clicks"))));
+            }
+            SyncAutonomy();
+            UpdateCloudPointer();
+            return;
+        }
         SyncAutonomy();
         UpdateCloudPointer();
         if (closing || !visible) return;
@@ -180,14 +198,21 @@ internal sealed partial class PetWindow
         var animation = left ? GraphType.SideHide_Left_Main : GraphType.SideHide_Right_Main;
         if (graph!.FindName(animation) == null) return false;
         var side = graph.GraphConfig.Data["side"];
-        int x = (int)Math.Round(left ? work.Left - side[(gdbe)"left"] * zoom
-            : work.Right - side[(gdbe)"right"] * zoom);
+        // 鲸鱼娘的透明画布留白与 VPet 不同；按可见角色轮廓贴边，避免右下角把身体挪出屏幕。
+        var whalePixels = character == "whale" ? WhaleVisiblePixels() : (Rect?)null;
+        int x = (int)Math.Round(whalePixels is { } pixels
+            ? left ? work.Left - pixels.Left * (rect.Right - rect.Left)
+                : work.Right - pixels.Right * (rect.Right - rect.Left)
+            : left ? work.Left - side[(gdbe)"left"] * zoom
+                : work.Right - side[(gdbe)"right"] * zoom);
         int y = Math.Clamp(rect.Top, work.Top, Math.Max(work.Top, work.Bottom - (rect.Bottom - rect.Top)));
         if (!SetWindowPos(handle, IntPtr.Zero, x, y, 0, 0, DragPositionFlags)) return false;
         manualDockedEdge = left;
         pet!.Display(animation, AnimatType.A_Start, pet.DisplayBLoopingForce);
         // 贴边动画建立后立即停掉内核移动计时器，避免下一次 Tick 把角色重新带回屏幕。
         SyncAutonomy();
+        // SetWindowPos 的位置事件可能先于贴边状态写入；此时再刷新才能立即切换卡片与气泡。
+        UpdateQuotaCloud();
         return true;
     }
 

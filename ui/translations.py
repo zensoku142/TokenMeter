@@ -30,6 +30,56 @@ MESSAGES = {
         "ボールを置き換えます。パネルとテーマは変わりません。", "플로팅 볼만 대체하며 패널과 테마는 유지됩니다.",
     ),
     "桌宠": ("Pet", "桌寵", "ペット", "펫"),
+    "启动角色": ("Starting character", "啟動角色", "起動時のキャラクター", "시작 캐릭터"),
+    "VPet 默认角色": ("VPet default character", "VPet 預設角色", "VPet のデフォルトキャラクター", "VPet 기본 캐릭터"),
+    "鲸鱼娘": ("Whale girl", "鯨魚娘", "クジラ少女", "고래 소녀"),
+    "选择后在下次启用桌宠时生效。": (
+        "Takes effect the next time you enable the pet.", "下次啟用桌寵時生效。",
+        "次回ペットを有効にしたときに反映されます。", "다음에 펫을 켜면 적용됩니다.",
+    ),
+    "角色选择已保存；下次启用桌宠时生效。": (
+        "Character saved; it will appear the next time you enable the pet.",
+        "角色選擇已儲存；下次啟用桌寵時生效。",
+        "キャラクターを保存しました。次回ペットを有効にしたときに反映されます。",
+        "캐릭터 선택이 저장되었습니다. 다음에 펫을 켜면 적용됩니다.",
+    ),
+    "角色选择保存失败：{error}": (
+        "Could not save the character choice: {error}", "無法儲存角色選擇：{error}",
+        "キャラクターの選択を保存できませんでした: {error}", "캐릭터 선택을 저장하지 못했습니다: {error}",
+    ),
+    "安装版本": ("Version to install", "安裝版本", "インストールするバージョン", "설치할 버전"),
+    "检查桌宠更新后选择版本": (
+        "Check pet updates to choose a version", "檢查桌寵更新後選擇版本",
+        "ペットの更新を確認してバージョンを選択", "펫 업데이트를 확인한 뒤 버전을 선택하세요",
+    ),
+    "已选择桌宠 v{version}。": (
+        "Selected pet v{version}.", "已選擇桌寵 v{version}。",
+        "ペット v{version} を選択しました。", "펫 v{version}을 선택했습니다.",
+    ),
+    "v{version} 早于已安装版本，暂不支持降级。": (
+        "v{version} is older than the installed pet; downgrades are not supported.",
+        "v{version} 早於已安裝版本，暫不支援降級。",
+        "v{version} はインストール済みより古く、ダウングレードはできません。",
+        "v{version}은 설치된 버전보다 오래되어 다운그레이드할 수 없습니다.",
+    ),
+    "切换桌宠版本": ("Switch pet version", "切換桌寵版本", "ペットのバージョンを切り替え", "펫 버전 전환"),
+    "将安装桌宠 v{version}，期间暂停桌宠；主程序和主题保持不变。是否继续？": (
+        "Install pet v{version}? The pet pauses during installation; the main app and theme stay unchanged.",
+        "將安裝桌寵 v{version}，期間暫停桌寵；主程式和主題保持不變。是否繼續？",
+        "ペット v{version} をインストールします。作業中はペットを一時停止します。続行しますか？",
+        "펫 v{version}을 설치합니다. 설치 중에는 펫이 일시 중지됩니다. 계속할까요?",
+    ),
+    "找到 {count} 个兼容的桌宠版本，可选择安装。": (
+        "Found {count} compatible pet versions. Choose one to install.",
+        "找到 {count} 個相容的桌寵版本，可選擇安裝。",
+        "互換性のあるペットのバージョンが {count} 件見つかりました。",
+        "호환되는 펫 버전 {count}개를 찾았습니다. 설치할 버전을 선택하세요.",
+    ),
+    "未找到与当前主程序兼容的桌宠版本。": (
+        "No pet version is compatible with this app.", "找不到與目前主程式相容的桌寵版本。",
+        "このアプリと互換性のあるペットのバージョンが見つかりません。",
+        "현재 앱과 호환되는 펫 버전을 찾지 못했습니다.",
+    ),
     "桌宠源码来源：{link}": (
         "Pet source code: {link}", "桌寵原始碼來源：{link}",
         "ペットのソースコード：{link}", "펫 소스 코드: {link}",

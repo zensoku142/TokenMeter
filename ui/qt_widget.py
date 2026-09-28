@@ -239,6 +239,7 @@ class FloatingWidget(QWidget):
         self._quota_alerted_windows: dict[tuple[str, str, str], datetime | None] = {}
         self._closed = False
         self._vpet = VPetHost(self)
+        self._vpet_balance_scope: str | None = None
         self._vpet_updating = False
         self._vpet.ready.connect(self._on_vpet_ready)
         self._vpet.failed.connect(self._on_vpet_failed)
@@ -1936,6 +1937,11 @@ class FloatingWidget(QWidget):
                 self._data, self._refreshing, str(config_manager.get("ACTIVE_PROVIDER", "")),
                 self._pricing_state.is_peak if self._pricing_state is not None else None,
             )
+            scope = self._data.account_key if message["provider"].lower().startswith("deepseek") else None
+            if scope != self._vpet_balance_scope:
+                # 主程序只发送“账户已变”标记，避免不同账户的余额被误判成充值或扣款。
+                message["balance_reset"] = True
+                self._vpet_balance_scope = scope
             theme = current_theme()
             # 仅发送绘制需要的颜色，不序列化主题控制器或配置；复用球体的水面色和峰时色规则。
             message["theme"] = {

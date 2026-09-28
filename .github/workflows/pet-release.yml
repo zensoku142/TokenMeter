@@ -43,6 +43,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Install build-time FFmpeg
+        run: choco install ffmpeg --no-progress -y
+
       - name: Test pet packaging and update lifecycle
         run: python -m pytest tests/test_pet_extension.py tests/test_packaging.py tests/test_update.py -q
 

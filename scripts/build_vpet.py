@@ -84,6 +84,19 @@ def stage_resources() -> dict:
     # 保留移动和触摸配置，删除工作/学习/玩耍的收益配置，防止入口被意外恢复。
     lines = [line for line in lines if not line.startswith("work:")]
     (pet / "vup.lps").write_text("\n".join(lines), encoding="utf-8")
+    shutil.copy2(ROOT / "pet_host/whale.lps", pet / "whale.lps")
+    shutil.copytree(ROOT / "pet_host/whale", pet / "whale", ignore=shutil.ignore_patterns("ffmpeg.exe", "FFMPEG-LICENSE.txt"))
+    webms = sorted((pet / "whale" / "webm").glob("*.webm"))
+    converter = os.environ.get("TOKENMETER_BUILD_FFMPEG") or shutil.which("ffmpeg")
+    if webms and not converter:
+        raise RuntimeError("FFmpeg is required to build the whale animation resources")
+    animations = pet / "whale" / "apng"
+    animations.mkdir()
+    # Convert before packaging so users can play every bundled action without redistributing FFmpeg.
+    for source in webms:
+        run(converter, "-y", "-loglevel", "error", "-c:v", "libvpx-vp9", "-i", str(source),
+            "-vf", "fps=15,scale=250:141:flags=lanczos,format=rgba,pad=250:250:0:109:color=black@0",
+            "-plays", "0", "-f", "apng", str(animations / (source.stem + ".png")))
     shutil.copy2(VENDORED_SOURCE / "LICENSE", OUTPUT / "VPet-LICENSE.txt")
     shutil.copy2(VENDORED_SOURCE / "README.md", OUTPUT / "VPet-README.md")
     shutil.copy2(ROOT / "pet_host/THIRD_PARTY_NOTICES.md", OUTPUT / "THIRD_PARTY_NOTICES.md")

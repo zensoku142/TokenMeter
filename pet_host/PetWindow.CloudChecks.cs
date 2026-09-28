@@ -34,6 +34,8 @@ internal sealed partial class PetWindow
         }
         try
         {
+            // 旧云朵只保留为内部回归画布；用户入口固定使用对白框系列。
+            quotaCloud!.SetWhaleStyle(false);
             cloudEnabled = false;
             cloudDockedState = null;
             manualDockedEdge = null;
@@ -297,7 +299,8 @@ internal sealed partial class PetWindow
             using (var shown = JsonDocument.Parse("{\"type\":\"visibility\",\"visible\":true}"))
                 Receive(shown.RootElement);
             await Task.Delay(100);
-            checks["cloudHiddenAfterNormalRestore"] = !quotaCloud.IsVisible;
+            // 此前显式贴到右侧；恢复宿主应沿用贴边默认显示，旧断言把正确显示误报为失败。
+            checks["cloudRestoresAfterDockedHostShow"] = DockedEdge == false && quotaCloud.IsVisible;
 
             // 无需实际改变系统显示设置，也要覆盖负坐标副屏、顶部避让和多种 DPI 的位置计算。
             bool boundsValid = true;
@@ -328,6 +331,7 @@ internal sealed partial class PetWindow
         }
         finally
         {
+            quotaCloud!.SetBubbleStyle(bubbleStyle);
             EndPetGesture(cancel: true);
             cloudEnabled = originalCloudEnabled;
             cloudDockedState = originalCloudDockedState;

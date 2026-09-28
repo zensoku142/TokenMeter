@@ -79,6 +79,7 @@ def pricing_widget_stub():
     widget.ball = Mock()
     widget.tray = Mock()
     widget._vpet = Mock(active=True)
+    widget._vpet_balance_scope = None
     widget._data = TokenData(status="ok", balance_cny=12.8)
     widget._refreshing = False
     return widget

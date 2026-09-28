@@ -12,6 +12,8 @@ a = Analysis(
         ("../../assets/TokenMeter.ico", "assets"),
         # 品牌 SVG 与上游许可一起离线分发，供应商切换不依赖运行时网络。
         ("../../assets/providers", "assets/providers"),
+        # 启用扩展前也能选择角色；缩略图和来源声明随主程序一同打包。
+        ("../../assets/pet", "assets/pet"),
     ],
     # pyqtgraph 0.14 启动时会动态导入这两个模块；显式保留可以避免
     # PyInstaller 静态分析遗漏后，发布版在冷启动阶段报缺模块。

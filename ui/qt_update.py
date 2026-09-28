@@ -54,13 +54,20 @@ class PetExtensionWorker(QThread):
         self.operation = operation
         self.error: Exception | None = None
         self.release = release
+        self.releases: list[PetReleaseInfo] = []
 
     def run(self) -> None:
         try:
-            if self.operation == "check":
+            if self.operation in {"check", "list"}:
                 client = GitHubReleaseClient()
                 try:
-                    self.release = client.latest_pet_release(cancel_requested=self.isInterruptionRequested)
+                    if self.operation == "check":
+                        self.release = client.latest_pet_release(cancel_requested=self.isInterruptionRequested)
+                    else:
+                        self.releases = client.available_pet_releases(
+                            cancel_requested=self.isInterruptionRequested, limit=20,
+                        )
+                        self.release = self.releases[0] if self.releases else None
                 finally:
                     client._session.close()
             elif self.operation in {"install", "update"}:
