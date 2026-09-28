@@ -383,6 +383,11 @@ class ConfigTests(unittest.TestCase):
             ]
         )
         self.assertFalse(config_manager.validate_config({})["AUTO_START_ENABLED"])
+        self.assertEqual(config_manager.validate_config({})["VPET_EXTRA_VPET_COUNT"], 0)
+        self.assertEqual(config_manager.validate_config({"VPET_EXTRA_VPET_COUNT": 25})[
+            "VPET_EXTRA_VPET_COUNT"], 25)
+        with self.assertRaises(ValueError):
+            config_manager.validate_config({"VPET_EXTRA_WHALE_COUNT": -1})
         self.assertEqual(config_manager.validate_config({})["BACKGROUND_PROVIDER_IDS"], [])
         self.assertEqual(
             config_manager.validate_config(

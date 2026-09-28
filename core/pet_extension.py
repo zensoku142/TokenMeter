@@ -26,8 +26,8 @@ RESOURCES_MANIFEST = "resources-manifest.json"
 REQUIRED_FILES = (
     PET_EXECUTABLE, "TokenMeter.Pet.dll", "TokenMeter.Pet.deps.json",
     "TokenMeter.Pet.runtimeconfig.json", "VPet-Simulator.Core.dll",
-    "resources/pet/vup.lps",
 )
+CHARACTER_PATHS = {"vpet": "vup", "whale": "whale"}
 
 
 def extension_directory() -> Path:
@@ -38,14 +38,27 @@ def selected_character() -> str:
     layout = config_manager.CONFIG_DIR / "vpet" / "layout.json"
     try:
         value = json.loads(layout.read_text(encoding="utf-8"))
-        return "whale" if isinstance(value, dict) and value.get("character") == "whale" else "vpet"
+        selected = "whale" if isinstance(value, dict) and value.get("character") == "whale" else "vpet"
     except (OSError, ValueError):
-        return "vpet"
+        selected = "vpet"
+    available = installed_characters()
+    return selected if not available or selected in available else next(iter(sorted(available)))
+
+
+def installed_characters() -> set[str]:
+    if installed_manifest() is None:
+        return set()
+    root = extension_directory() / "resources" / "pet"
+    return {character for character, path in CHARACTER_PATHS.items()
+            if (root / f"{path}.lps").is_file() and (root / path).is_dir()}
 
 
 def save_selected_character(character: str) -> None:
     if character not in {"vpet", "whale"}:
         raise ValueError("未知桌宠角色")
+    available = installed_characters()
+    if available and character not in available:
+        raise ValueError("请先下载该桌宠角色")
     layout = config_manager.CONFIG_DIR / "vpet" / "layout.json"
     if layout.exists():
         value = json.loads(layout.read_text(encoding="utf-8"))
@@ -71,8 +84,19 @@ def removable_directories() -> list[Path]:
 def validate_payload(directory: Path) -> None:
     if not all((directory / name).is_file() for name in REQUIRED_FILES):
         raise ValueError("桌宠扩展包缺少必要文件")
-    if not any((directory / "resources/pet/vup").rglob("*.png")):
-        raise ValueError("桌宠扩展包缺少动画资源")
+    manifest_path = directory / PACK_MANIFEST
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    if not isinstance(manifest, dict):
+        raise ValueError("桌宠角色清单无效")
+    characters = manifest.get("installed_characters", ["vup"])
+    if (not isinstance(characters, list) or not characters
+            or any(not isinstance(role, str) or role not in {"vup", "whale"} for role in characters)
+            or len(set(characters)) != len(characters)):
+        raise ValueError("桌宠角色清单无效")
+    for role in characters:
+        if (not (directory / f"resources/pet/{role}.lps").is_file()
+                or not any((directory / "resources/pet" / role).rglob("*.png"))):
+            raise ValueError("桌宠扩展包缺少动画资源")
 
 
 def _backup_directory(directory: Path) -> Path:
@@ -168,10 +192,40 @@ def reusable_resources(directory: Path, manifest: dict) -> bool:
         return False
 
 
+def _replace_payload(stage: Path, destination: Path, manifest: dict,
+                     cancel_requested: Callable[[], bool]) -> None:
+    _check_cancel(cancel_requested)
+    if not destination.exists():
+        _rename_payload(stage, destination)
+        return
+    old_manifest_path = destination / PACK_MANIFEST
+    if old_manifest_path.is_file():
+        old_manifest = json.loads(old_manifest_path.read_text(encoding="utf-8"))
+        old_version = old_manifest.get("version") if isinstance(old_manifest, dict) else None
+        if old_version and compare_versions(manifest["version"], old_version) < 0:
+            raise ValueError("不能将桌宠扩展降级到旧版本")
+    backup = _checked_directory(_backup_directory(destination))
+    if backup.exists():
+        shutil.rmtree(backup)
+    # 新目录校验通过后才改动原目录；替换失败立即恢复旧包。
+    _rename_payload(destination, backup)
+    try:
+        _check_cancel(cancel_requested)
+        _rename_payload(stage, destination)
+    except BaseException:
+        _rename_payload(backup, destination)
+        raise
+    try:
+        shutil.rmtree(backup)
+    except OSError:
+        config_manager.logger().warning("Pet updated; previous payload cleanup deferred: %s", backup)
+
+
 def install_pack(
     archive: Path, destination: Path, cancel_requested: Callable[[], bool] = lambda: False,
     *, replace_existing: bool = False, expected_manifest: dict | None = None,
     reuse_resources_from: Path | None = None,
+    merge_resources_from: Path | None = None, merged_manifest: dict | None = None,
 ) -> None:
     destination = _checked_directory(destination)
     _recover_interrupted_update(destination)
@@ -224,41 +278,46 @@ def install_pack(
                 return shutil.copy2(source, target)
             shutil.copytree(reuse_resources_from / "resources", stage / "resources",
                             copy_function=copy_resource)
+        if merge_resources_from is not None:
+            old_manifest = json.loads((merge_resources_from / PACK_MANIFEST).read_text(encoding="utf-8"))
+            roles = old_manifest.get("installed_characters")
+            if (not isinstance(roles, list) or len(roles) != 1 or merged_manifest is None
+                    or old_manifest.get("version") != manifest["version"]
+                    or not reusable_resources(merge_resources_from, old_manifest)):
+                raise ValueError("已有角色资源与新角色包不兼容")
+            role = roles[0]
+            if role not in {"vup", "whale"} or role in manifest.get("installed_characters", []):
+                raise ValueError("已有角色资源与新角色包不兼容")
+            # 只从已校验的旧包复制另一角色；完整资源摘要在提交前再次核对。
+            def copy_other_resource(source: str, target: str) -> str:
+                _check_cancel(cancel_requested)
+                return shutil.copy2(source, target)
+            shutil.copytree(merge_resources_from / "resources/pet" / role,
+                            stage / "resources/pet" / role, copy_function=copy_other_resource)
+            shutil.copy2(merge_resources_from / f"resources/pet/{role}.lps",
+                         stage / f"resources/pet/{role}.lps")
+            manifest = dict(merged_manifest, installed_characters=["vup", "whale"])
+            (stage / PACK_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            identity = manifest["resources"]
+            (stage / RESOURCES_MANIFEST).write_text(json.dumps({
+                "revision": identity["revision"], "resource_files": identity["files"],
+                "resource_bytes": identity["bytes"],
+            }), encoding="utf-8")
+            if not reusable_resources(stage, manifest):
+                raise ValueError("合并后的桌宠资源校验失败")
         validate_payload(stage)
-        _check_cancel(cancel_requested)
-        if not destination.exists():
-            _rename_payload(stage, destination)
-            return
-        old_manifest_path = destination / PACK_MANIFEST
-        if old_manifest_path.is_file():
-            old_manifest = json.loads(old_manifest_path.read_text(encoding="utf-8"))
-            old_version = old_manifest.get("version") if isinstance(old_manifest, dict) else None
-            if old_version and compare_versions(manifest["version"], old_version) < 0:
-                raise ValueError("不能将桌宠扩展降级到旧版本")
-        backup = _checked_directory(_backup_directory(destination))
-        if backup.exists():
-            shutil.rmtree(backup)
-        # 下载和解压完成前不动旧包；替换失败立即回滚，不能把备份放进会自动清理的临时目录。
-        _rename_payload(destination, backup)
-        try:
-            _check_cancel(cancel_requested)
-            _rename_payload(stage, destination)
-        except BaseException:
-            _rename_payload(backup, destination)
-            raise
-        try:
-            shutil.rmtree(backup)
-        except OSError:
-            # 新包已经提交成功；占用导致的备份清理失败可在下次更新或卸载时重试。
-            config_manager.logger().warning("Pet updated; previous payload cleanup deferred: %s", backup)
+        _replace_payload(stage, destination, manifest, cancel_requested)
 
 
 def download_and_install(
     progress: Callable[[dict[str, object]], None], cancel_requested: Callable[[], bool],
     *, release: PetReleaseInfo | None = None, replace_existing: bool = False,
+    character: str | None = None, add_character: bool = False,
 ) -> None:
+    if character is not None and character not in CHARACTER_PATHS:
+        raise ValueError("未知桌宠角色")
     destination = extension_directory()
-    if destination.exists() and not replace_existing:
+    if destination.exists() and not (replace_existing or add_character):
         raise ValueError("请先卸载已有桌宠扩展包")
     destination.parent.mkdir(parents=True, exist_ok=True)
     # 下载缓存与解压目录都随操作清理，卸载后不会遗留另一份大体积 ZIP。
@@ -266,25 +325,116 @@ def download_and_install(
         client = GitHubReleaseClient()
         try:
             release = release or client.latest_pet_release(cancel_requested=cancel_requested)
+            role = CHARACTER_PATHS[character] if character else None
+            installed = installed_manifest()
+            installed_roles = set(installed.get("installed_characters", [])) if installed else set()
+            if add_character and (not installed or not role or role in installed_roles
+                                  or installed.get("version") != release.version):
+                raise ValueError("请先安装或更新桌宠扩展，再添加另一角色")
+            use_role_pack = role in release.character_assets and (
+                add_character or not replace_existing or installed_roles == {role})
             reuse_resources = (
-                replace_existing and release.host_asset is not None
+                replace_existing and not use_role_pack and release.host_asset is not None
                 and reusable_resources(destination, release.manifest)
             )
             archive = client.download_pet_pack(
                 Path(temporary), release=release, progress=progress,
                 cancel_requested=cancel_requested, host_only=reuse_resources,
+                character=role if use_role_pack else None,
             )
+            expected = (dict(release.manifest,
+                             resources=release.manifest["character_resources"][role],
+                             installed_characters=[role]) if use_role_pack else release.manifest)
             install_pack(archive, destination, cancel_requested,
-                         replace_existing=replace_existing, expected_manifest=release.manifest,
-                         reuse_resources_from=destination if reuse_resources else None)
+                         replace_existing=replace_existing or add_character,
+                         expected_manifest=expected,
+                         reuse_resources_from=destination if reuse_resources else None,
+                         merge_resources_from=destination if add_character and use_role_pack else None,
+                         merged_manifest=release.manifest if add_character and use_role_pack else None)
         finally:
             client._session.close()
+
+
+def remove_character(character: str) -> None:
+    if character not in CHARACTER_PATHS:
+        raise ValueError("未知桌宠角色")
+    installed = installed_manifest()
+    available = installed_characters()
+    if installed is None or character not in available:
+        raise ValueError("该桌宠角色尚未安装")
+    if not isinstance(installed.get("character_resources"), dict):
+        # 旧宿主启动时会无条件加载双角色资源；必须先更新宿主再允许单独删除。
+        raise ValueError("请先更新桌宠扩展，再单独删除角色")
+    if len(available) == 1:
+        uninstall()
+        return
+    destination = _checked_directory(extension_directory())
+    role = CHARACTER_PATHS[character]
+    remaining = CHARACTER_PATHS[next(iter(available - {character}))]
+    with tempfile.TemporaryDirectory(prefix=".vpet-remove-", dir=destination.parent) as temporary:
+        stage = Path(temporary) / "payload"
+        shutil.copytree(destination, stage)
+        shutil.rmtree(_checked_directory(stage / "resources/pet" / role))
+        (stage / f"resources/pet/{role}.lps").unlink()
+        resources = stage / "resources"
+        revision = (installed.get("resources") or {}).get("revision") or "0" * 40
+        digest = hashlib.sha256()
+        files = sorted((path for path in resources.rglob("*") if path.is_file()),
+                       key=lambda path: path.relative_to(resources).as_posix())
+        for path in files:
+            digest.update(path.relative_to(resources).as_posix().encode("utf-8"))
+            digest.update(b"\0")
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        identity = {"revision": revision, "files": len(files),
+                    "bytes": sum(path.stat().st_size for path in files), "sha256": digest.hexdigest()}
+        manifest = dict(installed, installed_characters=[remaining], resources=identity)
+        (stage / PACK_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        (stage / RESOURCES_MANIFEST).write_text(json.dumps({
+            "revision": revision, "resource_files": identity["files"],
+            "resource_bytes": identity["bytes"],
+        }), encoding="utf-8")
+        if not reusable_resources(stage, manifest):
+            raise ValueError("删除角色后的资源校验失败")
+        validate_payload(stage)
+        _replace_payload(stage, destination, manifest, lambda: False)
+    try:
+        save_selected_character("vpet" if remaining == "vup" else "whale")
+    except (OSError, ValueError) as exc:
+        config_manager.logger().warning("Pet character removed; preference cleanup deferred: %s", exc)
+    try:
+        # 旧角色帧缓存无法按文件名区分；删除后统一重建，避免磁盘上仍占用被删角色的空间。
+        caches = [config_manager.CONFIG_DIR / "vpet" / "cache"]
+        caches.extend(_instance_caches(character))
+        for cache in caches:
+            if cache.exists():
+                shutil.rmtree(_checked_directory(cache))
+    except (OSError, ValueError) as exc:
+        config_manager.logger().warning("Pet character removed; cache cleanup deferred: %s", exc)
+
+
+def _instance_caches(character: str | None = None) -> list[Path]:
+    instances = config_manager.CONFIG_DIR / "vpet" / "instances"
+    if not instances.exists():
+        return []
+    _checked_directory(instances)
+    caches = []
+    for directory in instances.iterdir():
+        role, separator, index = directory.name.partition("-")
+        if (separator and role in CHARACTER_PATHS and (character is None or role == character)
+                and index.isdecimal() and directory.is_dir()
+                and not directory.is_symlink() and not directory.is_junction()):
+            cache = directory / "cache"
+            if not cache.is_symlink() and not cache.is_junction():
+                caches.append(cache)
+    return caches
 
 
 def uninstall() -> None:
     # 动画缓存可重新生成，随扩展删除以释放磁盘；layout 等偏好仍留在 vpet 根目录。
     for directory in [*removable_directories(), _backup_directory(extension_directory()),
-                      config_manager.CONFIG_DIR / "vpet" / "cache"]:
+                      config_manager.CONFIG_DIR / "vpet" / "cache", *_instance_caches()]:
         if not directory.exists():
             continue
         # 卸载只能清理固定 payload 目录，不能跟随链接删除用户数据或开发源码。

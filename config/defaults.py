@@ -111,6 +111,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "EDGE_HIDE_ENABLED": True,
     "QUOTA_WEEKLY_RING_COUNTERCLOCKWISE": False,
     "VPET_ENABLED": False,
+    "VPET_EXTRA_VPET_COUNT": 0,
+    "VPET_EXTRA_WHALE_COUNT": 0,
     "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": True,
     "AUTO_START_ENABLED": False,
     "UI_THEME": "dark",
@@ -153,6 +155,8 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "EDGE_HIDE_ENABLED": {"kind": "bool"},
     "QUOTA_WEEKLY_RING_COUNTERCLOCKWISE": {"kind": "bool"},
     "VPET_ENABLED": {"kind": "bool"},
+    "VPET_EXTRA_VPET_COUNT": {"kind": "int", "min": 0},
+    "VPET_EXTRA_WHALE_COUNT": {"kind": "int", "min": 0},
     "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": {"kind": "bool"},
     "AUTO_START_ENABLED": {"kind": "bool"},
     "BACKGROUND_PROVIDER_IDS": {

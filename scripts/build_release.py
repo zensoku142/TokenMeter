@@ -21,6 +21,7 @@ from core.identity import (
     APP_VERSION,
     MAIN_EXECUTABLE_NAME,
     PET_HOST_RELEASE_ASSET_TEMPLATE,
+    PET_CHARACTER_ASSET_TEMPLATE,
     PET_RELEASE_ASSET_TEMPLATE,
     UPDATER_EXECUTABLE_NAME,
 )
@@ -115,11 +116,11 @@ def build_onedir(*, with_vpet: bool = False) -> None:
         build_pet_pack()
 
 
-def _pet_manifest(source: Path) -> dict:
-    manifest = validate_pet_manifest(PET_MANIFEST)
-    resource_manifest = json.loads((source / PET_RESOURCES_MANIFEST).read_text(encoding="utf-8"))
-    resources = source / "resources"
-    files = [path for path in resources.rglob("*") if path.is_file()]
+def _resource_identity(resources: Path, revision: str, character: str | None = None) -> dict:
+    files = [path for path in resources.rglob("*") if path.is_file() and (
+        character is None or path.relative_to(resources).parts[:2] == ("pet", character)
+        or path.relative_to(resources).as_posix() == f"pet/{character}.lps"
+    )]
     resource_hash = hashlib.sha256()
     for path in sorted(files, key=lambda item: item.relative_to(resources).as_posix()):
         # 路径参与摘要，避免同样内容被移动到另一动画槽位后仍误判为可复用资源。
@@ -128,36 +129,51 @@ def _pet_manifest(source: Path) -> dict:
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 resource_hash.update(chunk)
-    expected = {
-        "revision": resource_manifest.get("revision"),
-        "files": resource_manifest.get("resource_files"),
-        "bytes": resource_manifest.get("resource_bytes"),
-        "sha256": resource_hash.hexdigest(),
-    }
-    actual = {
-        "revision": expected["revision"],
+    return {
+        "revision": revision,
         "files": len(files),
         "bytes": sum(path.stat().st_size for path in files),
-        "sha256": expected["sha256"],
+        "sha256": resource_hash.hexdigest(),
     }
+
+
+def _pet_manifest(source: Path) -> dict:
+    manifest = validate_pet_manifest(PET_MANIFEST)
+    report = json.loads((source / PET_RESOURCES_MANIFEST).read_text(encoding="utf-8"))
+    revision = report.get("revision")
+    expected = _resource_identity(source / "resources", revision)
     if (not isinstance(expected["revision"], str)
             or len(expected["revision"]) != 40
             or any(character not in "0123456789abcdef" for character in expected["revision"])
-            or type(expected["files"]) is not int or type(expected["bytes"]) is not int
-            or actual != expected):
+            or report.get("resource_files") != expected["files"]
+            or report.get("resource_bytes") != expected["bytes"]):
         raise ValueError("Pet resources manifest does not match the packaged resources")
-    return {**manifest, "resources": expected}
+    roles = {role: identity for role in ("vup", "whale")
+             if (identity := _resource_identity(source / "resources", revision, role))["files"] > 0}
+    return {**manifest, "resources": expected, "character_resources": roles}
 
 
-def _write_pet_archive(source: Path, destination: Path, manifest: dict, *, include_resources: bool) -> None:
+def _write_pet_archive(source: Path, destination: Path, manifest: dict, *,
+                       include_resources: bool, character: str | None = None) -> None:
     temporary = destination.with_suffix(".zip.tmp")
     try:
         with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as pack:
             for path in sorted(source.rglob("*")):
                 relative = path.relative_to(source)
+                if character is not None and relative.parts[:2] == ("resources", "pet"):
+                    if relative.as_posix() != f"resources/pet/{character}.lps" and relative.parts[:3] != (
+                            "resources", "pet", character):
+                        continue
                 if (path.is_file() and path.name != PACK_MANIFEST
-                        and (include_resources or relative.parts[0] != "resources")):
+                        and (include_resources or relative.parts[0] != "resources")
+                        and (character is None or path.name != PET_RESOURCES_MANIFEST)):
                     pack.write(path, relative.as_posix())
+            if character is not None:
+                identity = manifest["resources"]
+                pack.writestr(PET_RESOURCES_MANIFEST, json.dumps({
+                    "revision": identity["revision"], "resource_files": identity["files"],
+                    "resource_bytes": identity["bytes"],
+                }, indent=2))
             pack.writestr(PACK_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=2))
         temporary.replace(destination)
     finally:
@@ -173,12 +189,21 @@ def package_pet_payload(source: Path) -> Path:
     _write_pet_archive(source, PET_PACK_PATH, manifest, include_resources=True)
     # 旧客户端继续下载完整包；新版客户端确认本地资源版本一致后只下载宿主小包。
     _write_pet_archive(source, PET_HOST_PACK_PATH, manifest, include_resources=False)
+    role_packs = []
+    for role in manifest["character_resources"]:
+        path = PET_PACK_PATH.parent / PET_CHARACTER_ASSET_TEMPLATE.format(
+            character=role, version=manifest["version"])
+        # 角色包各自包含宿主；首次只下载一个包即可运行，另一个角色可随后单独安装。
+        _write_pet_archive(source, path, {**manifest, "resources": manifest["character_resources"][role],
+                                          "installed_characters": [role]},
+                           include_resources=True, character=role)
+        role_packs.append(path)
     manifest_path = PET_PACK_PATH.parent / PACK_MANIFEST
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     # 桌宠发布不依赖主安装器，清单也参与校验以支持小流量检查兼容版本。
     (PET_PACK_PATH.parent / "SHA256SUMS.txt").write_text(
         "".join(f"{_sha256(path)} *{path.name}\n"
-                for path in (PET_PACK_PATH, PET_HOST_PACK_PATH, manifest_path)),
+                for path in (PET_PACK_PATH, PET_HOST_PACK_PATH, *role_packs, manifest_path)),
         encoding="utf-8",
     )
     return PET_PACK_PATH

@@ -49,11 +49,13 @@ from core.identity import MAIN_EXECUTABLE_NAME
 class PetExtensionWorker(QThread):
     progress_changed = Signal(object)
 
-    def __init__(self, operation: str, parent=None, *, release: PetReleaseInfo | None = None):
+    def __init__(self, operation: str, parent=None, *, release: PetReleaseInfo | None = None,
+                 character: str | None = None):
         super().__init__(parent)
         self.operation = operation
         self.error: Exception | None = None
         self.release = release
+        self.character = character
         self.releases: list[PetReleaseInfo] = []
 
     def run(self) -> None:
@@ -70,11 +72,14 @@ class PetExtensionWorker(QThread):
                         self.release = self.releases[0] if self.releases else None
                 finally:
                     client._session.close()
-            elif self.operation in {"install", "update"}:
+            elif self.operation in {"install", "update", "add-character"}:
                 pet_extension.download_and_install(
                     self.progress_changed.emit, self.isInterruptionRequested,
                     release=self.release, replace_existing=self.operation == "update",
+                    character=self.character, add_character=self.operation == "add-character",
                 )
+            elif self.operation == "remove-character":
+                pet_extension.remove_character(self.character)
             else:
                 pet_extension.uninstall()
         except Exception as exc:

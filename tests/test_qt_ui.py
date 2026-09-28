@@ -2485,6 +2485,321 @@ def test_vpet_state_directory_failure_returns_to_ball_without_starting_process(t
     start.assert_not_called()
 
 
+def test_vpet_extra_host_uses_fixed_role_and_independent_state(tmp_path):
+    host = VPetHost()
+    executable = tmp_path / "TokenMeter.Pet.exe"
+    executable.touch()
+    with (patch("ui.vpet_host.host_executable", return_value=executable),
+          patch.object(host.process, "start")):
+        host.start(tmp_path / "instance", character="whale", slot=3)
+    assert host.process.arguments()[-4:] == ["--character", "whale", "--slot", "3"]
+    assert host.process.arguments()[:2] == ["--data-dir", str(tmp_path / "instance")]
+
+
+def test_vpet_display_source_is_saved_per_instance_and_events_are_bounded(tmp_path):
+    host = VPetHost()
+    executable = tmp_path / "TokenMeter.Pet.exe"
+    executable.touch()
+    state = tmp_path / "instance"
+    with (patch("ui.vpet_host.host_executable", return_value=executable),
+          patch.object(host.process, "start")):
+        host.start(state, character="whale", slot=1)
+    profile_id = "a" * 32
+    host.save_display_source(f"profile:{profile_id}")
+    restored = VPetHost()
+    with (patch("ui.vpet_host.host_executable", return_value=executable),
+          patch.object(restored.process, "start")):
+        restored.start(state, character="whale", slot=1)
+    assert restored.display_source == f"profile:{profile_id}"
+    selections = []
+    restored.source_requested.connect(selections.append)
+    restored.active = True
+    restored.set_display_sources([{"id": "active", "name": "跟随主程序"},
+                                  {"id": "provider:codex", "name": "Codex 默认账户"},
+                                  {"id": f"profile:{profile_id}", "name": "工作账户"}])
+    assert profile_id not in json.dumps(restored._latest_sources)
+    token = next(token for token, source in restored._source_tokens.items() if source == "provider:codex")
+    restored.set_display_sources([{"id": f"profile:{profile_id}", "name": "工作账户"},
+                                  {"id": "active", "name": "跟随主程序"},
+                                  {"id": "provider:codex", "name": "Codex 默认账户"}])
+    assert restored._source_tokens[token] == "provider:codex"
+    restored._consume_output(json.dumps({"event": "select_source", "source": token}).encode() + b"\n")
+    restored._consume_output(json.dumps({"event": "select_source", "source": "x" * 81}).encode() + b"\n")
+    assert selections == ["provider:codex"]
+    host.stop()
+    restored.stop()
+
+
+def test_vpet_source_selection_rejects_unknown_ids_and_persists_valid_choice(tmp_path):
+    with patch.object(FloatingWidget, "refresh"):
+        widget = FloatingWidget()
+    host = VPetHost(widget)
+    host.data_directory = tmp_path
+    host.active = True
+    widget._vpet_extras[("vpet", 0)] = host
+    widget._vpet_source_options = [{"id": "active", "name": "跟随主程序"},
+                                   {"id": "provider:codex", "name": "Codex · 默认账户"}]
+    try:
+        with (patch.object(widget, "_sync_vpet_usage") as sync,
+              patch.object(widget, "_refresh_vpet_bound_sources") as refresh):
+            widget._select_vpet_source(host, "profile:" + "x" * 32)
+            sync.assert_not_called()
+            widget._select_vpet_source(host, "provider:codex")
+        assert host.display_source == "provider:codex"
+        assert json.loads((tmp_path / "display-source.json").read_text())["source"] == "provider:codex"
+        assert host._source_tokens[host._latest_sources["selected"]] == "provider:codex"
+        sync.assert_called_once()
+        refresh.assert_called_once()
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_vpet_instances_can_show_distinct_provider_and_profile_data(monkeypatch):
+    config_manager.save_config({"ACTIVE_PROVIDER": "deepseek"})
+    with patch.object(FloatingWidget, "refresh"):
+        widget = FloatingWidget()
+    extra = VPetHost(widget)
+    widget._vpet_extras[("whale", 0)] = extra
+    profile_id = "b" * 32
+    widget._vpet_profiles[profile_id] = {"id": profile_id, "revision": "c" * 32,
+                                         "provider": "codex", "name": "工作账号"}
+    widget._vpet_source_options = [
+        {"id": "active", "name": "跟随主程序"},
+        {"id": "profile:" + profile_id, "name": "Codex · 工作账号"},
+    ]
+    widget._data = TokenData(status="ok", balance_cny=12.5,
+                             per_provider=[PerProviderData("deepseek", "DeepSeek")])
+    profile_data = TokenData(status="ok", account_key="account", quota_windows=[QuotaWindow("weekly", "周额度", 25)],
+                             per_provider=[PerProviderData("codex", "Codex")])
+    widget._vpet_profile_results[profile_id] = ("c" * 32, profile_data)
+    widget._vpet.active = extra.active = True
+    extra.display_source = "profile:" + profile_id
+    try:
+        with (patch.object(widget._vpet, "update_usage") as main_usage,
+              patch.object(extra, "update_usage") as profile_usage):
+            widget._sync_vpet_usage()
+        assert main_usage.call_args.args[0]["provider"] == "DeepSeek"
+        assert profile_usage.call_args.args[0]["provider"] == "Codex · 工作账号 · 周额度"
+        assert profile_usage.call_args.args[0]["primary"] == "剩余 75%"
+        provider_config = dict(config_manager.all_config(), ACTIVE_PROVIDER="codex")
+        widget._provider_results["codex"] = TokenData(
+            status="ok", account_key=TokenData.account_key_for_config(provider_config),
+            quota_windows=[QuotaWindow("weekly", "周额度", 40)],
+            per_provider=[PerProviderData("codex", "Codex")])
+        widget._vpet_source_options.append({"id": "provider:codex", "name": "Codex · 默认账户"})
+        extra.display_source = "provider:codex"
+        with patch.object(extra, "update_usage") as provider_usage:
+            widget._sync_vpet_usage()
+        assert provider_usage.call_args.args[0]["provider"] == "Codex · 默认账户 · 周额度"
+        assert provider_usage.call_args.args[0]["primary"] == "剩余 60%"
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_vpet_profile_binding_refreshes_without_showing_settings(tmp_path, monkeypatch):
+    from config import account_profiles as profile_store
+
+    profile_id = "d" * 32
+    profile = {"id": profile_id, "revision": "e" * 32, "provider": "codex", "name": "工作账号"}
+    profile_config = dict(config_manager.all_config(), ACTIVE_PROVIDER="codex", _ACCOUNT_PROFILE_ID=profile_id)
+    monkeypatch.setattr(profile_store, "load_profiles", lambda: [profile])
+    monkeypatch.setattr(profile_store, "profile_config", lambda _profile: profile_config)
+    config_manager.save_config({"VPET_ENABLED": True})
+    with patch.object(FloatingWidget, "refresh"):
+        widget = FloatingWidget()
+    extra = VPetHost(widget)
+    extra.data_directory = tmp_path
+    extra.display_source = "profile:" + profile_id
+    extra.active = True
+    widget._vpet_extras[("whale", 0)] = extra
+    try:
+        widget._update_vpet_source_options()
+        with patch.object(widget._thread_pool, "start") as start:
+            widget._refresh_vpet_bound_sources()
+        start.assert_called_once()
+        result = TokenData(status="ok", account_key=TokenData.account_key_for_config(profile_config),
+                           quota_windows=[QuotaWindow("weekly", "周额度", 10)],
+                           per_provider=[PerProviderData("codex", "Codex")])
+        widget._finish_vpet_profile(profile_id, profile["revision"], result)
+        assert widget._vpet_profile_results[profile_id][1] is result
+        assert extra._latest_usage["provider"] == "Codex · 工作账号 · 周额度"
+        assert profile_id not in json.dumps(extra._latest_usage)
+
+        profile["revision"] = "f" * 32
+        with patch.object(widget._thread_pool, "start"):
+            widget._on_vpet_profiles_changed()
+        assert profile_id not in widget._vpet_profile_results
+        assert extra._latest_usage["primary"] == "--"
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_vpet_bound_provider_refreshes_without_background_provider_toggle(tmp_path):
+    config_manager.save_config({"VPET_ENABLED": True, "ACTIVE_PROVIDER": "deepseek",
+                                "BACKGROUND_PROVIDER_IDS": []})
+    with patch.object(FloatingWidget, "refresh"):
+        widget = FloatingWidget()
+    extra = VPetHost(widget)
+    extra.data_directory = tmp_path
+    extra.display_source = "provider:codex"
+    widget._vpet_extras[("vpet", 0)] = extra
+    widget._vpet_source_options = [{"id": "active", "name": "跟随主程序"},
+                                   {"id": "provider:codex", "name": "Codex · 默认账户"}]
+    try:
+        with (patch.object(widget, "_update_vpet_source_options"),
+              patch.object(widget, "_start_provider_refresh") as start):
+            widget._periodic_background_refresh()
+        start.assert_called_once()
+        assert start.call_args.args[0] == "codex"
+        assert start.call_args.kwargs["reason"] == "pet_source"
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_vpet_can_run_multiple_copies_of_the_same_role(monkeypatch):
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 2,
+                                "VPET_EXTRA_WHALE_COUNT": 1})
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
+        widget = FloatingWidget()
+    try:
+        assert set(widget._vpet_extras) == {("vpet", 0), ("vpet", 1)}
+        assert start.call_count == 3
+        directories = [call.args[0] for call in start.call_args_list]
+        assert len(set(directories)) == 3
+        assert start.call_args_list[1].kwargs == {"character": "vpet", "slot": 1}
+        assert start.call_args_list[2].kwargs == {"character": "vpet", "slot": 3}
+
+        for host in widget._pet_hosts():
+            host.active = True
+        widget._sync_vpet_usage()
+        widget.set_visible_from_tray()
+        assert all(not host.visible for host in widget._pet_hosts())
+        widget.set_visible_from_tray()
+        assert all(host.visible for host in widget._pet_hosts())
+        widget._pause_vpet_update()
+        assert all(not host.active for host in widget._pet_hosts())
+        with patch.object(VPetHost, "start") as resume:
+            widget._resume_vpet_update()
+        assert resume.call_count == 3
+        config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 1})
+        extra = widget._vpet_extras[("vpet", 1)]
+        with patch.object(VPetHost, "start"), patch.object(extra, "stop") as stop:
+            widget._sync_vpet()
+        stop.assert_called_once()
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_vpet_extra_instances_can_mix_both_roles(monkeypatch):
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet", "whale"})
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 1,
+                                "VPET_EXTRA_WHALE_COUNT": 2})
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
+        widget = FloatingWidget()
+    try:
+        assert set(widget._vpet_extras) == {("vpet", 0), ("whale", 0), ("whale", 1)}
+        assert [call.kwargs for call in start.call_args_list[1:]] == [
+            {"character": "vpet", "slot": 1},
+            {"character": "whale", "slot": 2},
+            {"character": "whale", "slot": 4},
+        ]
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_vpet_large_instance_count_starts_in_batches(monkeypatch, qtbot):
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 12})
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
+        widget = FloatingWidget()
+        try:
+            assert len(widget._vpet_extras) == 8
+            qtbot.waitUntil(lambda: len(widget._vpet_extras) == 12, timeout=2000)
+            assert start.call_count == 13
+            config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 3})
+            widget._sync_vpet()
+            assert len(widget._vpet_extras) == 3
+        finally:
+            widget._closed = True
+            widget.hide()
+            widget.deleteLater()
+
+
+def test_vpet_large_pending_count_can_be_cancelled_immediately(monkeypatch, qtbot):
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 100_000})
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start"):
+        widget = FloatingWidget()
+        try:
+            assert len(widget._vpet_extras) == 8
+            widget._on_vpet_failed("系统资源不足")
+            assert not widget._vpet_start_timer.isActive()
+            config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 0})
+            widget._sync_vpet()
+            qtbot.wait(150)
+            assert not widget._vpet_extras
+            assert not widget._vpet_start_timer.isActive()
+        finally:
+            widget._closed = True
+            widget.hide()
+            widget.deleteLater()
+
+
+def test_vpet_immediate_extra_start_failure_stops_the_batch(monkeypatch):
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.0"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet"})
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_EXTRA_VPET_COUNT": 100})
+    calls = []
+
+    def start(host, _directory, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("character") == "vpet":
+            host.failed.emit("无法启动桌宠")
+
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start", start):
+        widget = FloatingWidget()
+    try:
+        assert len(calls) == 2  # 主实例与首个额外实例
+        assert len(widget._vpet_extras) == 1
+        assert widget._vpet_pending is None
+        assert not widget._vpet_start_timer.isActive()
+    finally:
+        widget._closed = True
+        widget.hide()
+        widget.deleteLater()
+
+
+def test_pet_extra_instance_counts_roundtrip_through_settings():
+    config_manager.save_config({"VPET_EXTRA_VPET_COUNT": 12, "VPET_EXTRA_WHALE_COUNT": 7})
+    window = SettingsWindow()
+    try:
+        assert window.pet_extra_vpet_count.value() == 12
+        assert window.pet_extra_whale_count.value() == 7
+        assert window._values()["VPET_EXTRA_VPET_COUNT"] == 12
+        assert window._values()["VPET_EXTRA_WHALE_COUNT"] == 7
+    finally:
+        window._autosave_ready = False
+        window.close()
+        window.deleteLater()
+
+
 def test_vpet_pricing_outline_is_optional_and_only_for_deepseek_balance():
     data = TokenData(status="ok", last_success_at=datetime.now(), balance_cny=12.8)
     assert "pricing_peak" not in usage_message(data, False, "deepseek")

@@ -28,6 +28,7 @@ from api.deepseek_pricing import BEIJING_TIMEZONE, PricingState, pricing_state
 from api.providers import PROVIDERS, configured_provider_ids
 from api.providers.base import FetchError
 from api.providers.mimo import MiMoProvider
+from config import account_profiles as profile_store
 from config import runtime as config_manager
 from core import pet_extension
 from core.identity import APP_DISPLAY_NAME
@@ -239,11 +240,22 @@ class FloatingWidget(QWidget):
         self._quota_alerted_windows: dict[tuple[str, str, str], datetime | None] = {}
         self._closed = False
         self._vpet = VPetHost(self)
-        self._vpet_balance_scope: str | None = None
+        self._vpet_extras: dict[tuple[str, int], VPetHost] = {}
+        self._vpet_pending = None
+        self._vpet_start_timer = QTimer(self)
+        self._vpet_start_timer.setSingleShot(True)
+        self._vpet_start_timer.timeout.connect(self._start_vpet_extra_batch)
+        self._vpet_source_options: list[dict[str, str]] = [{"id": "active", "name": "跟随主程序"}]
+        self._vpet_profiles: dict[str, dict] = {}
+        self._vpet_profile_results: dict[str, tuple[str, TokenData]] = {}
+        self._vpet_profile_due: dict[str, float] = {}
+        self._vpet_profile_in_flight: dict[str, str] = {}
         self._vpet_updating = False
         self._vpet.ready.connect(self._on_vpet_ready)
         self._vpet.failed.connect(self._on_vpet_failed)
         self._vpet.action_requested.connect(self._on_vpet_action)
+        self._vpet.source_requested.connect(
+            lambda source: self._select_vpet_source(self._vpet, source))
         QApplication.instance().aboutToQuit.connect(self._vpet.stop)
         self._auth_expired_providers: set[str] = set()
         self._auth_notified_providers: set[str] = set()
@@ -349,22 +361,173 @@ class FloatingWidget(QWidget):
 
         self._sync_vpet()
 
+    def _pet_hosts(self) -> list[VPetHost]:
+        # 部分刷新路径会在窗口尚未完整初始化时运行；主实例仍可独立接收用量。
+        return [self._vpet, *getattr(self, "_vpet_extras", {}).values()]
+
+    def _update_vpet_source_options(self) -> None:
+        previous = self._vpet_profiles
+        try:
+            profiles = profile_store.load_profiles()
+        except (OSError, ValueError):
+            profiles = []
+        self._vpet_profiles = {profile["id"]: dict(profile) for profile in profiles}
+        for profile_id in set(previous) | set(self._vpet_profiles):
+            if previous.get(profile_id, {}).get("revision") != self._vpet_profiles.get(profile_id, {}).get("revision"):
+                self._vpet_profile_results.pop(profile_id, None)
+                self._vpet_profile_due.pop(profile_id, None)
+        disabled = set(config_manager.get("DISABLED_PROVIDER_IDS", []))
+        sources = [{"id": "active", "name": "跟随主程序"}]
+        sources.extend({"id": f"provider:{provider_id}", "name": f"{PROVIDERS[provider_id].name} · 默认账户"}
+                       for provider_id in configured_provider_ids() if provider_id not in disabled)
+        sources.extend({"id": f"profile:{profile['id']}",
+                        "name": f"{PROVIDERS[profile['provider']].name} · {profile['name']}"}
+                       for profile in profiles)
+        self._vpet_source_options = sources
+        valid = {source["id"] for source in sources}
+        for host in self._pet_hosts():
+            if host.data_directory is not None:
+                host.set_display_sources(sources, host.display_source if host.display_source in valid else "active")
+
+    def _select_vpet_source(self, host: VPetHost, source: str) -> None:
+        if source not in {option["id"] for option in self._vpet_source_options}:
+            return
+        try:
+            host.save_display_source(source)
+        except OSError:
+            config_manager.logger().warning("Pet display source could not be saved")
+            return
+        host.set_display_sources(self._vpet_source_options)
+        self._sync_vpet_usage()
+        self._refresh_vpet_bound_sources()
+
+    def _refresh_vpet_bound_sources(self) -> None:
+        if self._closed or self._vpet_updating or not config_manager.get("VPET_ENABLED", False):
+            return
+        valid = {option["id"] for option in self._vpet_source_options}
+        selected = {host.display_source for host in self._pet_hosts()
+                    if host.data_directory is not None and host.display_source in valid}
+        now = time.monotonic()
+        captured = config_manager.all_config()
+        for source in selected:
+            if source.startswith("provider:"):
+                provider_id = source.partition(":")[2]
+                if (provider_id in PROVIDERS and provider_id != captured.get("ACTIVE_PROVIDER")
+                        and now - self._provider_last_started.get(provider_id, float("-inf")) >= 60):
+                    self._start_provider_refresh(provider_id, captured, lightweight=True,
+                                                 queue_if_busy=False, reason="pet_source")
+            elif source.startswith("profile:"):
+                profile_id = source.partition(":")[2]
+                profile = self._vpet_profiles.get(profile_id)
+                if (profile is None or profile_id in self._vpet_profile_in_flight
+                        or now < self._vpet_profile_due.get(profile_id, 0)):
+                    continue
+                try:
+                    profile_config = profile_store.profile_config(profile)
+                except (OSError, ValueError):
+                    continue
+                revision = profile["revision"]
+                self._vpet_profile_in_flight[profile_id] = revision
+                self._vpet_profile_due[profile_id] = now + 60
+                task = FetchTask(0, profile_config, lightweight=True)
+                task.signals.finished.connect(
+                    lambda _request, _provider, result, pid=profile_id, rev=revision:
+                    self._finish_vpet_profile(pid, rev, result))
+                self._thread_pool.start(task)
+
+    def _finish_vpet_profile(self, profile_id: str, revision: str, result: TokenData) -> None:
+        if self._vpet_profile_in_flight.get(profile_id) != revision or self._closed:
+            return
+        self._vpet_profile_in_flight.pop(profile_id, None)
+        try:
+            profile = next((item for item in profile_store.load_profiles()
+                            if item["id"] == profile_id and item["revision"] == revision), None)
+            valid = profile is not None and result.account_key == TokenData.account_key_for_config(
+                profile_store.profile_config(profile))
+        except (OSError, ValueError):
+            valid = False
+        if valid:
+            self._vpet_profile_results[profile_id] = (revision, result)
+        else:
+            self._vpet_profile_results.pop(profile_id, None)
+        self._sync_vpet_usage()
+
     def _sync_vpet(self) -> None:
         if self._closed or self._vpet_updating:
             return
         # 启动也检查安装状态，防止旧的启用配置绕过设置页限制并自动调用本地开发宿主。
         if config_manager.get("VPET_ENABLED", False) and pet_extension.installed_manifest() is not None:
             self._vpet.start(config_manager.CONFIG_DIR / "vpet")
+            if self._vpet._reported_failure:
+                return
+            self._update_vpet_source_options()
+            installed = pet_extension.installed_characters()
+            # 单独删除角色后保留数量偏好，但只启动当前确实已安装的角色。
+            counts = {"vpet": int(config_manager.get("VPET_EXTRA_VPET_COUNT", 0)) if "vpet" in installed else 0,
+                      "whale": int(config_manager.get("VPET_EXTRA_WHALE_COUNT", 0)) if "whale" in installed else 0}
+            for key, host in list(self._vpet_extras.items()):
+                if key[1] >= counts[key[0]]:
+                    host.stop()
+                    host.deleteLater()
+                    del self._vpet_extras[key]
+            # 数量没有应用上限；按批次启动可避免较大输入阻塞设置页事件循环。
+            self._vpet_pending = ((character, index) for character in ("vpet", "whale")
+                                  for index in range(counts[character]))
+            self._vpet_start_timer.stop()
+            self._start_vpet_extra_batch()
         else:
-            was_active = self._vpet.active
-            self._vpet.stop()
+            timer = getattr(self, "_vpet_start_timer", None)
+            if timer is not None:
+                timer.stop()
+            self._vpet_pending = None
+            was_active = any(host.active for host in self._pet_hosts())
+            for host in self._pet_hosts():
+                host.stop()
             if was_active and not self._expanded:
                 self.show()
+
+    def _start_vpet_extra_batch(self) -> None:
+        if (self._closed or self._vpet_updating or self._vpet_pending is None
+                or not config_manager.get("VPET_ENABLED", False)):
+            return
+        for _ in range(8):
+            try:
+                character, index = next(self._vpet_pending)
+            except StopIteration:
+                self._vpet_pending = None
+                self._refresh_vpet_bound_sources()
+                return
+            key = (character, index)
+            host = self._vpet_extras.get(key)
+            if host is None:
+                host = VPetHost(self)
+                host.ready.connect(self._on_vpet_ready)
+                host.failed.connect(self._on_vpet_failed)
+                host.action_requested.connect(self._on_vpet_action)
+                host.source_requested.connect(
+                    lambda source, target=host: self._select_vpet_source(target, source))
+                QApplication.instance().aboutToQuit.connect(host.stop)
+                self._vpet_extras[key] = host
+            host.set_visible(self._vpet.visible)
+            slot = 2 * index + (1 if character == "vpet" else 2)
+            host.start(config_manager.CONFIG_DIR / "vpet" / "instances" /
+                       f"{character}-{index + 1}", character=character, slot=slot)
+            if self._vpet_pending is None:
+                # 启动可同步报错并清空队列；当前批次必须立即停止继续取下一个实例。
+                return
+            host.set_display_sources(self._vpet_source_options,
+                                     host.display_source if host.display_source in {
+                                         option["id"] for option in self._vpet_source_options} else "active")
+        self._refresh_vpet_bound_sources()
+        self._vpet_start_timer.start(100)
 
     def _pause_vpet_update(self) -> None:
         # 自动保存也会同步桌宠；更新期间必须禁止重启，避免 Windows 文件占用和替换竞态。
         self._vpet_updating = True
-        self._vpet.stop()
+        self._vpet_start_timer.stop()
+        self._vpet_pending = None
+        for host in self._pet_hosts():
+            host.stop()
         if not self._expanded and not self._closed:
             self.show()
 
@@ -380,9 +543,13 @@ class FloatingWidget(QWidget):
     def _on_vpet_failed(self, message: str) -> None:
         if self._closed:
             return
+        # 系统资源不足时继续批量拉起只会反复失败；保留已启动实例并等待用户调整数量。
+        if getattr(self, "_vpet_pending", None) is not None:
+            self._vpet_start_timer.stop()
+            self._vpet_pending = None
         config_manager.logger().warning("VPet: %s", message)
         self._set_theme_feedback(message, "danger")
-        if not self._expanded:
+        if not self._expanded and not any(host.active for host in self._pet_hosts()):
             self.show()
         if self.tray is not None:
             # 托盘共享点击回调；新的普通提示不能继承上一条认证通知的登录动作。
@@ -393,7 +560,8 @@ class FloatingWidget(QWidget):
         if self._closed:
             return
         if action == "open_panel":
-            self._vpet.set_visible(True)
+            for host in self._pet_hosts():
+                host.set_visible(True)
             self.expand_panel()
             self.show()
             self.raise_()
@@ -771,7 +939,7 @@ class FloatingWidget(QWidget):
         finally:
             self._transitioning = False
         self._reschedule_refresh()
-        if self._vpet.active:
+        if any(host.active for host in self._pet_hosts()):
             self.hide()
 
     def event(self, event) -> bool:
@@ -1161,6 +1329,7 @@ class FloatingWidget(QWidget):
             )
             self._settings_window.finished.connect(panel.show_overview)
             self._settings_window.profile_quota_observed.connect(self._notify_profile_quota)
+            self._settings_window.profile_list_changed.connect(self._on_vpet_profiles_changed)
             self._settings_window.pet_update_started.connect(self._pause_vpet_update)
             self._settings_window.pet_update_finished.connect(self._resume_vpet_update)
             self._settings_window.save_state_changed.connect(panel.set_settings_save_status)
@@ -1232,6 +1401,11 @@ class FloatingWidget(QWidget):
         self._refreshing = False
         self._apply_update()
         self._on_config_saved()
+
+    def _on_vpet_profiles_changed(self) -> None:
+        self._update_vpet_source_options()
+        self._sync_vpet_usage()
+        self._refresh_vpet_bound_sources()
 
     def _start_pet_update(self, release) -> None:
         if self._closed:
@@ -1461,7 +1635,7 @@ class FloatingWidget(QWidget):
                 self._mimo_renewal_attempted = False
         now = time.monotonic()
         if (
-            reason in {"periodic_current", "periodic_background", "overview"}
+            reason in {"periodic_current", "periodic_background", "overview", "pet_source"}
             and provider_id in self._auth_expired_providers
             and now - self._provider_last_started.get(provider_id, now) < AUTH_RECHECK_INTERVAL_SECONDS
         ):
@@ -1632,6 +1806,8 @@ class FloatingWidget(QWidget):
             self._notify_low_quota(result, provider_id, current_account_key=current_account_key)
         if is_current:
             self._apply_update()
+        else:
+            self._sync_vpet_usage()
         self._update_provider_overview()
         if pending is not None:
             QTimer.singleShot(
@@ -1932,19 +2108,11 @@ class FloatingWidget(QWidget):
         self.open_settings(provider_id=provider_id, start_cookie_acquisition=True)
 
     def _sync_vpet_usage(self) -> None:
-        if self._vpet.active:
-            message = usage_message(
-                self._data, self._refreshing, str(config_manager.get("ACTIVE_PROVIDER", "")),
-                self._pricing_state.is_peak if self._pricing_state is not None else None,
-            )
-            scope = self._data.account_key if message["provider"].lower().startswith("deepseek") else None
-            if scope != self._vpet_balance_scope:
-                # 主程序只发送“账户已变”标记，避免不同账户的余额被误判成充值或扣款。
-                message["balance_reset"] = True
-                self._vpet_balance_scope = scope
+        active_hosts = [host for host in self._pet_hosts() if host.active]
+        if active_hosts:
             theme = current_theme()
             # 仅发送绘制需要的颜色，不序列化主题控制器或配置；复用球体的水面色和峰时色规则。
-            message["theme"] = {
+            colors = {
                 "accent": theme.accent,
                 "accent_hover": theme.accent_hover,
                 "water_top": FloatingUsageBall._water_top_color(theme).name(),
@@ -1958,7 +2126,48 @@ class FloatingWidget(QWidget):
                 "border": theme.border,
                 "warning": theme.warning,
             }
-            self._vpet.update_usage(message)
+            configured = config_manager.all_config()
+            active_provider = str(config_manager.get("ACTIVE_PROVIDER", configured.get("ACTIVE_PROVIDER", "")))
+            valid = {option["id"]: option["name"] for option in getattr(
+                self, "_vpet_source_options", [{"id": "active", "name": "跟随主程序"}])}
+            for host in active_hosts:
+                source = host.display_source if host.display_source in valid else "active"
+                data = self._data
+                refreshing = self._refreshing
+                provider_id = active_provider
+                label = None
+                if source.startswith("provider:"):
+                    provider_id = source.partition(":")[2]
+                    account_config = dict(configured, ACTIVE_PROVIDER=provider_id)
+                    account_key = TokenData.account_key_for_config(account_config)
+                    candidate = self._data if provider_id == active_provider else self._provider_results.get(provider_id)
+                    data = candidate if candidate is not None and candidate.account_key == account_key else TokenData(
+                        status="loading", per_provider=[PerProviderData(provider_id, PROVIDERS[provider_id].name)])
+                    refreshing = provider_id in self._in_flight_requests
+                    label = valid[source]
+                elif source.startswith("profile:"):
+                    profile_id = source.partition(":")[2]
+                    profile = self._vpet_profiles[profile_id]
+                    provider_id = profile["provider"]
+                    cached = self._vpet_profile_results.get(profile_id)
+                    data = cached[1] if cached is not None and cached[0] == profile["revision"] else TokenData(
+                        status="loading", per_provider=[PerProviderData(provider_id, PROVIDERS[provider_id].name)])
+                    refreshing = profile_id in self._vpet_profile_in_flight
+                    label = valid[source]
+                message = usage_message(
+                    data, refreshing, provider_id,
+                    self._pricing_state.is_peak if self._pricing_state is not None else (
+                        pricing_state(configured).is_peak if provider_id == "deepseek" and
+                        configured.get("DEEPSEEK_PEAK_PRICING_ENABLED", False) else None),
+                    source_label=label,
+                )
+                # 各实例独立识别账户变化，避免一个角色换号影响另一个角色的余额动画。
+                scope = data.account_key if provider_id == "deepseek" else None
+                if scope != host.balance_scope:
+                    message["balance_reset"] = True
+                    host.balance_scope = scope
+                message["theme"] = colors
+                host.update_usage(message)
 
     def _apply_update(self) -> None:
         self._sync_vpet_usage()
@@ -2080,6 +2289,10 @@ class FloatingWidget(QWidget):
         if self._closed:
             return
         captured_config = config_manager.all_config()
+        if config_manager.get("VPET_ENABLED", False) is True:
+            self._update_vpet_source_options()
+            self._refresh_vpet_bound_sources()
+            self._sync_vpet_usage()
         active_provider = str(
             captured_config.get("ACTIVE_PROVIDER", "")
         ).strip().lower()
@@ -2169,9 +2382,11 @@ class FloatingWidget(QWidget):
         self._refresh_timer.start(configured)
 
     def set_visible_from_tray(self) -> None:
-        if self._vpet.active:
-            visible = not self._vpet.visible
-            self._vpet.set_visible(visible)
+        active_hosts = [host for host in self._pet_hosts() if host.active]
+        if active_hosts:
+            visible = not active_hosts[0].visible
+            for host in active_hosts:
+                host.set_visible(visible)
             if not visible:
                 self.hide()
             return
@@ -2219,10 +2434,13 @@ class FloatingWidget(QWidget):
             x, y = self.x(), self.y()
         config_manager.save_widget_position(x, y)
         self._closed = True
+        self._vpet_start_timer.stop()
+        self._vpet_pending = None
         compact = self.__dict__.get("_compact_overview")
         if compact is not None:
             compact.close()
-        self._vpet.stop()
+        for host in self._pet_hosts():
+            host.stop()
         self._refresh_timer.stop()
         self._background_refresh_timer.stop()
         self._pricing_timer.stop()

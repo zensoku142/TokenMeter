@@ -10,6 +10,8 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[1]
 VENDORED_SOURCE = ROOT / "third_party" / "VPet"
 # 保留旧缓存位置以复用已下载的动画；核心源码只从仓库内编译。
@@ -34,6 +36,8 @@ ANIMATION_DIRS = (
     "Touch_Head",
     "IDEL",
 )
+ANIMATION_RESOLUTION = 250
+CUSTOM_WEBM_SAMPLE = "待机呼吸休闲.webm"
 
 
 def run(*args: str, cwd: Path = ROOT, env=None) -> None:
@@ -68,6 +72,22 @@ def ensure_source() -> None:
         run("git", "sparse-checkout", "set", *needed, cwd=SOURCE)
 
 
+def copy_animation_frame(source: str, destination: str) -> str:
+    if not source.lower().endswith(".png"):
+        return shutil.copy2(source, destination)
+    # 单帧目录由内核直接显示原图；只有多帧动画才会在运行时缩到 250px。
+    if len(list(Path(source).parent.glob("*.png"))) == 1:
+        return shutil.copy2(source, destination)
+    with Image.open(source) as frame:
+        if frame.width <= ANIMATION_RESOLUTION:
+            return shutil.copy2(source, destination)
+        # 宿主始终以 250px 构建帧缓存；发布原始 1000px 图片只增加下载和首次解码成本。
+        height = round(frame.height * ANIMATION_RESOLUTION / frame.width)
+        frame.resize((ANIMATION_RESOLUTION, height), Image.Resampling.LANCZOS).save(
+            destination, format="PNG", optimize=True)
+    return destination
+
+
 def stage_resources() -> dict:
     target = OUTPUT / "resources"
     if target.exists():
@@ -79,7 +99,8 @@ def stage_resources() -> dict:
     pet = target / "pet"
     pet.mkdir(parents=True)
     for name in ANIMATION_DIRS:
-        shutil.copytree(SOURCE / CORE_MOD / "pet/vup" / name, pet / "vup" / name)
+        shutil.copytree(SOURCE / CORE_MOD / "pet/vup" / name, pet / "vup" / name,
+                        copy_function=copy_animation_frame)
     lines = (SOURCE / CORE_MOD / "pet/vup.lps").read_text(encoding="utf-8-sig").splitlines()
     # 保留移动和触摸配置，删除工作/学习/玩耍的收益配置，防止入口被意外恢复。
     lines = [line for line in lines if not line.startswith("work:")]
@@ -97,6 +118,9 @@ def stage_resources() -> dict:
         run(converter, "-y", "-loglevel", "error", "-c:v", "libvpx-vp9", "-i", str(source),
             "-vf", "fps=15,scale=250:141:flags=lanczos,format=rgba,pad=250:250:0:109:color=black@0",
             "-plays", "0", "-f", "apng", str(animations / (source.stem + ".png")))
+        # 动作播放使用已转换的 APNG；仅保留一个 WebM 供自定义动画路径的冒烟检查。
+        if source.name != CUSTOM_WEBM_SAMPLE:
+            source.unlink()
     shutil.copy2(VENDORED_SOURCE / "LICENSE", OUTPUT / "VPet-LICENSE.txt")
     shutil.copy2(VENDORED_SOURCE / "README.md", OUTPUT / "VPet-README.md")
     shutil.copy2(ROOT / "pet_host/THIRD_PARTY_NOTICES.md", OUTPUT / "THIRD_PARTY_NOTICES.md")

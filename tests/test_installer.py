@@ -25,7 +25,7 @@ def test_installer_creates_both_shortcuts_and_preserves_data():
     assert "{userdesktop}\\TokenMeter" in SCRIPT
     assert "{group}\\TokenMeter" in SCRIPT
     assert 'Name: "{app}\\data"' not in SCRIPT
-    assert 'Excludes: "data\\*,pet\\*,_internal\\pet\\*,_internal\\assets\\pets\\*"' in SCRIPT
+    assert 'Excludes: "\\data\\*,\\pet\\*,\\_internal\\pet\\*,\\_internal\\assets\\pets\\*"' in SCRIPT
     assert 'Type: files; Name: "{userstartup}\\TokenMeter.lnk"' in SCRIPT
 
 

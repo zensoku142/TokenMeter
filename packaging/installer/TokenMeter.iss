@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.14.2"
+  #define MyAppVersion "1.16.1"
 #endif
 #define MyAppName "TokenMeter"
 #define MyAppExeName "TokenMeter.exe"
@@ -40,7 +40,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; The build output never contains user data; the exclusion adds defense in depth.
 ; 桌宠只通过独立扩展附件安装；即使构建目录残留旧 pet，也不能带入主安装包。
-Source: "..\..\dist\TokenMeter\*"; DestDir: "{app}"; Excludes: "data\*,pet\*,_internal\pet\*,_internal\assets\pets\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 排除规则必须从根目录匹配，否则 pet\* 也会误排除 _internal\assets\pet 内的角色缩略图。
+Source: "..\..\dist\TokenMeter\*"; DestDir: "{app}"; Excludes: "\data\*,\pet\*,\_internal\pet\*,\_internal\assets\pets\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
 ; 旧试用包误带入了第三方 ICU。普通覆盖安装不会删除遗留 DLL，必须清理这些精确路径，不能触碰 data。

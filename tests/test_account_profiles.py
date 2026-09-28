@@ -114,6 +114,24 @@ def test_same_provider_cards_and_late_deleted_profile_result(monkeypatch):
     app.processEvents()
 
 
+def test_profile_page_reports_add_edit_and_delete_for_pet_source_choices():
+    from ui.account_profiles import AccountProfilesPage
+
+    app = QApplication.instance() or QApplication([])
+    page = AccountProfilesPage()
+    changed = []
+    page.profiles_changed.connect(lambda: changed.append(True))
+    profile = store.save_profile("openrouter", "Work", {"API_KEY": "one"})
+    page.reload_profiles()
+    store.save_profile("openrouter", "Work 2", {"API_KEY": "two"}, profile["id"])
+    page.reload_profiles()
+    store.delete_profile(profile["id"])
+    page.reload_profiles()
+    assert len(changed) == 3
+    page.deleteLater()
+    app.processEvents()
+
+
 def test_profile_notification_opens_its_profile_instead_of_default_account(monkeypatch):
     from api.providers.base import QuotaWindow
     from test_refresh import widget_stub

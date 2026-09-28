@@ -12,7 +12,7 @@ import pytest
 from core import pet_extension as pet
 from core.identity import (
     APP_VERSION, GITHUB_RELEASES_API_URL, PET_HOST_RELEASE_ASSET_TEMPLATE,
-    PET_RELEASE_ASSET_TEMPLATE, PET_RELEASE_TAG_PREFIX,
+    PET_CHARACTER_ASSET_TEMPLATE, PET_RELEASE_ASSET_TEMPLATE, PET_RELEASE_TAG_PREFIX,
 )
 from scripts import build_release
 from updater.client import (
@@ -30,7 +30,8 @@ TEST_RESOURCE_SHA = _resource_digest.hexdigest()
 
 def payload(directory):
     directory.mkdir(parents=True, exist_ok=True)
-    for name in (*pet.REQUIRED_FILES, "coreclr.dll", "resources/pet/vup/Default/1.png"):
+    for name in (*pet.REQUIRED_FILES, "coreclr.dll", "resources/pet/vup.lps",
+                 "resources/pet/vup/Default/1.png"):
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"test payload")
@@ -80,6 +81,10 @@ def test_build_install_remove_roundtrip_preserves_user_state(pack, tmp_path, mon
     cache = user_data.parent / "cache"
     cache.mkdir()
     (cache / "frame.png").write_bytes(b"cache")
+    instance = user_data.parent / "instances/vpet-7"
+    (instance / "cache").mkdir(parents=True)
+    (instance / "cache/frame.png").write_bytes(b"cache")
+    (instance / "layout.json").write_text("keep")
     config = tmp_path / "data/config.json"
     config.write_text("keep config")
     pet.uninstall()
@@ -87,6 +92,8 @@ def test_build_install_remove_roundtrip_preserves_user_state(pack, tmp_path, mon
     assert pet.installed_executable() is None
     assert user_data.read_text() == "keep"
     assert not cache.exists()
+    assert not (instance / "cache").exists()
+    assert (instance / "layout.json").read_text() == "keep"
     assert config.read_text() == "keep config"
     assert not list(destination.parent.glob(".vpet-*"))
     pet.install_pack(pack, destination)
@@ -219,7 +226,8 @@ def release_info(version=build_release.PET_MANIFEST["version"], **manifest):
     resources = {"revision": "a" * 40, "files": 2, "bytes": 24,
                  "sha256": TEST_RESOURCE_SHA}
     return PetReleaseInfo(version, dict(build_release.PET_MANIFEST, version=version,
-                                        resources=resources, **manifest),
+                                        resources=resources, character_resources={"vup": resources},
+                                        **manifest),
                           ReleaseAsset(asset["name"], asset["browser_download_url"], asset["size"]),
                           "a" * 64)
 
@@ -277,6 +285,81 @@ def test_pet_download_selects_host_asset_when_requested(tmp_path):
     assert download.call_args.args[:2] == (host, result)
     assert download.call_args.kwargs["expected_sha"] == "b" * 64
     assert download.call_args.kwargs["bytes_total"] == 80
+
+
+def test_pet_download_selects_verified_character_asset(tmp_path):
+    client = GitHubReleaseClient()
+    full = ReleaseAsset("full.zip", "https://example.com/full.zip", 500)
+    whale = ReleaseAsset("whale.zip", "https://example.com/whale.zip", 120)
+    release = PetReleaseInfo("1.0.0", {}, full, "a" * 64,
+                             character_assets={"whale": (whale, "b" * 64)})
+    with patch.object(client, "_download_asset") as download:
+        result = client.download_pet_pack(tmp_path, release=release, character="whale")
+    assert result == tmp_path / "whale.zip"
+    assert download.call_args.args[:2] == (whale, result)
+    assert download.call_args.kwargs["expected_sha"] == "b" * 64
+
+
+def test_pet_release_discovers_character_assets_with_checksums():
+    client = GitHubReleaseClient()
+    data = release_payload()
+    version = build_release.PET_MANIFEST["version"]
+    role_names = [PET_CHARACTER_ASSET_TEMPLATE.format(character=role, version=version)
+                  for role in ("vup", "whale")]
+    tag = PET_RELEASE_TAG_PREFIX + version
+    data["assets"].extend({
+        "name": name, "size": 50,
+        "browser_download_url": f"https://github.com/zensoku142/TokenMeter/releases/download/{tag}/{name}",
+    } for name in role_names)
+    full_name = data["assets"][0]["name"]
+    identity = {"revision": "a" * 40, "files": 2, "bytes": 24, "sha256": TEST_RESOURCE_SHA}
+    manifest = dict(build_release.PET_MANIFEST, resources=identity,
+                    character_resources={"vup": identity, "whale": identity})
+    with (patch.object(client, "_request_json", return_value=[data]),
+          patch.object(client, "_load_checksums", return_value={
+              full_name.lower(): "a" * 64, pet.PACK_MANIFEST: "b" * 64,
+              **{name.lower(): "c" * 64 for name in role_names},
+          }),
+          patch.object(client, "_load_pet_manifest", return_value=manifest)):
+        release = client.latest_pet_release()
+    assert set(release.character_assets) == {"vup", "whale"}
+    assert release.character_assets["whale"][0].name == role_names[1]
+
+
+def test_settings_offers_add_and_remove_for_each_installed_character(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from config.defaults import DEFAULT_CONFIG
+    from ui.qt_settings import SettingsWindow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path / "data")
+    monkeypatch.setattr(pet.config_manager, "load_config", lambda: DEFAULT_CONFIG.copy())
+    monkeypatch.setattr(pet.config_manager, "all_config", lambda: DEFAULT_CONFIG.copy())
+    destination = payload(pet.extension_directory())
+    (destination / pet.PACK_MANIFEST).write_text(json.dumps(dict(
+        build_release.PET_MANIFEST, character_resources={"vup": {"revision": "a" * 40}})))
+    window = SettingsWindow()
+    try:
+        assert window.pet_vpet_button.text() == "删除VPet 默认角色"
+        assert window.pet_whale_button.text() == "下载鲸鱼娘"
+        assert window.pet_whale_button.isEnabled()
+        with (patch("ui.qt_settings.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes),
+              patch.object(window, "_start_pet_task") as start):
+            window._manage_pet_character("whale")
+        start.assert_called_once_with("add-character", "whale")
+
+        whale = destination / "resources/pet/whale"
+        whale.mkdir()
+        (destination / "resources/pet/whale.lps").write_bytes(b"test payload")
+        (whale / "idle.png").write_bytes(b"test payload")
+        window._refresh_pet_controls()
+        with (patch("ui.qt_settings.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes),
+              patch.object(window, "_start_pet_task") as start):
+            window._manage_pet_character("vpet")
+        start.assert_called_once_with("remove-character", "vpet")
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_unverified_host_pack_falls_back_to_full_release():
@@ -386,7 +469,7 @@ def test_settings_missing_pack_and_uninstall_lifecycle(tmp_path, monkeypatch):
     assert window.vpet_check.isEnabled()
     assert not window.pet_install_button.isEnabled()
     assert window.pet_uninstall_button.isEnabled()
-    assert window.pet_version_label.text() == f"桌宠版本：v{build_release.PET_MANIFEST['version']}"
+    assert window.pet_version_label.text() == f"桌宠版本：v{build_release.PET_MANIFEST['version']}（已安装：VPet）"
     events = []
     window.on_saved = lambda: events.append("stop-host")
     with (
@@ -443,6 +526,82 @@ def test_host_pack_excludes_reusable_resources(pack):
     assert pet.RESOURCES_MANIFEST in names
     assert manifest["resources"]["revision"] == "a" * 40
     assert host.stat().st_size < pack.stat().st_size
+
+
+def test_character_packs_install_add_and_remove_independently(tmp_path, monkeypatch):
+    source = payload(tmp_path / "source")
+    whale = source / "resources/pet/whale"
+    whale.mkdir()
+    (source / "resources/pet/whale.lps").write_bytes(b"test payload")
+    (whale / "idle.png").write_bytes(b"test payload")
+    (source / pet.RESOURCES_MANIFEST).write_text(json.dumps({
+        "revision": "a" * 40, "resource_files": 4, "resource_bytes": 48,
+    }))
+    monkeypatch.setattr(build_release, "PET_PACK_PATH", tmp_path / "pet.zip")
+    monkeypatch.setattr(build_release, "PET_HOST_PACK_PATH", tmp_path / "host.zip")
+    full = build_release.package_pet_payload(source)
+    manifest = json.loads((full.parent / pet.PACK_MANIFEST).read_text())
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path / "data")
+    destination = pet.extension_directory()
+
+    def role_pack(role):
+        return full.parent / PET_CHARACTER_ASSET_TEMPLATE.format(
+            character=role, version=manifest["version"])
+
+    release = PetReleaseInfo(manifest["version"], manifest,
+                             ReleaseAsset("full.zip", "https://example.com/full.zip", full.stat().st_size),
+                             "a" * 64, character_assets={
+                                 role: (ReleaseAsset(role_pack(role).name,
+                                                     f"https://example.com/{role}.zip",
+                                                     role_pack(role).stat().st_size), "b" * 64)
+                                 for role in ("vup", "whale")
+                             })
+    def download(_client, _directory, **kwargs):
+        return role_pack(kwargs["character"])
+
+    with patch.object(GitHubReleaseClient, "download_pet_pack", download):
+        pet.download_and_install(Mock(), lambda: False, release=release, character="vpet")
+    assert pet.installed_characters() == {"vpet"}
+    assert not (destination / "resources/pet/whale").exists()
+
+    existing_frame = destination / "resources/pet/vup/Default/1.png"
+    existing_frame.write_bytes(b"modified")
+    with (patch.object(GitHubReleaseClient, "download_pet_pack", download),
+          pytest.raises(ValueError, match="不兼容")):
+        pet.download_and_install(Mock(), lambda: False, release=release,
+                                 character="whale", add_character=True)
+    assert pet.installed_characters() == {"vpet"}
+    existing_frame.write_bytes(b"test payload")
+
+    with patch.object(GitHubReleaseClient, "download_pet_pack", download):
+        pet.download_and_install(Mock(), lambda: False, release=release,
+                                 character="whale", add_character=True)
+    assert pet.installed_characters() == {"vpet", "whale"}
+    instance = tmp_path / "data/vpet/instances/vpet-7"
+    (instance / "cache").mkdir(parents=True)
+    (instance / "cache/frame.png").write_bytes(b"cache")
+    (instance / "layout.json").write_text("keep")
+    pet.remove_character("vpet")
+    assert pet.installed_characters() == {"whale"}
+    assert pet.selected_character() == "whale"
+    assert not (destination / "resources/pet/vup").exists()
+    assert not (instance / "cache").exists()
+    assert (instance / "layout.json").read_text() == "keep"
+    pet.remove_character("whale")
+    assert not destination.exists()
+
+
+def test_old_host_cannot_lose_a_character_before_updating(tmp_path, monkeypatch):
+    monkeypatch.setattr(pet.config_manager, "CONFIG_DIR", tmp_path / "data")
+    destination = payload(pet.extension_directory())
+    whale = destination / "resources/pet/whale"
+    whale.mkdir()
+    (destination / "resources/pet/whale.lps").write_bytes(b"test payload")
+    (whale / "idle.png").write_bytes(b"test payload")
+
+    with pytest.raises(ValueError, match="先更新"):
+        pet.remove_character("vpet")
+    assert (destination / "resources/pet/vup.lps").is_file()
 
 
 def test_update_replaces_only_extension_and_preserves_user_preferences(pack, tmp_path, monkeypatch):

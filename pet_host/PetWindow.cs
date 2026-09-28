@@ -27,6 +27,7 @@ internal sealed partial class PetWindow : Window, IController
     private readonly bool demo;
     private readonly bool smoke;
     private readonly string? captureDirectory;
+    private readonly string? fixedCharacter;
     private readonly string resources = Path.Combine(AppContext.BaseDirectory, "resources");
     private readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromSeconds(30) };
     private readonly DispatcherTimer ambientTimer = new() { Interval = TimeSpan.FromSeconds(15) };
@@ -46,6 +47,7 @@ internal sealed partial class PetWindow : Window, IController
     private WhaleBalanceCardWindow? whaleCard;
     private ContextMenu? petMenu;
     private MenuItem? quotaMenuItem;
+    private MenuItem? displaySourcesMenu;
     private MenuItem? autonomyMenuItem;
     private MenuItem? defaultCharacterMenuItem;
     private MenuItem? whaleCharacterMenuItem;
@@ -58,16 +60,20 @@ internal sealed partial class PetWindow : Window, IController
     private bool? cloudDockedState;
     private bool? manualDockedEdge;
     private int size = 220;
+    private int ctrlWheelRemainder;
+    private DateTime lastCtrlWheelAt;
     private JsonElement? pendingUsage;
     private string? lastWarning;
     private Point? quotaPosition;
 
-    public PetWindow(string dataDirectory, bool demo, bool smoke, string? captureDirectory)
+    public PetWindow(string dataDirectory, bool demo, bool smoke, string? captureDirectory,
+                     string? fixedCharacter = null, long slot = 0)
     {
         this.dataDirectory = dataDirectory;
         this.demo = demo;
         this.smoke = smoke;
         this.captureDirectory = captureDirectory;
+        this.fixedCharacter = fixedCharacter;
         Title = "TokenMeter · VPet 精简版";
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -85,12 +91,46 @@ internal sealed partial class PetWindow : Window, IController
         };
         Topmost = true;
         Content = loading;
+        bool hasLayout = File.Exists(Path.Combine(dataDirectory, "layout.json"));
         LoadState();
+        // 附加实例使用独立目录并固定角色；旧布局也不能覆盖主程序指定的实例身份。
+        if (fixedCharacter != null) character = fixedCharacter;
+        if (!hasLayout && slot > 0)
+        {
+            // 新实例错开初始位置；之后各实例的 layout.json 独立保存用户拖动的位置。
+            // 大量实例循环错开起点，避免序号增长后坐标溢出；拖动后仍保存独立位置。
+            int offset = (int)((slot - 1) % 8) + 1;
+            Left -= 45 * offset;
+            Top -= 35 * offset;
+        }
+        // 旧布局可能指向已单独删除的角色；启动时回退到仍安装的角色。
+        if (fixedCharacter == null &&
+            !File.Exists(Path.Combine(resources, "pet", character == "whale" ? "whale.lps" : "vup.lps")))
+            character = character == "whale" ? "vpet" : "whale";
         Width = Height = size;
         ClampPosition();
         Loaded += async (_, _) => await LoadPet();
         LocationChanged += (_, _) => UpdateQuotaCloud();
         SizeChanged += (_, _) => { UpdateMessageTextSize(); UpdateQuotaCloud(); };
+        PreviewMouseWheel += (_, e) => {
+            // 桌宠窗口可能不抢前台焦点；同时检查实时 Ctrl 状态，确保悬停滚轮仍能触发。
+            bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) != 0 ||
+                (GetAsyncKeyState(0x11) & 0x8000) != 0;
+            if (!ctrlHeld) { ctrlWheelRemainder = 0; return; }
+            if (!ready || closing || petPointerDown || !IsPetVisual(e.OriginalSource)) return;
+            // 精密触控板可能把一档滚轮拆成多个小 Delta；累计到一档再按菜单步长缩放。
+            var now = DateTime.UtcNow;
+            if (now - lastCtrlWheelAt > TimeSpan.FromMilliseconds(500)) ctrlWheelRemainder = 0;
+            lastCtrlWheelAt = now;
+            ctrlWheelRemainder += e.Delta;
+            int steps = ctrlWheelRemainder / 120;
+            if (steps != 0)
+            {
+                ResizePet(20 * steps);
+                ctrlWheelRemainder -= steps * 120;
+            }
+            e.Handled = true;
+        };
         Closing += (_, _) => {
             if (closing) return;
             closing = true;
@@ -182,7 +222,8 @@ internal sealed partial class PetWindow : Window, IController
                 if (!closing) TrySnapPetToEdge(edge);
             }
             InitializeNotifications();
-            InitializeWhaleEvents();
+            if ((fixedCharacter == null || character == "whale") &&
+                File.Exists(Path.Combine(resources, "pet", "whale.lps"))) InitializeWhaleEvents();
             InitializeWhalePhysics();
             if (pendingUsage is { } usage) UpdateUsage(usage);
             UpdateQuotaCloud();
@@ -222,7 +263,10 @@ internal sealed partial class PetWindow : Window, IController
 
     private async Task ChangeCharacterAsync(string selected)
     {
+        if (fixedCharacter != null) return;
         if (switchingCharacter || selected == character || pet == null || graph == null) return;
+        if (!File.Exists(Path.Combine(resources, "pet", selected == "whale" ? "whale.lps" : "vup.lps")))
+            return;
         switchingCharacter = true;
         CancelWhaleChain();
         CancelWhaleStatus();
@@ -331,23 +375,36 @@ internal sealed partial class PetWindow : Window, IController
                 new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center }
             }
         };
-        var defaultFrame = new BitmapImage(new Uri(Path.Combine(resources, "pet", "vup", "Default",
-            "Nomal", "1", "_000_250.png")));
-        // 原帧是 1000 方形画布，截取头肩区域才能在 24 像素菜单中辨认角色。
-        var defaultPortrait = new CroppedBitmap(defaultFrame, new Int32Rect(320, 30, 380, 480));
-        defaultCharacterMenuItem = new MenuItem { Header = CharacterHeader("VPet 默认角色",
-            defaultPortrait), IsCheckable = true };
-        defaultCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("vpet");
-        characters.Items.Add(defaultCharacterMenuItem);
-        whaleCharacterMenuItem = new MenuItem { Header = CharacterHeader("鲸鱼娘",
-            new BitmapImage(new Uri(Path.Combine(resources, "pet", "whale", "portrait.png")))), IsCheckable = true };
-        whaleCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("whale");
-        characters.Items.Add(whaleCharacterMenuItem);
+        if ((fixedCharacter == null || fixedCharacter == "vpet") &&
+            File.Exists(Path.Combine(resources, "pet", "vup.lps")))
+        {
+            var defaultFrame = new BitmapImage(new Uri(Path.Combine(resources, "pet", "vup", "Default",
+                "Nomal", "1", "_000_250.png")));
+            // 按原始 1000px 画布的头肩区域等比裁剪，兼容新包的 250px 帧与旧包原帧。
+            double portraitScale = defaultFrame.PixelWidth / 1000.0;
+            var defaultPortrait = new CroppedBitmap(defaultFrame, new Int32Rect(
+                (int)(320 * portraitScale), (int)(30 * portraitScale),
+                (int)(380 * portraitScale), (int)(480 * portraitScale)));
+            defaultCharacterMenuItem = new MenuItem { Header = CharacterHeader("VPet 默认角色",
+                defaultPortrait), IsCheckable = true };
+            defaultCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("vpet");
+            characters.Items.Add(defaultCharacterMenuItem);
+        }
+        if ((fixedCharacter == null || fixedCharacter == "whale") &&
+            File.Exists(Path.Combine(resources, "pet", "whale.lps")))
+        {
+            whaleCharacterMenuItem = new MenuItem { Header = CharacterHeader("鲸鱼娘",
+                new BitmapImage(new Uri(Path.Combine(resources, "pet", "whale", "portrait.png")))), IsCheckable = true };
+            whaleCharacterMenuItem.Click += (_, _) => _ = ChangeCharacterAsync("whale");
+            characters.Items.Add(whaleCharacterMenuItem);
+        }
         characters.SubmenuOpened += (_, _) => {
-            defaultCharacterMenuItem.IsChecked = character == "vpet";
-            whaleCharacterMenuItem.IsChecked = character == "whale";
+            if (defaultCharacterMenuItem != null) defaultCharacterMenuItem.IsChecked = character == "vpet";
+            if (whaleCharacterMenuItem != null) whaleCharacterMenuItem.IsChecked = character == "whale";
         };
-        AddWhaleActionMenus();
+        displaySourcesMenu = new MenuItem { Header = "显示来源" };
+        petMenu.Items.Add(displaySourcesMenu);
+        if (whaleCharacterMenuItem != null) AddWhaleActionMenus();
         petMenu.Items.Add(new Separator());
         autonomyMenuItem = Add("自主活动", () => {
             allowMove = autonomyMenuItem!.IsChecked;
@@ -367,7 +424,7 @@ internal sealed partial class PetWindow : Window, IController
         petMenu.Opened += (_, _) => {
             CancelAutonomousSequence();
             CancelWhaleChain();
-            whaleActionMenu!.IsEnabled = character == "whale";
+            if (whaleActionMenu != null) whaleActionMenu.IsEnabled = character == "whale";
             UpdateQuotaCloud();
             quotaMenuItem.IsChecked = cloudEnabled;
             quotaCloud?.NotifyActivity();
@@ -395,6 +452,28 @@ internal sealed partial class PetWindow : Window, IController
         };
     }
 
+    private void UpdateDisplaySources(JsonElement command)
+    {
+        if (displaySourcesMenu == null || !command.TryGetProperty("sources", out var sources) ||
+            sources.ValueKind != JsonValueKind.Array) return;
+        string selected = command.TryGetProperty("selected", out var current) &&
+            current.ValueKind == JsonValueKind.String ? current.GetString() ?? "active" : "active";
+        displaySourcesMenu.Items.Clear();
+        foreach (var source in sources.EnumerateArray())
+        {
+            if (source.ValueKind != JsonValueKind.Object ||
+                !source.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String ||
+                !source.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String)
+                continue;
+            string? key = id.GetString();
+            string? label = name.GetString();
+            if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(label)) continue;
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = key == selected };
+            item.Click += (_, _) => Program.Send(new { @event = "select_source", source = key });
+            displaySourcesMenu.Items.Add(item);
+        }
+    }
+
     internal void Receive(JsonElement command)
     {
         if (closing || command.ValueKind != JsonValueKind.Object || !command.TryGetProperty("type", out var type)) return;
@@ -403,6 +482,9 @@ internal sealed partial class PetWindow : Window, IController
             case "usage":
                 pendingUsage = command;
                 if (ready) UpdateUsage(command);
+                break;
+            case "display_sources":
+                UpdateDisplaySources(command);
                 break;
             case "visibility":
                 bool requestedVisible = command.GetProperty("visible").GetBoolean();
@@ -736,10 +818,11 @@ internal sealed partial class PetWindow : Window, IController
         checks["noFeedingResources"] = !Directory.Exists(Path.Combine(resources, "food")) &&
             graph.FindGraph("eat", AnimatType.Single, save.Mode) == null;
         checks["noBottomToolbar"] = !pet!.UIGrid.Children.Contains(pet.ToolBar) && pet.DefaultClickAction == null;
+        var expectedMenu = new List<string> { "查看用量面板", "显示额度气泡", "额度气泡展示", "额度气泡样式", "额度随机间隔", "喝水提醒", "休息提醒",
+            "角色", "显示来源", "自主活动", "放大桌宠", "缩小桌宠", "TokenMeter 设置", "返回悬浮球", "默认角色来源与授权", "退出 TokenMeter" };
+        if (whaleCharacterMenuItem != null) expectedMenu.Insert(9, "鲸鱼娘动作");
         checks["contextMenuActions"] = petMenu!.Items.OfType<MenuItem>().Select(item => item.Header.ToString())
-            .SequenceEqual(new[] { "查看用量面板", "显示额度气泡", "额度气泡展示", "额度气泡样式", "额度随机间隔", "喝水提醒", "休息提醒",
-                "角色", "鲸鱼娘动作", "自主活动", "放大桌宠", "缩小桌宠",
-                "TokenMeter 设置", "返回悬浮球", "默认角色来源与授权", "退出 TokenMeter" });
+            .SequenceEqual(expectedMenu);
         double strengthBefore = save.Strength, feelingBefore = save.Feeling, expBefore = save.Exp;
         await RunDragChecks(checks);
         pet!.DisplayTouchHead();
@@ -823,7 +906,8 @@ internal sealed partial class PetWindow : Window, IController
         cloudManualChoice = null;
         UpdateQuotaCloud();
         string bundledWebm = Path.Combine(resources, "pet", "whale", "webm");
-        checks["all106WebmPackaged"] = Directory.EnumerateFiles(bundledWebm, "*.webm").Count() == 106 &&
+        checks["sampleWebmPackaged"] = Directory.EnumerateFiles(bundledWebm, "*.webm").Count() == 1 &&
+            File.Exists(Path.Combine(bundledWebm, "待机呼吸休闲.webm")) &&
             WhaleCatalog.GetProperty("sourceRevision").GetString() == "a2993705466438f82954b9547f7b4f151e1f773f";
         var fireworks = await WhaleActionGraphAsync("放烟花");
         pet!.Display(fireworks, pet.DisplayToNomal);
@@ -951,17 +1035,20 @@ internal sealed partial class PetWindow : Window, IController
         UpdateQuotaCloud();
         checks["balanceCardHidesWhenUndocked"] = !whaleCard.IsVisible;
         SetWhaleFacing(true);
-        defaultCharacterMenuItem!.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        while (switchingCharacter) await Task.Delay(50);
-        checks["switchToDefault"] = character == "vpet" && graph == defaultGraph &&
-            graph!.FindName(GraphType.Default) != null && pet.PetGrid.RenderTransform == Transform.Identity;
-        Capture(this, Path.Combine(output, "vpet-after-switch.png"));
-        whaleCharacterMenuItem!.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        while (switchingCharacter) await Task.Delay(50);
-        checks["switchBackToWhale"] = character == "whale" && graph == whaleGraph &&
-            graph!.FindName(GraphType.Default) != null;
-        checks["whaleFacingAfterSwitch"] = pet.PetGrid.RenderTransform is ScaleTransform mirror &&
-            mirror.ScaleX == (whaleFacingRight ? -1 : 1);
+        if (defaultCharacterMenuItem != null && whaleCharacterMenuItem != null)
+        {
+            defaultCharacterMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            while (switchingCharacter) await Task.Delay(50);
+            checks["switchToDefault"] = character == "vpet" && graph == defaultGraph &&
+                graph!.FindName(GraphType.Default) != null && pet.PetGrid.RenderTransform == Transform.Identity;
+            Capture(this, Path.Combine(output, "vpet-after-switch.png"));
+            whaleCharacterMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            while (switchingCharacter) await Task.Delay(50);
+            checks["switchBackToWhale"] = character == "whale" && graph == whaleGraph &&
+                graph!.FindName(GraphType.Default) != null;
+            checks["whaleFacingAfterSwitch"] = pet.PetGrid.RenderTransform is ScaleTransform mirror &&
+                mirror.ScaleX == (whaleFacingRight ? -1 : 1);
+        }
         using (var hidden = JsonDocument.Parse("{\"type\":\"visibility\",\"visible\":false}"))
             Receive(hidden.RootElement);
         using (var shown = JsonDocument.Parse("{\"type\":\"visibility\",\"visible\":true}"))
@@ -985,6 +1072,8 @@ internal sealed partial class PetWindow : Window, IController
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
     private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
     private static extern int SetWindowLong(IntPtr window, int index, int value);
 

@@ -1,10 +1,12 @@
 import ast
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from scripts import build_release, build_vpet
 
@@ -207,6 +209,8 @@ def test_pet_release_builds_only_extension_and_cannot_replace_main_latest():
     assert "TokenMeter-Setup" not in workflow and "make_latest: false" in workflow
     assert "pet_host/extension.json" in workflow and "release-notes/" in workflow
     assert "dist-pet/TokenMeter-Pet-Host-v*-x64.zip" in workflow
+    assert "dist-pet/TokenMeter-Pet-vup-v*-x64.zip" in workflow
+    assert "dist-pet/TokenMeter-Pet-whale-v*-x64.zip" in workflow
     assert "dist-pet/extension.json" in workflow and "dist-pet/SHA256SUMS.txt" in workflow
 
 
@@ -273,6 +277,34 @@ def test_vpet_rejects_mismatched_resource_revision_without_changing_checkout(tmp
         build_vpet.ensure_source()
 
 
+def test_vpet_frame_copy_preserves_timing_name_and_reduces_source_resolution(tmp_path):
+    source = tmp_path / "_000_250.png"
+    destination = tmp_path / "frame" / source.name
+    destination.parent.mkdir()
+    Image.new("RGBA", (1000, 1000), (20, 40, 60, 128)).save(source)
+    Image.new("RGBA", (1000, 1000), (20, 40, 60, 128)).save(tmp_path / "_001_250.png")
+
+    build_vpet.copy_animation_frame(str(source), str(destination))
+
+    with Image.open(destination) as frame:
+        assert frame.size == (250, 250)
+        assert all(abs(actual - expected) <= 1 for actual, expected
+                   in zip(frame.getpixel((0, 0)), (20, 40, 60, 128)))
+    assert destination.name == source.name
+    assert destination.stat().st_size < source.stat().st_size
+
+
+def test_vpet_single_picture_keeps_original_resolution(tmp_path):
+    source = tmp_path / "portrait.png"
+    destination = tmp_path / "copy.png"
+    Image.new("RGBA", (1000, 1000), (20, 40, 60, 128)).save(source)
+
+    build_vpet.copy_animation_frame(str(source), str(destination))
+
+    with Image.open(destination) as frame:
+        assert frame.size == (1000, 1000)
+
+
 @pytest.mark.parametrize("full_autonomy", [False, True])
 def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatch, full_autonomy):
     source = tmp_path / "build" / "vpet-upstream"
@@ -308,6 +340,10 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     whale.mkdir()
     (whale / "info.lps").write_text("apnganimation#whale.idle:|path#idle.png:|", encoding="utf-8")
     (whale / "idle.png").write_bytes(b"whale animation")
+    webms = whale / "webm"
+    webms.mkdir()
+    (webms / build_vpet.CUSTOM_WEBM_SAMPLE).write_bytes(b"custom sample")
+    (webms / "extra.webm").write_bytes(b"converted action")
     (whale.parent / "whale.lps").write_text("pet: whale", encoding="utf-8")
     stale = output / "resources/pet/obsolete.png"
     stale.parent.mkdir(parents=True)
@@ -317,6 +353,9 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     monkeypatch.setattr(build_vpet, "VENDORED_SOURCE", vendor)
     monkeypatch.setattr(build_vpet, "OUTPUT", output)
     monkeypatch.setattr(build_vpet, "ANIMATION_DIRS", animations)
+    monkeypatch.setattr(build_vpet, "copy_animation_frame", shutil.copy2)
+    monkeypatch.setenv("TOKENMETER_BUILD_FFMPEG", "ffmpeg")
+    monkeypatch.setattr(build_vpet, "run", lambda *args, **kwargs: Path(args[-1]).write_bytes(b"apng"))
 
     report = build_vpet.stage_resources()
 
@@ -325,11 +364,14 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     assert (output / "resources/pet/vup.lps").read_text(encoding="utf-8") == "pet: vup"
     assert (output / "resources/pet/whale.lps").read_text(encoding="utf-8") == "pet: whale"
     assert (output / "resources/pet/whale/idle.png").read_bytes() == b"whale animation"
+    assert (output / "resources/pet/whale/webm" / build_vpet.CUSTOM_WEBM_SAMPLE).is_file()
+    assert not (output / "resources/pet/whale/webm/extra.webm").exists()
+    assert (output / "resources/pet/whale/apng/extra.png").read_bytes() == b"apng"
     assert (output / "VPet-LICENSE.txt").read_text(encoding="utf-8") == "vendored license"
     assert (output / "VPet-README.md").read_text(encoding="utf-8") == "upstream animation notices"
     assert (output / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8") == "integration notices"
     assert report["revision"] == build_vpet.REVISION
-    assert report["resource_files"] == 5 + len(extra_frames)
+    assert report["resource_files"] == 8 + len(extra_frames)
     for relative in extra_frames:
         assert (output / "resources/pet/vup" / relative).read_bytes() == relative.encode()
     assert not (output / "resources/pet/vup/WORK").exists()

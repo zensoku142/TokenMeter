@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -25,6 +25,7 @@ from core.identity import (
     GITHUB_RELEASES_API_URL,
     GITHUB_REPOSITORY,
     MAIN_EXECUTABLE_NAME,
+    PET_CHARACTER_ASSET_TEMPLATE,
     PET_HOST_RELEASE_ASSET_TEMPLATE,
     PET_MANIFEST_ASSET_NAME,
     PET_PROTOCOL,
@@ -185,6 +186,7 @@ class PetReleaseInfo:
     sha256: str
     host_asset: ReleaseAsset | None = None
     host_sha256: str | None = None
+    character_assets: dict[str, tuple[ReleaseAsset, str]] = field(default_factory=dict)
 
 
 def validate_pet_manifest(manifest: object, app_version: str = APP_VERSION) -> dict:
@@ -460,12 +462,15 @@ class GitHubReleaseClient:
         progress: Callable[[dict[str, object]], None] | None = None,
         cancel_requested: Callable[[], bool] | None = None,
         host_only: bool = False,
+        character: str | None = None,
     ) -> Path:
         release = release or self.latest_pet_release(cancel_requested=cancel_requested)
         if cancel_requested and cancel_requested():
             raise DownloadCancelled("已取消下载")
-        asset = release.host_asset if host_only else release.asset
-        expected_sha = release.host_sha256 if host_only else release.sha256
+        character_pack = release.character_assets.get(character) if character else None
+        asset = release.host_asset if host_only else (character_pack[0] if character_pack else release.asset)
+        expected_sha = release.host_sha256 if host_only else (
+            character_pack[1] if character_pack else release.sha256)
         if asset is None or expected_sha is None:
             raise UpdateError("当前桌宠版本未提供可复用资源的宿主更新包")
         destination = directory / asset.name
@@ -551,9 +556,18 @@ class GitHubReleaseClient:
             if host_sha is None or not isinstance(manifest.get("resources"), dict):
                 host_asset = None
                 host_sha = None
+            character_assets = {}
+            if isinstance(manifest.get("character_resources"), dict):
+                for role in ("vup", "whale"):
+                    role_name = PET_CHARACTER_ASSET_TEMPLATE.format(
+                        character=role, version=version.normalized())
+                    role_asset = by_name.get(role_name)
+                    role_sha = checksums.get(role_name.lower()) if role_asset else None
+                    if role_sha and role in manifest["character_resources"]:
+                        character_assets[role] = (role_asset, role_sha)
             releases.append(PetReleaseInfo(
                 version.normalized(), manifest, by_name[name], checksums[name.lower()],
-                host_asset, host_sha,
+                host_asset, host_sha, character_assets,
             ))
             if limit is not None and len(releases) >= limit:
                 break

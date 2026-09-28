@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,11 +41,12 @@ def host_executable() -> Path:
 
 
 def usage_message(
-    data: TokenData, refreshing: bool, provider_id: str, pricing_peak: bool | None = None
+    data: TokenData, refreshing: bool, provider_id: str, pricing_peak: bool | None = None,
+    source_label: str | None = None,
 ) -> dict:
     provider = data.per_provider[0].provider_id if data.per_provider else provider_id
     provider_cls = PROVIDERS.get(provider)
-    provider_name = getattr(provider_cls, "name", provider)
+    provider_name = source_label or getattr(provider_cls, "name", provider)
     loading = refreshing and data.last_success_at is None
     status = "正在刷新用量" if refreshing else ""
     warning = data.status not in {"ok", "partial", "loading"}
@@ -117,6 +120,7 @@ class VPetHost(QObject):
     ready = Signal()
     failed = Signal(str)
     action_requested = Signal(str)
+    source_requested = Signal(str)
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -138,10 +142,18 @@ class VPetHost(QObject):
         self._buffer = bytearray()
         self._latest_usage: dict | None = None
         self._latest_work_status: dict | None = None
+        self._latest_sources: dict | None = None
+        self._source_tokens: dict[str, str] = {}
+        self._source_secret = secrets.token_bytes(16)
+        self.data_directory: Path | None = None
+        self.display_source = "active"
+        self.balance_scope: str | None = None
 
-    def start(self, data_directory: Path) -> None:
+    def start(self, data_directory: Path, *, character: str | None = None, slot: int = 0) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:
             return
+        if character is not None and character not in {"vpet", "whale"}:
+            raise ValueError("未知桌宠角色")
         self._reported_failure = self._stopping = False
         self._buffer.clear()
         executable = host_executable()
@@ -154,10 +166,19 @@ class VPetHost(QObject):
             # 目录被文件占用或不可写时保留主程序可用，不让启动异常越过 Qt 槽回调。
             self._fail("无法创建桌宠数据目录，已返回悬浮球。")
             return
+        self.data_directory = data_directory
+        try:
+            saved = json.loads((data_directory / "display-source.json").read_text(encoding="utf-8"))
+            self.display_source = saved["source"] if isinstance(saved, dict) and isinstance(
+                saved.get("source"), str) else "active"
+        except (OSError, ValueError, KeyError, TypeError):
+            self.display_source = "active"
         self.process.setProgram(str(executable))
-        self.process.setArguments(
-            ["--data-dir", str(data_directory), "--parent-pid", str(os.getpid())]
-        )
+        arguments = ["--data-dir", str(data_directory), "--parent-pid", str(os.getpid())]
+        if character is not None:
+            # 额外实例由设置中的角色数量管理；固定角色可避免菜单切换后数量与显示不一致。
+            arguments.extend(["--character", character, "--slot", str(slot)])
+        self.process.setArguments(arguments)
         self.process.setWorkingDirectory(str(executable.parent))
         self._startup_timer.start()
         self.process.start()
@@ -166,6 +187,36 @@ class VPetHost(QObject):
         self._latest_usage = message
         if self.active:
             self._send(message)
+
+    def set_display_sources(self, sources: list[dict[str, str]], selected: str | None = None) -> None:
+        # 进程内稳定的随机键令菜单更新前后的选项身份不变，且不向桌宠发送账户档案 ID。
+        self._source_tokens = {}
+        choices = []
+        for source in sources:
+            token = "s" + hashlib.blake2s(source["id"].encode("utf-8"), key=self._source_secret,
+                                           digest_size=8).hexdigest()
+            self._source_tokens[token] = source["id"]
+            choices.append({"id": token, "name": source["name"]})
+        current = next((token for token, source in self._source_tokens.items()
+                        if source == (selected or self.display_source)), "s0")
+        self._latest_sources = {"type": "display_sources", "sources": choices,
+                                "selected": current}
+        if self.active:
+            self._send(self._latest_sources)
+
+    def save_display_source(self, source: str) -> None:
+        if self.data_directory is None:
+            raise ValueError("桌宠实例尚未启动")
+        path = self.data_directory / "display-source.json"
+        temporary = path.with_suffix(".json.tmp")
+        try:
+            temporary.write_text(json.dumps({"source": source}, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        self.display_source = source
+        # 切换来源后下一条用量必须标记账户变更，避免余额卡片把新账户数值当作扣费。
+        self.balance_scope = "\0"
 
     def update_work_status(self, status: str | None, text: str = "") -> None:
         # 当前主程序没有任务生命周期来源；可选事件只在调用方提供真实状态时发送。
@@ -216,10 +267,17 @@ class VPetHost(QObject):
                     self._send(self._latest_usage)
                 if self._latest_work_status is not None:
                     self._send(self._latest_work_status)
+                if self._latest_sources is not None:
+                    self._send(self._latest_sources)
                 self._send({"type": "visibility", "visible": self.visible})
                 self.ready.emit()
             elif event == "error":
                 self._fail("桌宠运行异常，已返回悬浮球。")
+            elif self.active and event == "select_source":
+                token = message.get("source")
+                source = self._source_tokens.get(token) if isinstance(token, str) and len(token) <= 80 else None
+                if source is not None:
+                    self.source_requested.emit(source)
             elif self.active and event in {"open_panel", "open_settings", "disable_pet", "quit"}:
                 # 只接受固定的本地 UI 动作，子进程不能要求主程序执行命令或访问任意地址。
                 self.action_requested.emit(event)

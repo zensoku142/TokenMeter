@@ -153,6 +153,7 @@ class _ProfileTask(QRunnable):
 
 class AccountProfilesPage(ProviderOverview):
     quota_observed = Signal(str, str, str, object)
+    profiles_changed = Signal()
 
     def __init__(self, parent=None, *, embedded_settings=False):
         super().__init__(parent)
@@ -197,6 +198,8 @@ class AccountProfilesPage(ProviderOverview):
                     self._details.reject()
         self.profiles = profiles
         self._render()
+        if previous != current:
+            self.profiles_changed.emit()
         return True
 
     def _render(self):
