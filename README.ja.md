@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex の利用枠、DeepSeek の本日の時間帯別使用量と残高、フローティング表示、VPet（デモデータ）" width="960"></a>
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex の利用枠、DeepSeek の本日の時間帯別使用量と残高、フローティング表示、VPet と鯨の少女（デモデータ）" width="960"></a>
 </p>
 
 実際のコンポーネントを撮影した画面です。表示は中国語、数値はデモデータです。[元画像と出典](docs/images/readme/README.md)。

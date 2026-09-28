@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter: Codex quotas, DeepSeek intraday usage and balance, floating widgets, and VPet (demo data)" width="960"></a>
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter: Codex quotas, DeepSeek intraday usage and balance, floating widgets, VPet and Whale Girl (demo data)" width="960"></a>
 </p>
 
 Actual component screenshots in Chinese, using demo data. [Original images and sources](docs/images/readme/README.md).

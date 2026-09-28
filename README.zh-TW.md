@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 額度、DeepSeek 今日分時與餘額、懸浮球及 VPet 桌寵（示範資料）" width="960"></a>
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 額度、DeepSeek 今日分時與餘額、懸浮球、VPet 與鯨魚娘桌寵（示範資料）" width="960"></a>
 </p>
 
 真實元件截圖，介面為簡體中文，使用示範資料。[查看原圖與來源](docs/images/readme/README.md)。

@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 额度、DeepSeek 今日分时与余额、悬浮球及 VPet 桌宠（演示数据）" width="960"></a>
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 额度、DeepSeek 今日分时与余额、悬浮球及 VPet 与鲸鱼娘桌宠（演示数据）" width="960"></a>
 </p>
 
 真实组件截图，使用演示数据。[查看原图与来源](docs/images/readme/README.md)。

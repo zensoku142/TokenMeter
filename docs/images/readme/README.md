@@ -16,16 +16,22 @@
 | 深色额度悬浮球 | [ball-dark.png](ball-dark.png) | 248 × 248 |
 | 自定义紫色额度悬浮球 | [ball-violet.png](ball-violet.png) | 248 × 248 |
 | DeepSeek 金额悬浮球 | [ball-deepseek.png](ball-deepseek.png) | 248 × 248 |
-| 桌宠与头顶额度气泡 | [pet-floating.png](pet-floating.png) | 244 × 286 |
-| 桌宠贴边与额度气泡 | [pet-docked.png](pet-docked.png) | 192 × 378 |
+| 历史 VPet 与旧云朵气泡（归档） | [pet-floating.png](pet-floating.png) | 244 × 286 |
+| 历史 VPet 贴边与旧云朵气泡（归档） | [pet-docked.png](pet-docked.png) | 192 × 378 |
+| 当前 VPet 角色动画帧 | [pet-vpet-current.png](pet-vpet-current.png) | 220 × 220 |
+| 当前 VPet 对白框 | [pet-vpet-speech.png](pet-vpet-speech.png) | 100 × 56 |
+| 当前鲸鱼娘角色动画帧 | [pet-whale-current.png](pet-whale-current.png) | 220 × 220 |
+| 当前鲸鱼娘额度扣减反馈 | [pet-whale-quota-stacked.png](pet-whale-quota-stacked.png) | 106 × 94 |
 
 DeepSeek 示例重点展示“今日分时”：按 5 分钟显示缓存命中、未命中和输出 Token 的消耗变化，保留程序的“估算”标记。同时显示今日使用金额 `¥3.94` 和账户余额 `¥128.64`；金额悬浮球沿用同一组演示数据。Codex 展示订阅额度和年度活动，额度及桌宠气泡示例为剩余 `65%`。
+
+2026-09-28 更新产品介绍图时，在隔离数据目录实际启动当前 WPF 桌宠：VPet 使用正常演示启动并显示对白框；鲸鱼娘使用桌面自检中的两次额度下降状态，截到连续 `-1%` 和剩余 `7%` 的卡片。上表四张新图分别来自宿主的真实窗口渲染，产品介绍图和官网透明角色图只对这些截图排版；历史面板截图仍保留 2026-08-31 的演示数据。旧云朵图片仅作历史原图存档，当前用户界面不再提供该样式。
 
 ## 采集与排版
 
 - 面板和悬浮球：运行 `ui/qt_widget.py`、`ui/qt_panel.py` 和 `ui/qt_ball.py` 的生产组件，以 Qt 2 倍缩放导出窗口原始像素。Codex 面板状态栏明确标注“演示数据”。
 - 桌宠与气泡：运行当前本地宿主构建，通过 `pet_host/PetWindow.CloudChecks.cs` 中的 `CaptureCloudPreview` 导出实际 WPF 控件，保留宿主生成的背景及贴边裁切。
-- [产品介绍图](../readme-hero.webp)：将原图等比排版为 1920 × 1624 的 WebP，添加标题、说明和来源，不更改截图中的界面文字或控件。额外保留 Codex 深色原图供对照。
+- [产品介绍图](../readme-hero.webp)：保留上述历史面板与悬浮球截图，桌宠部分于 2026-09-28 换成当前宿主实测的 VPet 对白框和鲸鱼娘额度扣减反馈，输出 1920 × 1624 WebP；未重绘截图里的界面文字或控件。额外保留 Codex 深色原图供对照。
 - 本次仅进行图片与文档验收；隔离桌面下的宿主检查不能替代真实桌面的鼠标捕获、拖拽和焦点验证。
 
 ## 官网多语言面板

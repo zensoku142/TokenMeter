@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter: Codex 한도, DeepSeek 오늘 시간대별 사용량과 잔액, 플로팅 위젯, VPet (데모 데이터)" width="960"></a>
+  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter: Codex 한도, DeepSeek 오늘 시간대별 사용량과 잔액, 플로팅 위젯, VPet과 고래 소녀 (데모 데이터)" width="960"></a>
 </p>
 
 실제 컴포넌트 화면이며 중국어 UI와 데모 데이터를 사용했습니다. [원본 이미지와 출처](docs/images/readme/README.md).
