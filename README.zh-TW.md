@@ -34,7 +34,7 @@
 
 TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 15 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
 
-目前版本：**v1.16.2** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+目前版本：**v1.16.3** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
@@ -118,7 +118,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.16.2`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.16.3`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

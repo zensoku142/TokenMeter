@@ -34,7 +34,7 @@
 
 TokenMeter は Windows 10/11 向けの軽量な AI 使用量モニターです。15 の独立した接続先を備え、各サービスの対応範囲に応じて契約の利用枠、リセット時刻、API コスト、残高と履歴を表示します。
 
-現在のバージョン：**v1.16.2** · ペット **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+現在のバージョン：**v1.16.3** · ペット **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 機能
 
@@ -118,7 +118,7 @@ Qt テストには利用可能な Windows デスクトップセッション、�
 
 ## バージョン
 
-本体 `1.16.2`、任意のペット拡張 `0.2.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
+本体 `1.16.3`、任意のペット拡張 `0.2.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
 
 ## ライセンスと謝辞
 

@@ -34,7 +34,7 @@ Actual component screenshots in Chinese, using demo data. [Original images and s
 
 TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
 
-Current version：**v1.16.2** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.16.3** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
@@ -118,7 +118,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.16.2`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.16.3`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 
