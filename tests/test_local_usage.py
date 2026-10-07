@@ -115,6 +115,46 @@ def test_unreadable_log_drops_stale_rows_and_recovers(tmp_path, monkeypatch):
     assert scanner.issues == 0
 
 
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("timestamp", [
+    "0001-01-01T00:00:00+23:59", "9999-12-31T23:59:59-23:59",
+])
+def test_out_of_range_local_timestamp_skips_only_bad_record(tmp_path, provider, timestamp):
+    if provider == "codex":
+        records = [codex(100), codex(150, timestamp), codex(200, "2026-09-07T02:00:00Z")]
+        path = tmp_path / "sessions/log.jsonl"
+        expected_total = 200
+    else:
+        bad = dict(claude("m2"), timestamp=timestamp)
+        records = [claude(), bad, claude("m3")]
+        path = tmp_path / "projects/a/log.jsonl"
+        expected_total = 360
+    write(path, records)
+    scanner = LocalUsageScanner()
+    rows = scanner.scan({provider: tmp_path})
+    assert len(rows) == 2
+    assert sum(row.total for row in rows) == expected_total
+    assert scanner.issues == 1
+    assert scanner.scan({provider: tmp_path}) == rows
+    assert scanner.issues == 1
+
+
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+def test_deep_json_record_does_not_abort_local_scan(tmp_path, provider):
+    path = tmp_path / ("sessions/log.jsonl" if provider == "codex" else "projects/a/log.jsonl")
+    record = codex(100) if provider == "codex" else claude()
+    write(path, [record])
+    valid = path.read_bytes()
+    path.write_bytes(b'{"usage":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}\n' + valid)
+    scanner = LocalUsageScanner()
+    rows = scanner.scan({provider: tmp_path})
+    assert len(rows) == 1
+    assert rows[0].total == (100 if provider == "codex" else 180)
+    assert scanner.issues == 1
+    assert scanner.scan({provider: tmp_path}) is rows
+    assert scanner.issues == 1
+
+
 @pytest.fixture
 def zcode_database(tmp_path):
     path = tmp_path / "cli/db/db.sqlite"

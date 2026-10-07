@@ -197,7 +197,7 @@ class LocalUsageScanner:
                         record = json.loads(raw)
                         if isinstance(record, dict):
                             self._record(provider, record, data)
-                    except (ValueError, TypeError, AttributeError):
+                    except (ValueError, TypeError, AttributeError, OverflowError, OSError, RecursionError):
                         data.issues += 1
                 data.offset = stream.tell()
             data.signature = signature
@@ -234,7 +234,8 @@ class LocalUsageScanner:
             )):
                 data.issues += 1
                 return
-            stamp = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00"))
+            # 先完成日期转换，再更新累计基数；无效日期不能吞掉后续有效记录的增量。
+            day = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone().date().isoformat()
             current = {name: _count(usage.get(name)) for name in (
                 "input_tokens", "output_tokens", "cached_input_tokens", "total_tokens",
             )}
@@ -255,7 +256,7 @@ class LocalUsageScanner:
             )):
                 data.issues += 1
                 return
-            stamp = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00"))
+            day = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone().date().isoformat()
             data.session = str(record.get("sessionId") or data.session)
             data.project = Path(str(record.get("cwd") or "")).name or data.project
             data.model = str(message.get("model") or "")
@@ -269,7 +270,6 @@ class LocalUsageScanner:
             ))
             # Claude 输入分项互斥；统一 input 为含缓存输入，total 不再二次加缓存。
             values = (uncached + read + write, output, read, write, uncached + output + read + write)
-        day = stamp.astimezone().date().isoformat()
         if values[-1] <= 0:
             return
         row = LocalUsage(provider, data.session, data.project, day, data.model, *values)
