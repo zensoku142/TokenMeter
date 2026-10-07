@@ -361,6 +361,87 @@ def test_report_cache_is_scoped_and_rejects_malformed_counts(tmp_path):
     assert load_local_report(scope) is None
 
 
+def test_scan_updates_issue_metadata_without_rebuilding_unchanged_rows(tmp_path):
+    write(tmp_path / "claude/projects/a/log.jsonl", [claude()])
+    roots = {"claude": tmp_path / "claude", "codex": tmp_path / "missing"}
+    scanner = LocalUsageScanner()
+    rows = scanner.scan(roots)
+    assert len(rows) == 1
+    assert scanner.issues == 1
+    roots["codex"].mkdir()
+    assert scanner.scan(roots) is rows
+    assert scanner.issues == 0
+    assert scanner.changed
+    assert scanner.scan(roots) is rows
+    assert not scanner.changed
+    roots["codex"].rmdir()
+    assert scanner.scan(roots) is rows
+    assert scanner.issues == 1
+    assert scanner.changed
+
+
+def test_first_empty_scan_replaces_stale_persistent_report(tmp_path):
+    from data.local_usage import load_local_report, local_cache_scope, save_local_report
+    from ui.local_analytics import _ScanTask
+
+    roots = {"claude": tmp_path}
+    scope = local_cache_scope(roots)
+    stale = [LocalUsage("claude", "old", "p", "2026-09-07", "m", 1, 0, 0, 0, 1)]
+    save_local_report(scope, stale, 2)
+    task = _ScanTask(LocalUsageScanner(), roots, load_cache=True)
+    results = []
+    task.signals.cached.connect(lambda rows, issues: results.append((rows, issues)))
+    task.signals.finished.connect(lambda rows, issues, failed: results.append((rows, issues)))
+    task.run()
+    assert results == [(stale, 2), ([], 0)]
+    assert load_local_report(scope) == ([], 0)
+
+
+def test_next_scan_cannot_be_overwritten_by_previous_snapshot(tmp_path):
+    from data.local_usage import load_local_report, local_cache_scope
+    from ui.local_analytics import _ScanTask
+
+    path = tmp_path / "projects/a/log.jsonl"
+    write(path, [claude()])
+    roots = {"claude": tmp_path}
+    scanner = LocalUsageScanner()
+    first = _ScanTask(scanner, roots)
+    results = []
+
+    def refresh_again(rows, issues, failed):
+        results.append((sum(row.total for row in rows), issues, failed))
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(claude("m2")) + "\n")
+        second = _ScanTask(scanner, roots)
+        second.signals.finished.connect(
+            lambda rows, issues, failed: results.append((sum(row.total for row in rows), issues, failed))
+        )
+        second.run()
+
+    first.signals.finished.connect(refresh_again)
+    first.run()
+    assert results == [(180, 0, False), (360, 0, False)]
+    persisted = load_local_report(local_cache_scope(roots))
+    assert persisted is not None
+    assert sum(row.total for row in persisted[0]) == 360
+
+
+def test_snapshot_write_failure_still_delivers_successful_scan(tmp_path, monkeypatch):
+    from ui import local_analytics
+
+    write(tmp_path / "projects/a/log.jsonl", [claude()])
+    events = []
+
+    def save(*args):
+        raise sqlite3.OperationalError("snapshot unavailable")
+
+    monkeypatch.setattr(local_analytics, "save_local_report", save)
+    task = local_analytics._ScanTask(LocalUsageScanner(), {"claude": tmp_path})
+    task.signals.finished.connect(lambda rows, issues, failed: events.append((len(rows), issues, failed)))
+    task.run()
+    assert events == [(1, 0, False)]
+
+
 def test_worker_delivers_cached_report_before_refresh(monkeypatch, tmp_path):
     from unittest.mock import Mock
 

@@ -58,6 +58,7 @@ class LocalUsageScanner:
         self._last_rows: list[LocalUsage] | None = None
 
     def scan(self, roots: dict[str, Path]) -> list[LocalUsage]:
+        previous_issues = self.issues
         self.issues = 0
         self.changed = False
         current: set[tuple[str, Path]] = set()
@@ -89,7 +90,10 @@ class LocalUsageScanner:
         self.changed = self.changed or bool(set(self.files) - current)
         self.files = {key: value for key, value in self.files.items() if key in current}
         self.issues += sum(data.issues for data in self.files.values())
-        if not self.changed and self._last_rows is not None:
+        rows_changed = self.changed or self._last_rows is None
+        # 空结果也必须覆盖旧快照；只有异常数变化时保留行对象，避免 UI 重聚合。
+        self.changed = rows_changed or self.issues != previous_issues
+        if not rows_changed and self._last_rows is not None:
             return self._last_rows
         events: dict[tuple[str, str, str], LocalUsage] = {}
         for (provider, _path), data in self.files.items():

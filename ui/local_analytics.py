@@ -75,11 +75,12 @@ class _ScanTask(QRunnable):
                 except Exception:
                     pass
             rows = self.scanner.scan(self.roots)
-            self.signals.finished.emit(rows, self.scanner.issues, False)
             # 快照是可选加速；存储失败不影响当前内存中的有效统计。
             with suppress(Exception):
                 if self.scanner.changed:
                     save_local_report(scope, rows, self.scanner.issues)
+            # 完成后 UI 可启动下一轮扫描；旧快照必须先写完，不能覆盖后续的新结果。
+            self.signals.finished.emit(rows, self.scanner.issues, False)
         except Exception:
             # 后台扫描失败必须恢复按钮；错误提示不包含路径、原始日志或对话。
             self.signals.finished.emit([], 0, True)
