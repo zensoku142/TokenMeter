@@ -6,7 +6,6 @@ import base64
 import hashlib
 import json
 import os
-import re
 import threading
 import time
 from collections.abc import Mapping
@@ -27,7 +26,6 @@ from api.providers.base import (
     build_session,
 )
 
-_TIMESTAMP = re.compile(r'^\{"timestamp":"([^"]+)"')
 _MAX_SESSION_LINE_BYTES = 1024 * 1024
 _ActivityRows = tuple[tuple[str, int], ...]
 _ActivityData = tuple[_ActivityRows, _ActivityRows, tuple[QuotaMetric, ...]]
@@ -224,8 +222,6 @@ class CodexProvider(Provider):
                     if oversized:
                         continue
                     line = raw.decode("utf-8", errors="replace")
-                    match = _TIMESTAMP.match(line)
-                    observed_at = cls._parse_timestamp(match.group(1)) if match else None
                     is_session_meta = '"session_meta"' in line
                     is_event_msg = '"event_msg"' in line
                     has_task_boundary = any(
@@ -244,7 +240,13 @@ class CodexProvider(Provider):
                         record_type = payload.get("type") if isinstance(payload, dict) else None
                         event = payload.get("payload") if isinstance(payload, dict) else None
                         event_type = event.get("type") if isinstance(event, dict) else None
-                    except (AttributeError, json.JSONDecodeError):
+                        observed_at = cls._parse_timestamp(str(payload.get("timestamp") or ""))
+                        if observed_at is None:
+                            continue
+                        # 日志允许任意字段顺序/空格；日期有效后才能推进计数和任务状态。
+                        observed_at = observed_at.astimezone()
+                        usage_day = observed_at.date().isoformat()
+                    except (AttributeError, ValueError, OverflowError, OSError, RecursionError):
                         continue
                     if observed_at is not None:
                         if record_type == "session_meta" and usage.task_start is None:
@@ -275,7 +277,9 @@ class CodexProvider(Provider):
                         )
                         if not isinstance(total_usage, dict):
                             continue
-                        total = int(total_usage.get("total_tokens") or 0)
+                        total = total_usage.get("total_tokens")
+                        if type(total) is not int or total < 0:
+                            continue
                     except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
                         continue
                     delta_total = total - usage.last_total if total >= usage.last_total else total
@@ -285,7 +289,6 @@ class CodexProvider(Provider):
                     usage.peak_total = max(usage.peak_total, total)
                     if delta <= 0 or observed_at is None:
                         continue
-                    usage_day = observed_at.astimezone().date().isoformat()
                     usage.daily[usage_day] = usage.daily.get(usage_day, 0) + delta
                 usage.offset = handle.tell()
         except OSError:

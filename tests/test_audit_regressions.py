@@ -259,6 +259,70 @@ def test_large_irrelevant_session_line_does_not_hide_following_event(tmp_path):
     assert sum(value.daily.values()) == 4
 
 
+def _codex_usage_event(total, timestamp="2026-09-07T01:00:00Z"):
+    return {"timestamp": timestamp, "type": "event_msg", "payload": {
+        "type": "token_count", "info": {"total_token_usage": {"total_tokens": total}},
+    }}
+
+
+@pytest.mark.parametrize("layout", ["compact", "spaced", "reordered"])
+def test_codex_activity_accepts_json_field_order_and_whitespace(tmp_path, layout):
+    record = _codex_usage_event(100)
+    if layout == "reordered":
+        record = {"type": record["type"], "payload": record["payload"], "timestamp": record["timestamp"]}
+    path = tmp_path / "session.jsonl"
+    path.write_text(json.dumps(record, separators=(",", ":") if layout != "spaced" else None) + "\n")
+    usage = CodexProvider._scan_session_file(path, None)
+    assert usage is not None
+    assert sum(usage.daily.values()) == 100
+
+
+@pytest.mark.parametrize("invalid", [-10, True, 12.5, "9000", None, float("inf")])
+def test_codex_activity_ignores_invalid_counts_without_changing_baseline(tmp_path, invalid):
+    records = [_codex_usage_event(100), _codex_usage_event(invalid), _codex_usage_event(200)]
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in records))
+    usage = CodexProvider._scan_session_file(path, None)
+    assert usage is not None
+    assert sum(usage.daily.values()) == 200
+    assert usage.peak_total == 200
+    assert usage.last_total == 200
+
+
+@pytest.mark.parametrize("timestamp", [None, "bad", "0001-01-01T00:00:00+23:59", "9999-12-31T23:59:59-23:59"])
+def test_codex_activity_ignores_bad_dates_without_losing_increments(tmp_path, timestamp):
+    records = [_codex_usage_event(100), _codex_usage_event(150, timestamp), _codex_usage_event(200)]
+    path = tmp_path / "session.jsonl"
+    path.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in records))
+    usage = CodexProvider._scan_session_file(path, None)
+    assert usage is not None
+    assert sum(usage.daily.values()) == 200
+
+
+def test_codex_activity_skips_deep_json_and_keeps_following_usage(tmp_path):
+    path = tmp_path / "session.jsonl"
+    valid = json.dumps(_codex_usage_event(100), separators=(",", ":")).encode() + b"\n"
+    path.write_bytes(b'{"type":"event_msg","payload":{"type":"token_count","info":'
+                     + b'[' * 10000 + b'0' + b']' * 10000 + b'}}\n' + valid)
+    usage = CodexProvider._scan_session_file(path, None)
+    assert usage is not None
+    assert sum(usage.daily.values()) == 100
+
+
+def test_codex_task_duration_accepts_mixed_naive_and_aware_timestamps(tmp_path):
+    start = datetime(2026, 9, 7, 12)
+    end = (start + timedelta(minutes=5)).astimezone().isoformat()
+    path = tmp_path / "session.jsonl"
+    records = [
+        {"timestamp": start.isoformat(), "type": "event_msg", "payload": {"type": "task_started"}},
+        {"timestamp": end, "type": "event_msg", "payload": {"type": "task_complete"}},
+    ]
+    path.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in records))
+    usage = CodexProvider._scan_session_file(path, None)
+    assert usage is not None
+    assert usage.longest_task_seconds == 300
+
+
 def test_official_today_skips_local_log_scan(monkeypatch):
     monkeypatch.setattr(CodexProvider, "_activity_cache", {})
     provider = CodexProvider({})
