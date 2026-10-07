@@ -1,8 +1,11 @@
 import csv
 import json
 import sqlite3
+from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
+
+import pytest
 
 from data.local_usage import LocalUsage, LocalUsageScanner, export_usage, filter_usage
 
@@ -85,6 +88,111 @@ def test_malformed_usage_and_warning_survives_cached_scan(tmp_path):
     assert len(scanner.scan({"claude": tmp_path})) == 1
     assert scanner.issues == 1
     scanner.scan({"claude": tmp_path})
+    assert scanner.issues == 1
+
+
+def test_unreadable_log_drops_stale_rows_and_recovers(tmp_path, monkeypatch):
+    path = tmp_path / "projects/a/log.jsonl"
+    write(path, [claude()])
+    scanner = LocalUsageScanner()
+    expected = scanner.scan({"claude": tmp_path})
+    assert len(expected) == 1
+    original_stat = Path.stat
+
+    def unavailable(self, *args, **kwargs):
+        if self == path:
+            raise PermissionError("log unavailable")
+        return original_stat(self, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "stat", unavailable)
+        assert scanner.scan({"claude": tmp_path}) == []
+        assert scanner.changed
+        assert scanner.issues == 1
+        assert scanner.scan({"claude": tmp_path}) == []
+    assert scanner.scan({"claude": tmp_path}) == expected
+    assert scanner.changed
+    assert scanner.issues == 0
+
+
+@pytest.fixture
+def zcode_database(tmp_path):
+    path = tmp_path / "cli/db/db.sqlite"
+    path.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executescript("""
+            CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+            CREATE TABLE model_usage (
+                id TEXT PRIMARY KEY, session_id TEXT, model_id TEXT, started_at INTEGER,
+                input_tokens INTEGER, output_tokens INTEGER, cache_read_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER, computed_total_tokens INTEGER, status TEXT
+            );
+            INSERT INTO session VALUES ('s1', 'C:/work/project');
+            INSERT INTO model_usage VALUES
+                ('r1', 's1', 'GLM-5', 1788750000000, 120, 30, 80, 10, 150, 'completed');
+        """)
+    return path
+
+
+def test_zcode_read_failure_drops_stale_rows_and_recovers(zcode_database, tmp_path, monkeypatch):
+    scanner = LocalUsageScanner()
+    expected = scanner.scan({"zcode": tmp_path})
+    assert len(expected) == 1
+    with closing(sqlite3.connect(zcode_database)) as connection, connection:
+        connection.execute("UPDATE model_usage SET output_tokens=40, computed_total_tokens=160")
+
+    def unavailable(*args, **kwargs):
+        raise sqlite3.OperationalError("database unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect", unavailable)
+        assert scanner.scan({"zcode": tmp_path}) == []
+        assert scanner.changed
+        assert scanner.issues == 1
+        assert scanner.scan({"zcode": tmp_path}) == []
+    rows = scanner.scan({"zcode": tmp_path})
+    assert len(rows) == 1
+    assert rows[0].total == 160
+    assert scanner.changed
+    assert scanner.issues == 0
+
+
+@pytest.mark.parametrize("query_fails", [False, True])
+def test_zcode_connection_is_closed_after_scan(zcode_database, tmp_path, monkeypatch, query_fails):
+    if query_fails:
+        with closing(sqlite3.connect(zcode_database)) as connection, connection:
+            connection.execute("DROP TABLE model_usage")
+    original_connect = sqlite3.connect
+    opened = []
+
+    def tracked_connect(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    scanner = LocalUsageScanner()
+    rows = scanner.scan({"zcode": tmp_path})
+    assert len(rows) == (0 if query_fails else 1)
+    assert scanner.issues == int(query_fails)
+    assert len(opened) == 1
+    try:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            opened[0].execute("SELECT 1")
+    finally:
+        opened[0].close()
+
+
+def test_zcode_bad_timestamp_keeps_other_usage(zcode_database, tmp_path):
+    with closing(sqlite3.connect(zcode_database)) as connection, connection:
+        connection.execute("""INSERT INTO model_usage VALUES
+            ('bad', 's1', 'GLM-5', 9223372036854775807, 120, 30, 80, 10, 150, 'completed')""")
+    scanner = LocalUsageScanner()
+    rows = scanner.scan({"zcode": tmp_path})
+    assert len(rows) == 1
+    assert rows[0].total == 150
+    assert scanner.issues == 1
+    assert scanner.scan({"zcode": tmp_path}) == rows
     assert scanner.issues == 1
 
 

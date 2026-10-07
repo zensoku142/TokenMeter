@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 from config import runtime as config_manager
@@ -249,7 +249,7 @@ def install_pack(
                         or "\\" in item.filename
                         or any(part in {".", ".."} or part.endswith((".", " "))
                                or any(char in part for char in ':<>"|?*')
-                               or Path(part).is_reserved() for part in path.parts)
+                               or PureWindowsPath(part).is_reserved() for part in path.parts)
                         or stat.S_ISLNK(item.external_attr >> 16)
                         or item.filename.lower() in seen):
                     raise ValueError("桌宠扩展包包含不安全路径")

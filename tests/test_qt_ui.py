@@ -3761,9 +3761,10 @@ def test_settings_loads_and_persists_background_provider_selection():
         window.close()
 
 
-def test_settings_codex_home_uses_read_only_directory_picker():
-    configured = r"C:\Users\example\.codex\auth.json"
-    selected = r"D:\CodexData"
+def test_settings_codex_home_uses_read_only_directory_picker(tmp_path):
+    codex_home = tmp_path / ".codex"
+    configured = str(codex_home / "auth.json")
+    selected = str(tmp_path / "CodexData")
     values = {
         **config_manager.all_config(),
         "ACTIVE_PROVIDER": "codex",
@@ -3786,14 +3787,14 @@ def test_settings_codex_home_uses_read_only_directory_picker():
         assert editor.isReadOnly()
         assert browse_button is not None
         assert default_button is not None
-        assert editor.text() == r"C:\Users\example\.codex"
+        assert editor.text() == str(codex_home)
         browse_button.click()
         assert editor.text() == selected
         assert window._values()["CODEX_HOME"] == selected
         choose_directory.assert_called_once_with(
             window,
             "选择Codex 目录（可选）",
-            r"C:\Users\example\.codex",
+            str(codex_home),
         )
 
         default_button.click()

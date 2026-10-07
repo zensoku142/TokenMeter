@@ -112,6 +112,7 @@ def test_release_pack_requires_bundled_runtime(tmp_path, monkeypatch):
 @pytest.mark.parametrize("filename", [
     "../escape.txt", "/escape.txt", "C:/escape.txt", "dir\\escape.txt", "dir/file:stream",
     "dir/trailing. ", "TokenMeter.Pet.exe", "resources/../../escape", "CON", "bad?.txt",
+    "dir/con.txt", "dir/NUL", "dir/COM1.log", "dir/LPT9", "dir/COM¹.txt",
 ])
 def test_extract_rejects_unsafe_and_duplicate_paths(pack, tmp_path, filename):
     with zipfile.ZipFile(pack, "a") as archive:

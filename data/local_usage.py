@@ -7,6 +7,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -119,7 +120,7 @@ class LocalUsageScanner:
             data = _FileUsage(signature)
             # ZCode 已将用量单独规范化到 SQLite；仅读这些数值列，避免接触消息和对话正文。
             uri = f"{path.resolve().as_uri()}?mode=ro"
-            with sqlite3.connect(uri, uri=True, timeout=1) as connection:
+            with closing(sqlite3.connect(uri, uri=True, timeout=1)) as connection:
                 connection.execute("PRAGMA query_only = ON")
                 rows = connection.execute(
                     """SELECT m.id, m.session_id, s.directory, m.model_id, m.started_at,
@@ -134,12 +135,17 @@ class LocalUsageScanner:
                     if not all(type(value) is int and value >= 0 for value in (started_at, *counts)):
                         data.issues += 1
                         continue
-                    stamp = datetime.fromtimestamp(started_at / 1000, timezone.utc)
+                    try:
+                        stamp = datetime.fromtimestamp(started_at / 1000, timezone.utc)
+                        day = stamp.astimezone().date().isoformat()
+                    except (OSError, ValueError, OverflowError):
+                        data.issues += 1
+                        continue
                     usage = LocalUsage(
                         "zcode",
                         str(session),
                         Path(str(directory or "")).name,
-                        stamp.astimezone().date().isoformat(),
+                        day,
                         str(model or ""),
                         *counts,
                     )
@@ -147,7 +153,8 @@ class LocalUsageScanner:
             self.changed = True
             self.files[key] = data
         except (OSError, sqlite3.Error, ValueError, OverflowError):
-            self.files.pop(key, None)
+            if self.files.pop(key, None) is not None:
+                self.changed = True
             self.issues += 1
 
     def _read(self, provider: str, path: Path) -> None:
@@ -197,7 +204,8 @@ class LocalUsageScanner:
             self.files[key] = data
         except OSError:
             # 读到一半出错时丢弃该文件的可变扫描状态，下次从头重建，避免累计值重复差分。
-            self.files.pop(key, None)
+            if self.files.pop(key, None) is not None:
+                self.changed = True
             self.issues += 1
 
     def _record(self, provider: str, record: dict, data: _FileUsage) -> None:
@@ -273,13 +281,16 @@ class LocalUsageScanner:
 def filter_usage(rows: list[LocalUsage], days: int, project: str = "", *, today=None) -> list[LocalUsage]:
     today = today or datetime.now().date()
     first = (today - timedelta(days=max(0, days - 1))).isoformat() if days else ""
-    return [row for row in rows if (not first or row.day >= first) and row.day <= today.isoformat()
-            and (not project or project.casefold() in row.project.casefold())]
+    last = today.isoformat()
+    project = project.casefold()
+    return [row for row in rows if (not first or row.day >= first) and row.day <= last
+            and (not project or project in row.project.casefold())]
 
 
 def daily_model_series(rows: list[LocalUsage], start: date, end: date):
     # 与分时的稀疏数据展示一致：空日期不占横轴位置，单个模型缺失仍保留其他模型的该日数据。
-    rows = [row for row in rows if start.isoformat() <= row.day <= end.isoformat() and row.total > 0]
+    first, last = start.isoformat(), end.isoformat()
+    rows = [row for row in rows if first <= row.day <= last and row.total > 0]
     days = sorted({row.day for row in rows})
     totals: dict[tuple[str, str], int] = {}
     for row in rows:
