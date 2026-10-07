@@ -484,6 +484,36 @@ def test_visible_page_auto_refreshes_and_hidden_page_stops_timer(monkeypatch):
     dialog.scan.assert_called_once_with()
 
 
+def test_hiding_statistics_does_not_lose_pending_project_filter(monkeypatch):
+    from unittest.mock import Mock
+
+    from PySide6.QtWidgets import QApplication
+
+    from ui.local_analytics import LocalAnalyticsDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = LocalAnalyticsDialog()
+    monkeypatch.setattr(dialog, "scan", Mock())
+    dialog.show()
+    app.processEvents()
+    dialog._finished([
+        LocalUsage("codex", "s1", "keep", date.today().isoformat(), "m", 10, 0, 0, 0, 10),
+        LocalUsage("codex", "s2", "other", date.today().isoformat(), "m", 20, 0, 0, 0, 20),
+    ], 0, False)
+    dialog.table_button.click()
+    assert dialog.total_label.toolTip() == "30 Token"
+    monkeypatch.setattr(dialog.project, "hasFocus", lambda: True)
+    dialog.project.setText("keep")
+    assert dialog._project_timer.isActive()
+    dialog.hide()
+    assert not dialog._project_timer.isActive()
+    dialog.show()
+    app.processEvents()
+    assert dialog.total_label.toolTip() == "10 Token"
+    assert dialog.table.item(0, 2).toolTip() == "10 Token"
+    assert sum(row.total for row in dialog.filtered_rows()) == 10
+
+
 def test_chart_and_table_share_filters_and_switch_without_scanning(monkeypatch):
     from unittest.mock import Mock
 

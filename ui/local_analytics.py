@@ -471,7 +471,10 @@ class LocalAnalyticsDialog(QDialog):
 
     def hideEvent(self, event):
         self._auto_timer.stop()
-        self._project_timer.stop()
+        if self._project_timer.isActive():
+            self._project_timer.stop()
+            # 隐藏前提交尚未生效的筛选；快速返回时不会再触发扫描或补发定时器。
+            self.render()
         self.hover_tooltip.hide()
         super().hideEvent(event)
 
