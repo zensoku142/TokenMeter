@@ -83,3 +83,10 @@
 ## 六批累计验证
 
 Linux / Python 3.12.14 上完整运行 `QT_QPA_PLATFORM=offscreen python -m pytest -q --durations=10`：**1720 项通过、5 项跳过、172 个子测试通过**，49.15 秒。跳过项仍为原有 Windows 平台测试；重复 ZIP 条目的测试警告仍为预期行为。
+
+## 第七批：合入前自动验证
+
+- `fix/**` 和 `release/**` 分支推送时直接运行现有 Windows `quality` 检查，便于在更新主分支之前完成测试、静态检查、依赖审计及 WPF 编译。
+- 保留原有主分支和 PR 检查，检查内容及主分支保护规则不变。
+
+验证方式：推送修复分支后核对该提交的 GitHub Actions 结果；只有 `quality` 成功后才继续更新主分支。
