@@ -260,6 +260,9 @@ def test_pet_page_and_version_state_follow_language(isolated_language):
         try:
             isolated_language.set_language("en")
             assert window.tabs.tabText(4) == "Pet"
+            assert window.vpet_show_ball_check.toolTip() == (
+                "Keep the floating ball visible while the pet is running."
+            )
             assert window.pet_whale_button.text() == "Install"
             assert "Right-click a pet" in window.pet_character_hint.text()
             assert window.pet_channel_combo.itemText(1) == "Preview"
@@ -272,6 +275,7 @@ def test_pet_page_and_version_state_follow_language(isolated_language):
             assert window.pet_version_label.text() == "v0.1.0"
             isolated_language.set_language("zh-cn")
             assert window.tabs.tabText(4) == "桌宠"
+            assert window.vpet_show_ball_check.toolTip() == "开启后，桌宠运行时仍显示悬浮球。"
             assert window.pet_whale_button.text() == "安装"
             assert window.pet_channel_combo.itemText(1) == "体验版"
             assert window.pet_version_label.text() == "v0.1.0"

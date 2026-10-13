@@ -917,8 +917,8 @@ class FloatingUsageBall(QWidget):
 
     def _primary_quota_radius(self) -> float:
         radius = DESIGN_SIZE / 2 - (8 if self._peak_highlight else 3)
-        # 双额度模式为周额度液体槽预留真实空间，而不是把粗描边叠在主水球上。
-        return radius - 7 if self._quota_secondary_remaining is not None else radius
+        # 细进度环与主水球之间保留留白，缩放后也不会贴在液面边缘。
+        return radius - 5 if self._quota_secondary_remaining is not None else radius
 
     def set_peak_highlight(self, enabled: bool) -> None:
         enabled = bool(enabled)
@@ -1568,17 +1568,17 @@ class FloatingUsageBall(QWidget):
     ) -> None:
         if self._quota_secondary_remaining is None:
             return
-        # 周额度使用独立的玻璃液体槽；空槽和填充共同表达比例，避免依赖第二组文字或异色。
-        channel_width = 7.0
-        channel_radius = ball_radius - 6.0
+        # 周额度使用轻量细环，淡底轨和单条渐变圆弧共同表达剩余比例。
+        channel_width = 2.4
+        channel_radius = ball_radius - 5.0
         ring_rect = QRectF(
             DESIGN_SIZE / 2 - channel_radius,
             DESIGN_SIZE / 2 - channel_radius,
             channel_radius * 2,
             channel_radius * 2,
         )
-        track = QColor(theme.heat[2])
-        track.setAlpha(205)
+        track = QColor(theme.accent)
+        track.setAlpha(48 if theme.name == "light" else 64)
         painter.save()
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(
@@ -1591,51 +1591,22 @@ class FloatingUsageBall(QWidget):
         )
         painter.drawEllipse(ring_rect)
 
-        deep = QColor(theme.accent).darker(132)
-        deep.setAlpha(235)
+        progress = QLinearGradient(ring_rect.topLeft(), ring_rect.bottomRight())
+        progress.setColorAt(0.0, QColor(theme.accent_hover))
+        progress.setColorAt(1.0, QColor(theme.accent))
         painter.setPen(
             QPen(
-                deep,
-                channel_width - 0.8,
+                progress,
+                channel_width,
                 Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
             )
         )
         span = self._secondary_quota_span()
-        if span:
+        if abs(span) == 360 * 16:
+            painter.drawEllipse(ring_rect)
+        elif span:
             painter.drawArc(ring_rect, 90 * 16, span)
-
-        liquid = QColor(theme.accent_hover)
-        liquid.setAlpha(245)
-        painter.setPen(
-            QPen(
-                liquid,
-                channel_width - 2.1,
-                Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap,
-            )
-        )
-        if span:
-            painter.drawArc(ring_rect, 90 * 16, span)
-
-        highlight = QColor("#FFFFFF")
-        highlight.setAlpha(72)
-        painter.setPen(
-            QPen(
-                highlight,
-                1.0,
-                Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap,
-            )
-        )
-        if span:
-            painter.drawArc(ring_rect.adjusted(1.0, 1.0, -1.0, -1.0), 90 * 16, span)
-
-        rim = QColor(theme.accent_hover)
-        rim.setAlpha(105)
-        painter.setPen(QPen(rim, 0.9))
-        painter.drawEllipse(ring_rect.adjusted(-channel_width / 2, -channel_width / 2, channel_width / 2, channel_width / 2))
-        painter.drawEllipse(ring_rect.adjusted(channel_width / 2, channel_width / 2, -channel_width / 2, -channel_width / 2))
         painter.restore()
 
     def _paint_quota(self, painter: QPainter, theme, ball_radius: float) -> None:
@@ -1715,8 +1686,10 @@ class FloatingUsageBall(QWidget):
 
         inner_rim = QColor(theme.accent_hover if theme.name == "light" else "#FFFFFF")
         inner_rim.setAlpha(105 if theme.name == "light" else 78)
+        if self._quota_secondary_remaining is not None:
+            inner_rim.setAlpha(inner_rim.alpha() // 2)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(inner_rim, 1.2))
+        painter.setPen(QPen(inner_rim, 0.8 if self._quota_secondary_remaining is not None else 1.2))
         painter.drawEllipse(inner.adjusted(0.7, 0.7, -0.7, -0.7))
 
         percentage = self._quota_value_text or (
@@ -1782,6 +1755,7 @@ class FloatingUsageBall(QWidget):
         painter.scale(side / DESIGN_SIZE, side / DESIGN_SIZE)
         side = DESIGN_SIZE
         center = QPointF(side / 2, side / 2)
+        has_secondary_quota = self._quota_mode and self._quota_secondary_remaining is not None
 
         # The light warning token is tuned for text contrast and looks brown as
         # emitted light; use saturated amber for the peak glow instead.
@@ -1811,6 +1785,8 @@ class FloatingUsageBall(QWidget):
         else:
             glow = QColor(theme.accent)
             glow.setAlpha(24 if self._active else 70 if self._hovered else 36)
+            if has_secondary_quota:
+                glow.setAlpha(glow.alpha() // 2)
             painter.setPen(QPen(glow, 4))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(center, side / 2 - 3, side / 2 - 3)
@@ -1835,7 +1811,10 @@ class FloatingUsageBall(QWidget):
                 if self._hovered
                 else theme.accent
             )
-            painter.setPen(QPen(QColor(border), 2))
+            border_color = QColor(border)
+            if has_secondary_quota:
+                border_color.setAlpha(104 if self._hovered else 72)
+            painter.setPen(QPen(border_color, 1.0 if has_secondary_quota else 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(center, ball_radius, ball_radius)
 

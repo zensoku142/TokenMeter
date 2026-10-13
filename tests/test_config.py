@@ -550,6 +550,31 @@ class ConfigTests(unittest.TestCase):
                     state_path.write_text(payload, encoding="utf-8")
                     self.assertIsNone(config_manager.load_panel_width())
 
+    def test_vpet_show_ball_defaults_validation_and_round_trip(self):
+        self.assertFalse(config_manager.validate_config({})["VPET_SHOW_BALL"])
+        self.assertTrue(config_manager.validate_value("VPET_SHOW_BALL", "true"))
+        self.assertFalse(config_manager.validate_value("VPET_SHOW_BALL", "false"))
+        with self.assertRaises(ValueError):
+            config_manager.validate_value("VPET_SHOW_BALL", "invalid")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            with (
+                patch.object(config_manager, "CONFIG_DIR", root),
+                patch.object(config_manager, "CONFIG_PATH", config_path),
+                patch.object(config_manager, "_config", config_manager.DEFAULT_CONFIG.copy()),
+                patch.object(config_manager, "_write_credential"),
+                patch.object(config_manager, "_read_credential", return_value=""),
+            ):
+                for enabled in (True, False):
+                    with self.subTest(enabled=enabled):
+                        config_manager.save_config({"VPET_SHOW_BALL": enabled})
+                        self.assertEqual(config_manager.load_config()["VPET_SHOW_BALL"], enabled)
+                        persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                        self.assertEqual(persisted["VPET_SHOW_BALL"], enabled)
+                        self.assertFalse(config_manager.get("VPET_ENABLED"))
+
     def test_panel_auto_collapse_setting_round_trips(self):
         temp_root = Path.cwd() / ".test-appdata" / "tmp"
         temp_root.mkdir(parents=True, exist_ok=True)

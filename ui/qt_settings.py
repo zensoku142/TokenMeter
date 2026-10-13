@@ -740,7 +740,12 @@ class SettingsWindow(QDialog):
         self.vpet_check = _SettingsSwitch("启用 VPet 精简桌宠")
         self._add_switch_row(
             pet_layout, "启用 VPet 精简桌宠",
-            "启用后替代悬浮球，面板和主题保持不变。", self.vpet_check
+            "启用后显示桌宠，可选择同时显示悬浮球。", self.vpet_check
+        )
+        self.vpet_show_ball_check = _SettingsSwitch("同时显示悬浮球")
+        self._add_switch_row(
+            pet_layout, "同时显示悬浮球",
+            "开启后，桌宠运行时仍显示悬浮球。", self.vpet_show_ball_check
         )
         pet_role_title = bind_text(QLabel(), "角色")
         pet_role_title.setStyleSheet("font-size: 14px; font-weight: 600;")
@@ -2212,6 +2217,7 @@ class SettingsWindow(QDialog):
             bool(values.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
         )
         self.vpet_check.setChecked(bool(values.get("VPET_ENABLED", False)))
+        self.vpet_show_ball_check.setChecked(bool(values.get("VPET_SHOW_BALL", False)))
         self.pet_channel_combo.setCurrentIndex(max(
             0, self.pet_channel_combo.findData(str(values.get("PET_UPDATE_CHANNEL", "stable")))))
         self.panel_auto_collapse_check.setChecked(
@@ -2315,6 +2321,7 @@ class SettingsWindow(QDialog):
                 self.quota_ring_counterclockwise_check.isChecked()
             ),
             "VPET_ENABLED": self.vpet_check.isChecked(),
+            "VPET_SHOW_BALL": self.vpet_show_ball_check.isChecked(),
             "PET_UPDATE_CHANNEL": str(self.pet_channel_combo.currentData() or "stable"),
             "PANEL_AUTO_COLLAPSE_ON_DEACTIVATE": self.panel_auto_collapse_check.isChecked(),
             "AUTO_START_ENABLED": self.autostart_check.isChecked(),

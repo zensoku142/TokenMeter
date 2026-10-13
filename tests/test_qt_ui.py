@@ -2840,20 +2840,22 @@ def test_vpet_requires_installed_pack_even_when_enabled_and_local_build_exists(t
             widget.deleteLater()
 
 
-def test_vpet_widget_keeps_ball_until_ready_and_restores_it_on_failure(monkeypatch):
+@pytest.mark.parametrize("show_ball", [False, True])
+def test_vpet_widget_keeps_ball_until_ready_and_restores_it_on_failure(monkeypatch, show_ball):
     monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.1.0"})
-    config_manager.save_config({"VPET_ENABLED": True})
+    config_manager.save_config({"VPET_ENABLED": True, "VPET_SHOW_BALL": show_ball})
     with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start") as start:
         widget = FloatingWidget()
     try:
         start.assert_called_once()
         assert widget.isVisible()
         widget._vpet._consume_output(b'{"event":"ready","animations":379}\n')
-        assert widget._vpet.active and not widget.isVisible()
+        assert widget._vpet.active
+        assert widget.isVisible() is show_ball
         widget._on_vpet_action("open_panel")
         assert widget._expanded and widget.isVisible()
         widget.collapse_panel()
-        assert not widget.isVisible()
+        assert widget.isVisible() is show_ball
         widget._vpet._fail("test failure")
         assert widget.isVisible() and not widget._vpet.active
         assert widget.ball.isVisible()
@@ -2863,26 +2865,88 @@ def test_vpet_widget_keeps_ball_until_ready_and_restores_it_on_failure(monkeypat
         widget.deleteLater()
 
 
-def test_vpet_tray_visibility_and_disable_restore_existing_ui():
+@pytest.mark.parametrize("show_ball", [False, True])
+def test_vpet_tray_visibility_and_disable_restore_existing_ui(show_ball):
+    config_manager.save_config({"VPET_SHOW_BALL": show_ball})
     with patch.object(FloatingWidget, "refresh"):
         widget = FloatingWidget()
+    extra = VPetHost(widget)
+    widget._vpet_extras[("whale", 0)] = extra
     try:
-        widget._vpet.active = True
+        widget._vpet.active = extra.active = True
         widget._on_vpet_ready()
         with patch.object(widget._vpet, "_send") as send:
             widget.set_visible_from_tray()
             assert not widget._vpet.visible
+            assert not extra.visible
             assert not widget.isVisible()
             widget.set_visible_from_tray()
             assert widget._vpet.visible
+            assert extra.visible
+            assert widget.isVisible() is show_ball
             assert send.call_args.args[0] == {"type": "visibility", "visible": True}
         widget._on_vpet_action("disable_pet")
         assert not config_manager.get("VPET_ENABLED")
         assert not widget._vpet.active and widget.isVisible()
+        assert not extra.active
+        assert config_manager.get("VPET_SHOW_BALL") is show_ball
     finally:
         widget._closed = True
         widget.hide()
         widget.deleteLater()
+
+
+@pytest.mark.parametrize("extra_only", [False, True])
+def test_vpet_show_ball_preference_applies_to_running_pets(monkeypatch, extra_only):
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_manifest", lambda: {"version": "0.2.2"})
+    monkeypatch.setattr("ui.qt_widget.pet_extension.installed_characters", lambda: {"vpet", "whale"})
+    config_manager.save_config({"VPET_ENABLED": True})
+    with patch.object(FloatingWidget, "refresh"), patch.object(VPetHost, "start"):
+        widget = FloatingWidget()
+        host = widget._vpet
+        if extra_only:
+            host = VPetHost(widget)
+            widget._vpet_extras[("whale", 0)] = host
+            widget._vpet_primary_closed = True
+        host.active = True
+        widget._on_vpet_ready()
+        try:
+            assert not widget.isVisible()
+            with patch.object(host, "stop") as stop:
+                config_manager.save_config({"VPET_SHOW_BALL": True})
+                widget._on_config_saved()
+                assert widget.isVisible() and widget.ball.isVisible()
+                assert host.active
+
+                config_manager.save_config({"VPET_SHOW_BALL": False})
+                widget._on_config_saved()
+                assert not widget.isVisible() and host.active
+                config_manager.save_config({"VPET_SHOW_BALL": True})
+                widget._on_config_saved()
+                assert widget.isVisible() and host.active
+
+                widget.set_visible_from_tray()
+                widget._on_config_saved()
+                assert not widget.isVisible() and not host.visible
+                widget.set_visible_from_tray()
+                assert widget.isVisible() and host.visible
+
+                widget.expand_panel()
+                widget.set_visible_from_tray()
+                assert not widget.isVisible()
+                widget.set_visible_from_tray()
+                assert widget._expanded and widget.isVisible()
+                config_manager.save_config({"VPET_SHOW_BALL": False})
+                widget._on_config_saved()
+                assert widget._expanded and widget.isVisible()
+                widget.collapse_panel()
+                assert not widget.isVisible()
+                assert host.active
+                stop.assert_not_called()
+        finally:
+            widget._closed = True
+            widget.hide()
+            widget.deleteLater()
 
 
 def test_vpet_uninstall_stops_host_before_removing_pack_and_preserves_panel():
@@ -5416,6 +5480,28 @@ def test_settings_vpet_switch_persists_without_changing_ball_preferences(autosav
     assert values["WIDGET_COMPACT_SIZE"] == 88
     saved.assert_called_once()
     refreshed.assert_called_once()
+
+
+def test_settings_show_ball_with_pet_switch_autosaves_and_reloads(autosave_settings):
+    window, values, saved, refreshed = autosave_settings
+    assert not window.vpet_show_ball_check.isChecked()
+    assert window.tabs.widget(window._pet_tab_index).isAncestorOf(window.vpet_show_ball_check)
+    window.vpet_show_ball_check.click()
+    window.flush_pending_saves()
+
+    assert values["VPET_SHOW_BALL"] is True
+    assert values["VPET_ENABLED"] is False
+    assert values["EDGE_HIDE_ENABLED"] is True
+    assert values["WIDGET_COMPACT_SIZE"] == 88
+    saved.assert_called_once()
+    refreshed.assert_called_once()
+
+    reloaded = SettingsWindow()
+    try:
+        assert reloaded.vpet_show_ball_check.isChecked()
+        assert not reloaded._save_timer.isActive()
+    finally:
+        reloaded.close()
 
 
 def test_pet_roles_are_managed_directly_without_preselected_counts(tmp_path):
