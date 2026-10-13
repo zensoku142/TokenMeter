@@ -34,7 +34,7 @@
 
 TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 15 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
 
-目前版本：**v1.16.3** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+目前版本：**v1.16.4** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
@@ -59,7 +59,7 @@ TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提�
 
 ## 桌寵（選用）
 
-主安裝程式不含桌寵。在「設定 → 桌寵」下載擴充套件，完整安裝後再啟用；無需另裝 .NET。啟用後桌寵取代懸浮球，停用或解除安裝後恢復球體，不影響帳戶與面板。
+主安裝程式不含桌寵。在「設定 → 桌寵」下載擴充套件，完整安裝後再啟用；無需另裝 .NET。啟用後預設由桌寵取代懸浮球；開啟「同時顯示懸浮球」可讓兩者一起顯示，設定自動儲存並立即生效。停用或解除安裝桌寵後恢復球體，不影響帳戶與面板。
 
 - 支援輕觸互動、拖曳縮放、自主活動和貼邊額度氣泡；按兩下氣泡可開啟用量面板。
 - 啟動前可選擇 VPet 預設角色或[鯨魚娘](https://github.com/PC2005-cloud/dsh-pet)；設定頁提供角色縮圖與可安裝的相容版本。
@@ -118,7 +118,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.16.3`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.16.4`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

@@ -34,7 +34,7 @@ Actual component screenshots in Chinese, using demo data. [Original images and s
 
 TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
 
-Current version：**v1.16.3** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.16.4** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
@@ -59,7 +59,7 @@ Requires Windows 10 / 11 and at least one supported account.
 
 ## Desktop pet (optional)
 
-The main installer does not include the pet. Download it in Settings → Pet, then enable it after installation completes; no separate .NET installation is needed. The pet replaces the floating widget. Disabling or uninstalling it restores the widget without affecting accounts or the panel.
+The main installer does not include the pet. Download it in Settings → Pet, then enable it after installation completes; no separate .NET installation is needed. The pet replaces the floating widget by default. Enable “Also show the floating ball” to display both; the setting saves automatically and takes effect immediately. Disabling or uninstalling it restores the widget without affecting accounts or the panel.
 
 - Touch interactions, dragging, resizing, autonomous activity, and an edge quota bubble. Double-click the bubble to open the usage panel.
 - Choose the default VPet character or [Whale Girl](https://github.com/PC2005-cloud/dsh-pet) before starting the pet. The settings page shows character thumbnails and compatible versions available for installation or update.
@@ -118,7 +118,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.16.3`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.16.4`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

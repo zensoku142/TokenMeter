@@ -458,6 +458,7 @@ class FloatingWidget(QWidget):
             if not self._vpet_primary_closed:
                 self._vpet.start(config_manager.CONFIG_DIR / "vpet")
             if self._vpet._reported_failure:
+                self._sync_ball_visibility()
                 return
             self._update_vpet_source_options()
             installed = pet_extension.installed_characters()
@@ -480,6 +481,17 @@ class FloatingWidget(QWidget):
             self._vpet_primary_closed = False
             if was_active and not self._expanded:
                 self.show()
+        self._sync_ball_visibility()
+
+    def _sync_ball_visibility(self) -> None:
+        if self._closed or self._expanded:
+            return
+        active_hosts = [host for host in self._pet_hosts() if host.active]
+        if active_hosts:
+            self.setVisible(
+                bool(config_manager.get("VPET_SHOW_BALL", False))
+                and any(host.visible for host in active_hosts)
+            )
 
     def _add_vpet_instance(self, character: str) -> None:
         if (self._closed or self._vpet_updating or not config_manager.get("VPET_ENABLED", False)
@@ -518,8 +530,7 @@ class FloatingWidget(QWidget):
         self._sync_vpet()
 
     def _on_vpet_ready(self) -> None:
-        if not self._expanded:
-            self.hide()
+        self._sync_ball_visibility()
         self._apply_update()
 
     def _on_vpet_failed(self, message: str) -> None:
@@ -944,8 +955,7 @@ class FloatingWidget(QWidget):
         finally:
             self._transitioning = False
         self._reschedule_refresh()
-        if any(host.active for host in self._pet_hosts()):
-            self.hide()
+        self._sync_ball_visibility()
 
     def event(self, event) -> bool:
         if (
@@ -2394,6 +2404,14 @@ class FloatingWidget(QWidget):
                 host.set_visible(visible)
             if not visible:
                 self.hide()
+            elif config_manager.get("VPET_SHOW_BALL", False):
+                if self._edge_snapped and not self._expanded:
+                    self._edge_unsnap()
+                    self._clamp_to_work_area()
+                self.show()
+                self.raise_()
+                if self._expanded:
+                    self.activateWindow()
             return
         # 托盘点击时：如果处于贴边隐藏状态，先完整恢复显示
         if self._edge_snapped and not self._expanded:
