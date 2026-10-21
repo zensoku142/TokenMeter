@@ -2486,6 +2486,7 @@ class MainPanel(QFrame):
         activity_layout.addWidget(activity_divider)
 
         activity_header = QHBoxLayout()
+        self.activity_header_layout = activity_header
         activity_header.setContentsMargins(0, 0, 0, 0)
         activity_header.setSpacing(5)
         activity_title = bind_text(QLabel(), "Token 活动")
@@ -2583,6 +2584,14 @@ class MainPanel(QFrame):
         activity_header.addWidget(self.activity_summary)
         activity_header.addWidget(self.quota_details_button)
         activity_layout.addLayout(activity_header)
+        self.minute_details_row = QWidget()
+        self.minute_details_layout = QHBoxLayout(self.minute_details_row)
+        self.minute_details_layout.setContentsMargins(0, 0, 0, 0)
+        self.minute_details_layout.setSpacing(5)
+        self.minute_details_layout.addStretch()
+        self.minute_details_row.hide()
+        self._minute_details_wrapped = False
+        activity_layout.addWidget(self.minute_details_row)
 
         self.activity_scroll = QScrollArea()
         self.activity_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2810,6 +2819,9 @@ class MainPanel(QFrame):
         self._render_minute_date(loading=False)
 
     def _render_usage_card(self) -> None:
+        if self._quota_data is not None:
+            # 订阅平台切换分时日期时，主卡仍展示额度，不能被 API 金额卡覆盖。
+            return
         selected_date = self._minute_selected_date
         show_selected_date = (
             self._activity_view == "minute"
@@ -3054,10 +3066,33 @@ class MainPanel(QFrame):
         self.activity_card.layout().invalidate()
         self._refresh_minute_control_colors()
         self._update_activity_header_visibility()
+        if minute_view:
+            bind_text(self.activity_summary, self._minute_estimate_tooltip, method='setToolTip')
+        elif self._quota_data is not None:
+            bind_text(self.activity_summary, self._annual_activity_tooltip, method='setToolTip')
         self.activity_height_changed.emit(panel_height)
 
     def _update_activity_header_visibility(self) -> None:
         minute_view = self._activity_view == "minute"
+        wrapped = minute_view and self._quota_data is not None
+        if wrapped != self._minute_details_wrapped:
+            # 订阅页还包含来源和额度明细，单行放不下；分成两行以保留按钮和日期的固定宽度。
+            controls = [self.minute_estimate_label, *self.minute_legend_buttons.values(),
+                        self.activity_summary, self.quota_details_button]
+            for control in controls:
+                self.activity_header_layout.removeWidget(control)
+                self.minute_details_layout.removeWidget(control)
+            target = self.minute_details_layout if wrapped else self.activity_header_layout
+            source_index = 0 if wrapped else target.indexOf(self.minute_date_edit) + 1
+            target.insertWidget(source_index, self.minute_estimate_label)
+            for control in controls[1:]:
+                target.addWidget(control)
+            self._minute_details_wrapped = wrapped
+            # 添加到另一布局会改变父控件并隐藏控件，显式恢复当前视图的可见状态。
+            for button in self.minute_legend_buttons.values():
+                button.setVisible(minute_view)
+            self.quota_details_button.setVisible(self._quota_data is not None)
+        self.minute_details_row.setVisible(wrapped)
         self.activity_summary.setVisible(not minute_view or self.width() >= 775)
         self.minute_estimate_label.setVisible(minute_view)
 
@@ -3256,7 +3291,28 @@ class MainPanel(QFrame):
         self.trend.show()
         self.main_divider.show()
         self.activity_card.show()
-        self.activity_mode_segment.setVisible(not quota_mode)
+        quota_minutes = bool(
+            quota_mode and provider_cls and provider_cls.supports_exact_minute_usage
+            and data.minute_usage_status != "unavailable"
+        )
+        self.activity_mode_segment.setVisible(not quota_mode or quota_minutes)
+
+        if data.minute_usage_source == "local":
+            bind_text(self.minute_estimate_label, "本机日志")
+            self._minute_estimate_tooltip = (
+                "来自本机 Codex 会话日志，按记录时间聚合；仅含本机记录，账号归属未知，不代表订阅额度或实际账单"
+            )
+        elif data.minute_usage_source == "provider":
+            bind_text(self.minute_estimate_label, "平台明细")
+            self._minute_estimate_tooltip = (
+                "来自服务商请求明细，按请求发生时间聚合 Token 与实际账单金额"
+            )
+        else:
+            bind_text(self.minute_estimate_label, "估算")
+            self._minute_estimate_tooltip = (
+                "按刷新间隔均摊：两次成功刷新之间的累计 Token 差额，非平台原始分钟明细"
+            )
+        bind_text(self.minute_estimate_label, self._minute_estimate_tooltip, method='setToolTip')
 
         if quota_mode:
             cards = (self.today_card, self.balance_card, self.month_card)
@@ -3331,26 +3387,22 @@ class MainPanel(QFrame):
             bind_text(self.trend.title, weekly_tooltip, method='setToolTip')
             bind_text(self.trend.title, weekly_tooltip, method='setAccessibleDescription')
             bind_text(self.trend.plot, "", method='setToolTip')
-            self._activity_view = "annual"
-            self.activity_stack.setCurrentIndex(0)
-            self.annual_activity_button.setChecked(True)
-            for control in self.minute_controls:
-                control.hide()
-            for button in self.minute_legend_buttons.values():
-                button.hide()
-            self.minute_estimate_label.hide()
+            if not quota_minutes:
+                self._activity_view = "annual"
             activity_tooltip = {
                 "interface": f"来自 {provider_name} 账号统计，不含本机估算",
                 "cache": "当前显示最近一次缓存的官方 Token 活动",
             }.get(data.activity_source, "暂无可用的官方 Token 活动")
+            self._annual_activity_tooltip = activity_tooltip
             bind_text(self.activity_summary, activity_tooltip, method='setToolTip')
             self.activity_card.setFixedHeight(ANNUAL_ACTIVITY_SECTION_HEIGHT)
             self._set_annual_activity_data(data)
             if provider_cls and provider_cls.support_description and not data.daily_usage:
-                bind_text(self.activity_summary, "平台未提供 Token 明细")
+                self._annual_activity_summary = "平台未提供 Token 明细"
             self.statistics.set_quota_data(data)
-            self.setFixedHeight(ANNUAL_PANEL_HEIGHT)
-            self.activity_height_changed.emit(ANNUAL_PANEL_HEIGHT)
+            if quota_minutes:
+                self._update_minute_data(data, loading)
+            self._set_activity_view(self._activity_view)
             # 已有缓存时后台刷新不应让状态栏长期停在“正在更新”；只有
             # 首次加载无可展示数据时才使用加载态。
             status = self.codex_source_summary(data, loading)
@@ -3364,17 +3416,6 @@ class MainPanel(QFrame):
         # API billing providers retain the original amount, trend and Token activity view.
         for card in (self.today_card, self.balance_card, self.month_card):
             card.detail.hide()
-        if data.minute_usage_source == "provider":
-            bind_text(self.minute_estimate_label, "平台明细")
-            self._minute_estimate_tooltip = (
-                "来自服务商请求明细，按请求发生时间聚合 Token 与实际账单金额"
-            )
-        else:
-            bind_text(self.minute_estimate_label, "估算")
-            self._minute_estimate_tooltip = (
-                "按刷新间隔均摊：两次成功刷新之间的累计 Token 差额，非平台原始分钟明细"
-            )
-        bind_text(self.minute_estimate_label, self._minute_estimate_tooltip, method='setToolTip')
         bind_text(self.activity_summary, self._minute_estimate_tooltip, method='setToolTip')
         self._set_activity_view(self._activity_view)
 

@@ -977,6 +977,8 @@ class TokenData:
             data.per_provider[0].errors = list(data.errors)
             data.per_provider[0].status = data.status
             return data
+        # 本机日志按目录隔离，不与登录账号的官方统计共用缓存。
+        history_provider = getattr(provider, "local_usage_scope", "") or history_provider
         data.history_provider = history_provider
         provider.history_scope = history_provider
         data.minute_history_complete = include_minute_history
@@ -1323,61 +1325,7 @@ class TokenData:
                     config_manager.logger().exception("History save failed for %s", provider.id)
                     per.errors.append(FetchError("LOCAL_STORAGE", "历史缓存", "本地历史保存失败"))
 
-                if supports_exact_minutes:
-                    exact_usage = provider.exact_minute_usage()
-                    if exact_usage is None:
-                        minute_status = "failed"
-                    else:
-                        retained_from = current_day - timedelta(days=max(1, retention_days) - 1)
-                        exact_dates = {
-                            usage_date
-                            for usage_date in exact_usage.usage_dates
-                            if retained_from <= usage_date <= current_day
-                        }
-                        complete_months = set(exact_usage.complete_months)
-                        retained_day = retained_from
-                        while retained_day <= current_day:
-                            if (retained_day.month, retained_day.year) in complete_months:
-                                exact_dates.add(retained_day)
-                            retained_day += timedelta(days=1)
-                        # A successful response is authoritative for today even when
-                        # a provider snapshot predates the complete-month marker.
-                        exact_dates.add(current_day)
-                        try:
-                            minute_status = history.replace_exact_minute_usage(
-                                provider=history_provider,
-                                usage_dates=exact_dates,
-                                token_rows=[
-                                    row
-                                    for row in exact_usage.token_rows
-                                    if row.get("usage_date") in exact_dates
-                                ],
-                                cost_rows=[
-                                    row
-                                    for row in exact_usage.cost_rows
-                                    if row.get("usage_date") in exact_dates
-                                ],
-                                current_day=current_day,
-                                retention_days=retention_days,
-                                model_rows=(
-                                    [
-                                        row
-                                        for row in exact_usage.model_rows
-                                        if row.get("usage_date") in exact_dates
-                                    ]
-                                    if supports_model_usage
-                                    else None
-                                ),
-                            )
-                        except Exception:
-                            config_manager.logger().exception(
-                                "Exact minute usage save failed for %s", provider.id
-                            )
-                            per.errors.append(
-                                FetchError("LOCAL_STORAGE", "分时缓存", "分钟明细保存失败")
-                            )
-                            minute_status = "storage_error"
-                elif supports_estimated_minutes:
+                if supports_estimated_minutes:
                     token_totals = token_breakdown_for_day(payloads, current_day)
                     if token_totals is None:
                         minute_status = "empty"
@@ -1408,6 +1356,62 @@ class TokenData:
                             minute_status = "storage_error"
             elif supports_minute_usage:
                 minute_status = "failed" if payload_errors else "empty"
+
+            # Local logs can provide minute rows without a remote billing payload.
+            if supports_exact_minutes and (payloads or not payload_errors):
+                exact_usage = provider.exact_minute_usage()
+                if exact_usage is None:
+                    minute_status = "failed"
+                else:
+                    retained_from = current_day - timedelta(days=max(1, retention_days) - 1)
+                    exact_dates = {
+                        usage_date
+                        for usage_date in exact_usage.usage_dates
+                        if retained_from <= usage_date <= current_day
+                    }
+                    complete_months = set(exact_usage.complete_months)
+                    retained_day = retained_from
+                    while retained_day <= current_day:
+                        if (retained_day.month, retained_day.year) in complete_months:
+                            exact_dates.add(retained_day)
+                        retained_day += timedelta(days=1)
+                    # A successful response is authoritative for today even when
+                    # a provider snapshot predates the complete-month marker.
+                    exact_dates.add(current_day)
+                    try:
+                        minute_status = history.replace_exact_minute_usage(
+                            provider=history_provider,
+                            usage_dates=exact_dates,
+                            token_rows=[
+                                row
+                                for row in exact_usage.token_rows
+                                if row.get("usage_date") in exact_dates
+                            ],
+                            cost_rows=[
+                                row
+                                for row in exact_usage.cost_rows
+                                if row.get("usage_date") in exact_dates
+                            ],
+                            current_day=current_day,
+                            retention_days=retention_days,
+                            model_rows=(
+                                [
+                                    row
+                                    for row in exact_usage.model_rows
+                                    if row.get("usage_date") in exact_dates
+                                ]
+                                if supports_model_usage
+                                else None
+                            ),
+                        )
+                    except Exception:
+                        config_manager.logger().exception(
+                            "Exact minute usage save failed for %s", provider.id
+                        )
+                        per.errors.append(
+                            FetchError("LOCAL_STORAGE", "分时缓存", "分钟明细保存失败")
+                        )
+                        minute_status = "storage_error"
 
             try:
                 if provider.supports_daily_usage:
@@ -1499,7 +1503,7 @@ class TokenData:
         data.minute_model_usage = minute_model_rows
         data.minute_model_usage_history = minute_model_history
         data.minute_usage_source = (
-            "provider" if supports_exact_minutes else "estimated"
+            getattr(provider, "minute_usage_source", "provider") if supports_exact_minutes else "estimated"
             if supports_estimated_minutes
             else ""
         )

@@ -29,6 +29,8 @@ class LocalUsage:
     cache_read: int
     cache_write: int
     total: int
+    # 旧快照没有请求时间，保留默认值以继续读取；新扫描保留时间供分时聚合。
+    timestamp: str = ""
 
 
 @dataclass
@@ -239,12 +241,20 @@ class LocalUsageScanner:
                 data.issues += 1
                 return
             # 先完成日期转换，再更新累计基数；无效日期不能吞掉后续有效记录的增量。
-            day = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone().date().isoformat()
+            stamp = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone()
+            day = stamp.date().isoformat()
             current = {name: _count(usage.get(name)) for name in (
                 "input_tokens", "output_tokens", "cached_input_tokens", "total_tokens",
             )}
+            if current == data.previous:
+                # 额度刷新可能在不同时间重发同一用量快照，不能算成另一次请求。
+                return
             reset = current["total_tokens"] < data.previous.get("total_tokens", 0)
             counts = {name: max(0, value - (0 if reset else data.previous.get(name, 0))) for name, value in current.items()}
+            last = info.get("last_token_usage") if isinstance(info, dict) else None
+            if isinstance(last, dict) and all(type(last.get(name)) is int and last[name] >= 0 for name in current):
+                # 单次用量优先于累计差分，避免续聊继承的累计历史被归到首个新请求。
+                counts = {name: last[name] for name in current}
             data.previous = current
             event_id = f"{record.get('timestamp')}:{current['total_tokens']}"
             values = (counts["input_tokens"], counts["output_tokens"], counts["cached_input_tokens"], 0, counts["total_tokens"])
@@ -260,7 +270,8 @@ class LocalUsageScanner:
             )):
                 data.issues += 1
                 return
-            day = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone().date().isoformat()
+            stamp = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone()
+            day = stamp.date().isoformat()
             data.session = str(record.get("sessionId") or data.session)
             data.project = Path(str(record.get("cwd") or "")).name or data.project
             data.model = str(message.get("model") or "")
@@ -276,7 +287,7 @@ class LocalUsageScanner:
             values = (uncached + read + write, output, read, write, uncached + output + read + write)
         if values[-1] <= 0:
             return
-        row = LocalUsage(provider, data.session, data.project, day, data.model, *values)
+        row = LocalUsage(provider, data.session, data.project, day, data.model, *values, stamp.isoformat())
         existing = data.events.get(event_id)
         if existing is None or row.total > existing.total:
             data.events[event_id] = row
@@ -357,9 +368,11 @@ def load_local_report(scope: str) -> tuple[list[LocalUsage], int] | None:
         for row in rows:
             if any(type(getattr(row, name)) is not int or getattr(row, name) < 0 for name in ("input", "output", "cache_read", "cache_write", "total")):
                 return None
-            if any(not isinstance(getattr(row, name), str) for name in ("provider", "session", "project", "day", "model")):
+            if any(not isinstance(getattr(row, name), str) for name in ("provider", "session", "project", "day", "model", "timestamp")):
                 return None
             date.fromisoformat(row.day)
+            if row.timestamp:
+                datetime.fromisoformat(row.timestamp)
         return rows, max(0, int(record[1]))
     except (ValueError, TypeError):
         return None

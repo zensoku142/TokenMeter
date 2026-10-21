@@ -18,6 +18,7 @@ import requests
 
 from api.http import HttpsSession
 from api.providers.base import (
+    ExactMinuteUsage,
     FetchError,
     Provider,
     ProviderQuota,
@@ -25,6 +26,7 @@ from api.providers.base import (
     QuotaWindow,
     build_session,
 )
+from data.local_usage import LocalUsageScanner, local_cache_scope
 
 _MAX_SESSION_LINE_BYTES = 1024 * 1024
 _ActivityRows = tuple[tuple[str, int], ...]
@@ -48,6 +50,9 @@ class CodexProvider(Provider):
     id = "codex"
     name = "Codex"
     supports_subscription_quota = True
+    supports_exact_minute_usage = True
+    supports_model_usage = True
+    minute_usage_source = "local"
     official_api_hosts = {"chatgpt.com"}
     credential_fields = {
         "HOME": {
@@ -64,6 +69,7 @@ class CodexProvider(Provider):
     _subscription_cache_ttl = timedelta(hours=6)
     _activity_cache: ClassVar[dict[str, tuple[float, _ActivityData]]] = {}
     _activity_cache_ttl_seconds = 60 * 60
+    _minute_scanner: ClassVar[tuple[str, LocalUsageScanner] | None] = None
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         super().__init__(config)
@@ -87,6 +93,56 @@ class CodexProvider(Provider):
             # Provider 其余逻辑都以 Codex 根目录为基准，因此在这里兼容旧值。
             return path.parent if path.name.lower() == "auth.json" else path
         return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+    @property
+    def local_usage_scope(self) -> str:
+        # 日志没有可靠的账号归属，按目录和时区隔离，不能混入官方账号账单。
+        return f"{self.id}:local:{local_cache_scope({self.id: self._home()})}"
+
+    def exact_minute_usage(self) -> ExactMinuteUsage | None:
+        root = self._home()
+        if not root.is_dir():
+            return None
+        scope = self.local_usage_scope
+        with self._session_cache_lock:
+            # Provider 每轮刷新都会重建；保留最近目录的扫描器才能只读取追加日志。
+            if CodexProvider._minute_scanner is None or CodexProvider._minute_scanner[0] != scope:
+                CodexProvider._minute_scanner = (scope, LocalUsageScanner())
+            scanner = CodexProvider._minute_scanner[1]
+            rows = scanner.scan({self.id: root})
+            if scanner.issues and not rows:
+                return None
+        today = datetime.now().astimezone().date()
+        retention = max(1, int(self.config_get("MINUTE_USAGE_RETENTION_DAYS", 3)))
+        # 整个保留区间作为快照替换，日志删除或目录切换后不能残留旧分时记录。
+        days = tuple(today - timedelta(days=offset) for offset in range(retention))
+        dates = set(days)
+        minute_models: dict[tuple[date, int, str], list[int]] = {}
+        for row in rows:
+            usage_day = date.fromisoformat(row.day)
+            if usage_day not in dates or not row.timestamp:
+                continue
+            stamp = datetime.fromisoformat(row.timestamp)
+            key = (usage_day, stamp.hour * 60 + stamp.minute, row.model or "unknown")
+            values = minute_models.setdefault(key, [0, 0, 0])
+            hit = min(row.cache_read, row.input)
+            for index, amount in enumerate((hit, row.input - hit, row.output)):
+                values[index] += amount
+        token_rows = []
+        model_rows = []
+        for (usage_day, minute, model), (hit, miss, output) in sorted(minute_models.items()):
+            for token_type, amount in zip(
+                ("PROMPT_CACHE_HIT_TOKEN", "PROMPT_CACHE_MISS_TOKEN", "RESPONSE_TOKEN"),
+                (hit, miss, output),
+            ):
+                token_rows.append({"usage_date": usage_day, "minute": minute,
+                                   "token_type": token_type, "token_amount": amount})
+            model_rows.append({"usage_date": usage_day, "minute": minute, "model": model,
+                               "cache_hit_tokens": hit, "cache_miss_tokens": miss,
+                               "output_tokens": output})
+        # 订阅日志没有实际扣费；只提供 Token，不把 API 单价折算当作账单金额。
+        return ExactMinuteUsage(usage_dates=days, token_rows=tuple(token_rows),
+                                model_rows=tuple(model_rows))
 
     def _credentials(self) -> tuple[str, str | None, dict[str, Any]]:
         path = self._home() / "auth.json"

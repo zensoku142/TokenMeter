@@ -9,6 +9,13 @@ from ui.translation_errors import ERROR_MESSAGES
 MESSAGES = {
     **ERROR_MESSAGES,
     **PROVIDER_MESSAGES,
+    "本机日志": ("Local logs", "本機日誌", "ローカルログ", "로컬 로그"),
+    "来自本机 Codex 会话日志，按记录时间聚合；仅含本机记录，账号归属未知，不代表订阅额度或实际账单": (
+        "From local Codex session logs, grouped by recorded time. Local records only; account unknown. Not subscription quota or actual billing.",
+        "來自本機 Codex 工作階段日誌，按記錄時間彙總；僅含本機記錄，帳號歸屬未知，不代表訂閱額度或實際帳單",
+        "ローカルの Codex セッションログを記録時刻で集計。ローカル記録のみでアカウントは不明です。利用枠や実際の請求ではありません。",
+        "로컬 Codex 세션 로그를 기록 시간별로 집계합니다. 로컬 기록만 포함하며 계정은 알 수 없습니다. 구독 한도나 실제 청구액이 아닙니다.",
+    ),
     "深浅模式使用相同主题色": (
         "Use the same accent in light and dark modes", "深淺模式使用相同主題色",
         "ライト・ダークモードで同じテーマカラーを使う", "라이트·다크 모드에서 같은 테마 색 사용",

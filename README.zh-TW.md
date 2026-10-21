@@ -34,10 +34,11 @@
 
 TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 15 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
 
-目前版本：**v1.16.4** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+目前版本：**v1.16.5** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
+- **Codex 今日分時**：依本機工作階段日誌的記錄時間顯示快取命中、新增輸入和輸出 Token，支援模型提示、歷史日期與增量更新。僅包含所選目錄的本機記錄，帳號歸屬未知，不代表訂閱額度或實際帳單。
 - **額度與餘額**：支援 Codex、Claude Code、Cursor、GitHub Copilot、GLM / Z.ai、Kimi Coding、MiniMax Token Plan、Gemini CLI 和 ElevenLabs 額度；DeepSeek / MiMo / NayutoAI 用量；OpenRouter 金鑰預算與費用；Moonshot / Kimi API 餘額。Antigravity CLI 讀取明確設定的狀態列快照。缺少的欄位顯示不可用，不混合幣別或預算範圍。
 - **總覽與多帳戶**：總覽可見時自動更新已設定平台。「設定 → 多帳戶」獨立保存連線、憑據和監控狀態，不覆蓋預設連線或 CLI 登入。兩個已設定平台也可在置頂小看板中常駐。
 - **本機統計與 Excel**：讀取 Codex（含封存）與 Claude 本機日誌，先顯示快取，再背景更新。支援日期、專案、模型篩選、每日比較、圖表縮放，並匯出 `.xlsx` 摘要、明細與統計口徑。本機日誌無法確認帳戶歸屬，不代表訂閱額度或實際帳單；可選擇已可存取的 WSL 目錄，不啟動 WSL。
@@ -118,7 +119,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.16.4`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.16.5`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 
