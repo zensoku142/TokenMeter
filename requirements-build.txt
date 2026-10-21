@@ -1,6 +1,6 @@
 -r requirements.txt
 
-pyinstaller>=6.22.2,<7
+pyinstaller>=6.22.3,<7
 # 13.0.0 修复已知图像解析漏洞，避免发布流水线安装受影响版本。
 Pillow>=13.0.0,<14
 # PyInstaller 会收集 setuptools；最低修复版本避免把已知漏洞带入发布环境。
