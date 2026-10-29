@@ -49,10 +49,28 @@ def test_missing_dates_are_zero_and_source_values_are_aggregated():
     assert by_date[date(2026, 7, 3)].amount == 0.3
 
 
-def test_levels_preserve_large_usage_differences():
+def test_levels_prevent_a_single_outlier_from_flattening_other_days():
     _period, days = normalize_activity(
         [
-            {"date": "2026-07-01", "tokens": 10},
+            {"date": "2026-06-29", "tokens": 20_000_000},
+            {"date": "2026-06-30", "tokens": 40_000_000},
+            {"date": "2026-07-01", "tokens": 60_000_000},
+            {"date": "2026-07-02", "tokens": 80_000_000},
+            {"date": "2026-07-03", "tokens": 10_000_000_000},
+        ],
+        date(2026, 7, 3),
+    )
+    levels = activity_levels(days)
+
+    assert [levels[date(2026, 6, 29) + timedelta(days=index)] for index in range(5)] == [
+        1, 2, 2, 3, 5,
+    ]
+    assert date(2026, 6, 28) not in levels
+
+
+def test_levels_handle_an_outlier_with_only_two_days_of_usage():
+    _period, days = normalize_activity(
+        [
             {"date": "2026-07-02", "tokens": 100},
             {"date": "2026-07-03", "tokens": 1_000_000},
         ],
@@ -60,8 +78,7 @@ def test_levels_preserve_large_usage_differences():
     )
     levels = activity_levels(days)
 
-    assert levels[date(2026, 7, 1)] == 1
-    assert levels[date(2026, 7, 2)] == 1
+    assert levels[date(2026, 7, 2)] == 3
     assert levels[date(2026, 7, 3)] == 5
 
 
@@ -164,6 +181,45 @@ def test_heatmap_renders_complete_calendar_grid():
     assert len(heatmap._hits) >= 365
     assert heatmap.minimumWidth() >= 560
     heatmap.close()
+
+
+def test_heatmap_renders_outlier_and_ordinary_usage_in_distinct_bands():
+    controller = configure_theme(APP, "dark")
+    end = date(2026, 7, 3)
+    heatmap = TokenActivityHeatmap()
+    heatmap.set_activity(
+        [
+            {"date": (end - timedelta(days=2)).isoformat(), "tokens": 100},
+            {"date": (end - timedelta(days=1)).isoformat(), "tokens": 1_000},
+            {"date": end.isoformat(), "tokens": 1_000_000},
+        ],
+        end,
+    )
+    heatmap.resize(heatmap.minimumSize())
+    heatmap.show()
+    APP.processEvents()
+    horizontal_step = max(
+        heatmap.CELL + heatmap.MIN_HORIZONTAL_GAP,
+        (heatmap.width() - heatmap.LEFT - 12) // heatmap.period.week_count,
+    )
+
+    try:
+        for mode in ("dark", "light"):
+            controller.set_mode(mode)
+            APP.processEvents()
+            image = heatmap.grab().toImage()
+            for offset, level in ((3, 0), (2, 1), (1, 3), (0, 5)):
+                week, weekday = calendar_position(
+                    end - timedelta(days=offset), heatmap.period.grid_start
+                )
+                center_x = heatmap.LEFT + week * horizontal_step + heatmap.CELL // 2
+                center_y = (
+                    heatmap.TOP + weekday * (heatmap.CELL + heatmap.GAP) + heatmap.CELL // 2
+                )
+                assert image.pixelColor(center_x, center_y) == QColor(current_theme().heat[level])
+    finally:
+        controller.set_mode("dark")
+        heatmap.close()
 
 
 def test_activity_tooltip_keeps_an_opaque_themed_surface():

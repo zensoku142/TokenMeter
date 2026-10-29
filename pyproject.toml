@@ -9,6 +9,7 @@ include = [
     "data/quota_history.py",
     "ui/provider_overview.py",
     "ui/local_analytics.py",
+    "ui/token_speed.py",
     "ui/account_profiles.py",
     "ui/compact_overview.py",
     "api/deepseek.py",

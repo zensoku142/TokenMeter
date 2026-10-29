@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-from math import ceil
 from typing import Any, Iterable
 
 
@@ -88,15 +87,15 @@ def normalize_activity(
 
 def activity_levels(days: Iterable[TokenActivityDay]) -> dict[date, int]:
     days = list(days)
-    values = [day.token_count for day in days if day.token_count > 0]
+    values = sorted(day.token_count for day in days if day.token_count > 0)
     if not values:
         return {}
 
-    scale_max = max(values)
-    # 按年度峰值的实际比例分为五档；对数缩放和最小值拉伸会让普通用量挤到深色。
-    # 向上取整让非零用量至少落入第一档，与无活动日期区分。
+    # 非零用量的 75% 分位向下取整，最多用其两倍作为色阶上限，避免异常峰值压平普通日期。
+    scale_max = min(values[-1], values[(len(values) - 1) * 3 // 4] * 2)
+    # 向上取整让非零用量至少落入第一档，超过上限的用量显示最高档。
     return {
-        day.date: ceil(day.token_count * 5 / scale_max)
+        day.date: min(5, (day.token_count * 5 + scale_max - 1) // scale_max)
         for day in days
         if day.token_count > 0
     }

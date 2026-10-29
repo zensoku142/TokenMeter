@@ -23,6 +23,7 @@
     "ui/provider_branding.py",
     "ui/provider_picker.py",
     "ui/quota_details.py",
+    "ui/token_speed.py",
     "api/providers/deepseek.py",
     "api/deepseek.py",
     "updater/client.py"

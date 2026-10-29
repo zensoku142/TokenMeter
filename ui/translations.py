@@ -9,6 +9,57 @@ from ui.translation_errors import ERROR_MESSAGES
 MESSAGES = {
     **ERROR_MESSAGES,
     **PROVIDER_MESSAGES,
+    "最近 {latest} · 均速 {average} · 峰值 {peak} tok/s": (
+        "Latest {latest} · Avg {average} · Peak {peak} tok/s", "最近 {latest} · 均速 {average} · 峰值 {peak} tok/s",
+        "最新 {latest} · 平均 {average} · ピーク {peak} tok/s", "최근 {latest} · 평균 {average} · 최고 {peak} tok/s",
+    ),
+    "缓存 {latest} · 均速 {average} · 峰值 {peak} tok/s": (
+        "Cached {latest} · Avg {average} · Peak {peak} tok/s", "快取 {latest} · 均速 {average} · 峰值 {peak} tok/s",
+        "キャッシュ {latest} · 平均 {average} · ピーク {peak} tok/s", "캐시 {latest} · 평균 {average} · 최고 {peak} tok/s",
+    ),
+    "实心升 · 空心降": ("Filled up · Hollow down", "實心升 · 空心降", "塗り：上昇 · 枠：下降", "채움 상승 · 빈칸 하락"),
+    "最近 5 个有效时段末次速度的平均值": (
+        "Average of the last request speed across five active intervals",
+        "最近 5 個有效時段末次速度的平均值",
+        "直近 5 つの有効な時間帯の最終速度の平均",
+        "최근 5개 유효 시간대의 마지막 속도 평균",
+    ),
+    "最近显示所选日期最后一次可计速请求；未完成、输出不足 200 Token 或耗时不足 1 秒的请求不计入。": (
+        "Latest eligible request on the selected date; incomplete requests, fewer than 200 output tokens, or durations under 1 second are excluded.",
+        "最近顯示所選日期最後一次可計速請求；未完成、輸出不足 200 Token 或耗時不足 1 秒的請求不計入。",
+        "選択日の最後の計測可能なリクエストです。未完了、出力 200 Token 未満、1 秒未満のリクエストは除外します。",
+        "선택한 날짜의 마지막 측정 가능 요청입니다. 미완료, 출력 200 Token 미만 또는 1초 미만 요청은 제외합니다.",
+    ),
+    "Token 速度": ("Token speed", "Token 速度", "Token 速度", "Token 속도"),
+    "点击显示或隐藏此模型": ("Click to show or hide this model", "點擊顯示或隱藏此模型", "クリックでこのモデルの表示を切り替える", "클릭하여 이 모델 표시 또는 숨기기"),
+    "已隐藏全部模型，点击图例恢复": ("All models are hidden. Click a legend to restore.", "已隱藏全部模型，點擊圖例恢復", "すべて非表示です。凡例をクリックして表示します", "모든 모델이 숨겨졌습니다. 범례를 클릭하여 복원하세요"),
+    "正在加载速度数据…": ("Loading speed data…", "正在載入速度資料…", "速度データを読み込み中…", "속도 데이터 불러오는 중…"),
+    "速度数据暂不可用，请刷新后重试": (
+        "Speed data is unavailable. Refresh to retry.", "速度資料暫不可用，請重新整理後重試",
+        "速度データを利用できません。更新してください", "속도 데이터를 사용할 수 없습니다. 새로고침해 주세요",
+    ),
+    "暂无可计速请求：输出至少 200 Token，耗时至少 1 秒": (
+        "No eligible requests: at least 200 output tokens and 1 second required.",
+        "暫無可計速請求：輸出至少 200 Token，耗時至少 1 秒",
+        "対象リクエストなし：出力 200 Token 以上、所要時間 1 秒以上が必要です",
+        "측정 가능한 요청 없음: 출력 200 Token 이상, 소요 시간 1초 이상 필요",
+    ),
+    "均速 -- · 峰值 --": ("Avg -- · Peak --", "均速 -- · 峰值 --", "平均 -- · ピーク --", "평균 -- · 최고 --"),
+    "均速 ≈{average} · 峰值 ≈{peak} tok/s": (
+        "Avg ≈{average} · Peak ≈{peak} tok/s", "均速 ≈{average} · 峰值 ≈{peak} tok/s",
+        "平均 ≈{average} · ピーク ≈{peak} tok/s", "평균 ≈{average} · 최고 ≈{peak} tok/s",
+    ),
+    "该日有效请求 {count} 条": (
+        "{count} eligible requests that day", "該日有效請求 {count} 條",
+        "この日の対象リクエスト {count} 件", "해당 날짜의 유효 요청 {count}개",
+    ),
+    "首字": ("First token", "首字", "最初の応答", "첫 토큰"),
+    "按有效请求的输出 Token ÷ 请求耗时估算，包含首字等待；输出不足 200 Token 或耗时不足 1 秒时不计速。": (
+        "Estimated output tokens divided by request duration, including first-token wait. Requests below 200 output tokens or 1 second are excluded.",
+        "按有效請求的輸出 Token ÷ 請求耗時估算，包含首字等待；輸出不足 200 Token 或耗時不足 1 秒時不計速。",
+        "出力 Token 数を初回応答待ち時間を含む所要時間で割った推定値です。出力 200 Token 未満または 1 秒未満は除外します。",
+        "첫 토큰 대기 시간을 포함한 요청 시간으로 출력 Token을 나눈 추정값입니다. 출력 200 Token 미만 또는 1초 미만은 제외합니다.",
+    ),
     "本机日志": ("Local logs", "本機日誌", "ローカルログ", "로컬 로그"),
     "来自本机 Codex 会话日志，按记录时间聚合；仅含本机记录，账号归属未知，不代表订阅额度或实际账单": (
         "From local Codex session logs, grouped by recorded time. Local records only; account unknown. Not subscription quota or actual billing.",
