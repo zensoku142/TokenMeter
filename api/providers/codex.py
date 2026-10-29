@@ -52,6 +52,7 @@ class CodexProvider(Provider):
     supports_subscription_quota = True
     supports_exact_minute_usage = True
     supports_model_usage = True
+    supports_token_speed = True
     minute_usage_source = "local"
     official_api_hosts = {"chatgpt.com"}
     credential_fields = {
@@ -118,11 +119,16 @@ class CodexProvider(Provider):
         days = tuple(today - timedelta(days=offset) for offset in range(retention))
         dates = set(days)
         minute_models: dict[tuple[date, int, str], list[int]] = {}
+        speed_rows = []
         for row in rows:
             usage_day = date.fromisoformat(row.day)
             if usage_day not in dates or not row.timestamp:
                 continue
             stamp = datetime.fromisoformat(row.timestamp)
+            # 保留原始请求，由速度图表统一筛选可计速记录，避免影响其他用量统计。
+            speed_rows.append({"usage_date": usage_day, "timestamp": row.timestamp,
+                               "model": row.model or "unknown", "output_tokens": row.output,
+                               "duration_ms": row.duration_ms, "first_token_ms": row.first_token_ms})
             key = (usage_day, stamp.hour * 60 + stamp.minute, row.model or "unknown")
             values = minute_models.setdefault(key, [0, 0, 0])
             hit = min(row.cache_read, row.input)
@@ -142,7 +148,7 @@ class CodexProvider(Provider):
                                "output_tokens": output})
         # 订阅日志没有实际扣费；只提供 Token，不把 API 单价折算当作账单金额。
         return ExactMinuteUsage(usage_dates=days, token_rows=tuple(token_rows),
-                                model_rows=tuple(model_rows))
+                                model_rows=tuple(model_rows), speed_rows=tuple(speed_rows))
 
     def _credentials(self) -> tuple[str, str | None, dict[str, Any]]:
         path = self._home() / "auth.json"

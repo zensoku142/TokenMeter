@@ -34,11 +34,12 @@
 
 TokenMeter는 Windows 10/11용 경량 AI 사용량 모니터입니다. 독립적인 플랫폼 연결 15개를 제공하며 각 플랫폼의 지원 범위에 따라 구독 한도, 초기화 시간, API 비용, 잔액과 기록을 표시합니다.
 
-현재 버전：**v1.16.5** · 펫 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+현재 버전：**v1.16.6** · 펫 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 기능
 
 - **Codex 시간대별 사용량**: 로컬 세션 로그의 기록 시간별로 캐시 입력, 신규 입력 및 출력 Token을 표시하며 모델 툴팁, 보관 날짜와 증분 갱신을 지원합니다. 선택한 로컬 디렉터리만 집계하며 계정 소속은 알 수 없습니다. 구독 한도나 실제 청구액이 아닙니다.
+- **Token 속도**: Codex와 NayutoAI 패널에서 모델과 시간별 출력 속도를 확인합니다. 유효한 요청의 출력 Token과 소요 시간으로 추정하며 첫 토큰 대기 시간을 포함합니다. 데이터가 부족하면 알 수 없음으로 표시합니다.
 - **한도와 잔액**: Codex, Claude Code, Cursor, GitHub Copilot, GLM / Z.ai, Kimi Coding, MiniMax Token Plan, Gemini CLI, ElevenLabs 한도와 DeepSeek / MiMo / NayutoAI 사용량, OpenRouter 키 예산·비용, Moonshot / Kimi API 잔액을 지원합니다. Antigravity CLI는 명시적으로 설정한 상태 표시줄 스냅샷을 읽습니다. 제공되지 않는 필드는 사용 불가로 표시하며 통화나 예산 범위를 합치지 않습니다.
 - **개요와 다중 계정**: 개요가 보이는 동안 설정된 플랫폼을 자동 갱신합니다. 설정 → 다중 계정에서 연결·자격 증명·모니터링 상태를 각각 저장하며 기본 연결이나 CLI 로그인을 덮어쓰지 않습니다. 설정한 두 플랫폼을 항상 위에 표시되는 작은 대시보드로 볼 수도 있습니다.
 - **로컬 통계와 Excel**: Codex(보관 세션 포함)와 Claude 로컬 로그를 읽고 캐시를 먼저 표시한 뒤 백그라운드에서 갱신합니다. 날짜·프로젝트·모델 필터, 일별 비교, 차트 확대·축소와 요약·상세·집계 기준의 `.xlsx` 내보내기를 지원합니다. 로그의 계정 소속은 알 수 없으며 구독 한도나 실제 청구액이 아닙니다. 접근 가능한 WSL 디렉터리는 선택할 수 있지만 WSL을 시작하지 않습니다.
@@ -119,7 +120,7 @@ Qt 테스트에는 사용 가능한 Windows 데스크톱 세션이, 설치 파�
 
 ## 버전
 
-메인 앱 `1.16.5`, 선택적 펫 확장 `0.2.2`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
+메인 앱 `1.16.6`, 선택적 펫 확장 `0.2.2`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
 
 ## 라이선스 및 감사의 말
 

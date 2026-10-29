@@ -57,6 +57,7 @@ class ExactMinuteUsage:
     cost_rows: tuple[dict[str, Any], ...] = ()
     complete_months: tuple[tuple[int, int], ...] = ()
     model_rows: tuple[dict[str, Any], ...] = ()
+    speed_rows: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,7 @@ class Provider:
     supports_cost = False
     supports_estimated_minute_usage = False
     supports_exact_minute_usage = False
+    supports_token_speed = False
     supports_model_usage = False
     supports_cookie_acquisition = False
     supports_browser_credential_acquisition = False

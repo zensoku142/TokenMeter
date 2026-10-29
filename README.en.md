@@ -34,11 +34,12 @@ Actual component screenshots in Chinese, using demo data. [Original images and s
 
 TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
 
-Current version：**v1.16.5** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.16.6** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
 - **Codex intraday usage**: view cached input, uncached input and output tokens grouped by local session log timestamps, with model tooltips, retained dates and incremental refresh. Counts cover the selected local directory only; account attribution is unknown and they are not subscription quota or actual billing.
+- **Token speed**: view output speed by model and time in the Codex and NayutoAI panels. Speed is estimated from eligible requests' output tokens and duration, including the first-token wait; unavailable data remains unknown.
 - **Quotas and balances**: Codex, Claude Code, Cursor, GitHub Copilot, GLM / Z.ai, Kimi Coding, MiniMax Token Plan, Gemini CLI and ElevenLabs quotas; DeepSeek, MiMo and NayutoAI usage; OpenRouter key budgets and costs; Moonshot / Kimi API balances. Antigravity CLI reads an explicitly configured statusline snapshot. Missing fields remain unavailable; currencies and budget scopes stay separate.
 - **Overview and accounts**: automatically refresh configured providers while the overview is visible. Settings → Multi-account stores independent connections, credentials and monitoring state without replacing default connections or CLI logins. Two configured providers can also stay visible in a compact, always-on-top dashboard.
 - **Local analytics and Excel**: read local Codex (including archived sessions) and Claude logs, show cached results, then update in the background. Filter by date, project and model, compare daily usage, zoom charts and export `.xlsx` summaries, details and methodology. Local logs have unknown account attribution and do not represent subscription quotas or actual bills; accessible WSL directories can be selected without starting WSL.
@@ -119,7 +120,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.16.5`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.16.6`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

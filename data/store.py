@@ -467,6 +467,7 @@ class TokenData:
     minute_model_usage: list[dict[str, Any]] = field(default_factory=list)
     minute_model_usage_history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     minute_usage_source: str = ""
+    token_speed_usage: list[dict[str, Any]] = field(default_factory=list)
     account_key: str = ""
     history_provider: str = ""
     minute_history_complete: bool = True
@@ -979,6 +980,9 @@ class TokenData:
             return data
         # 本机日志按目录隔离，不与登录账号的官方统计共用缓存。
         history_provider = getattr(provider, "local_usage_scope", "") or history_provider
+        if data.history_provider != history_provider:
+            # 日志目录切换后即使本轮扫描失败，也不能沿用另一目录的速度快照。
+            data.token_speed_usage = []
         data.history_provider = history_provider
         provider.history_scope = history_provider
         data.minute_history_complete = include_minute_history
@@ -1378,6 +1382,8 @@ class TokenData:
                     # A successful response is authoritative for today even when
                     # a provider snapshot predates the complete-month marker.
                     exact_dates.add(current_day)
+                    data.token_speed_usage = [row for row in exact_usage.speed_rows
+                                              if row.get("usage_date") in exact_dates]
                     try:
                         minute_status = history.replace_exact_minute_usage(
                             provider=history_provider,

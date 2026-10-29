@@ -66,7 +66,7 @@ def test_timestamp_cache_round_trip_and_legacy_snapshot(tmp_path):
     assert load_local_report("scope") == ([row], 0)
     # 旧的固定列快照缺少时间列，仍须能作为每日统计缓存读取。
     with history._connect() as connection:
-        connection.execute("UPDATE local_usage_report SET payload=?", (json.dumps([astuple(row)[:-1]]),))
+        connection.execute("UPDATE local_usage_report SET payload=?", (json.dumps([astuple(row)[:10]]),))
     assert load_local_report("scope")[0][0].timestamp == ""
 
 

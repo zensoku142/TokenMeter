@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from math import ceil, floor
@@ -1207,7 +1208,7 @@ class TrendCard(QFrame):
 class MinuteUsageTooltip(QFrame):
     """图内悬停明细，避免系统提示框遮挡或离开图表。"""
 
-    def __init__(self, parent: QWidget):
+    def __init__(self, parent: QWidget, *, speed_mode: bool = False):
         super().__init__(parent)
         self.setObjectName("minuteTooltip")
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -1249,12 +1250,39 @@ class MinuteUsageTooltip(QFrame):
         layout.addWidget(self.model_row)
         self.model_row.hide()
 
+        self.swatches: list[QLabel] = []
+        self.value_labels: list[QLabel] = []
+        if speed_mode:
+            # 速度页沿用分时卡片的样式，但把模型与速度放在同一行以保持三行布局。
+            header.removeWidget(self.total_label)
+            model_layout.removeWidget(model_name)
+            model_name.hide()
+            model_layout.removeWidget(self.model_label)
+            self.model_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            model_layout.insertWidget(0, self.model_label)
+            model_layout.addWidget(self.total_label)
+            divider = QFrame()
+            divider.setObjectName("divider")
+            divider.setFrameShape(QFrame.Shape.HLine)
+            divider.setFixedHeight(1)
+            layout.addWidget(divider)
+            first_row = QHBoxLayout()
+            first_name = bind_text(QLabel(), "首字")
+            first_name.setObjectName("minuteTooltipMuted")
+            self.first_token_label = bind_text(QLabel(), "--")
+            self.first_token_label.setObjectName("minuteTooltipValue")
+            self.first_token_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            first_row.addWidget(first_name)
+            first_row.addStretch(1)
+            first_row.addWidget(self.first_token_label)
+            layout.addLayout(first_row)
+            self.hide()
+            return
+
         rows = QGridLayout()
         rows.setContentsMargins(0, 0, 0, 0)
         rows.setHorizontalSpacing(7)
         rows.setVerticalSpacing(3)
-        self.swatches: list[QLabel] = []
-        self.value_labels: list[QLabel] = []
         for row, label in enumerate(("输入（命中缓存）", "输入（未命中缓存）", "输出")):
             swatch = QLabel()
             swatch.setFixedSize(8, 8)
@@ -1304,6 +1332,17 @@ class MinuteUsageTooltip(QFrame):
         layout.addLayout(cost_footer)
         self.hide()
 
+    def set_speed_values(self, start_minute: int, end_minute: int, model: str,
+                         speed: float, first_token_ms: float | None) -> None:
+        time = f"{start_minute // 60:02d}:{start_minute % 60:02d}"
+        if end_minute != start_minute:
+            time += f"–{end_minute // 60:02d}:{end_minute % 60:02d}"
+        bind_text(self.time_label, time)
+        bind_text(self.total_label, f"≈{speed:.1f} token/s")
+        self.model_label.setText(model)
+        self.model_row.setVisible(bool(model))
+        bind_text(self.first_token_label, "--" if first_token_ms is None else f"≈{first_token_ms / 1000:.2f}s")
+
     def set_values(
         self,
         start_minute: int,
@@ -1338,9 +1377,10 @@ class MinuteUsageTooltip(QFrame):
             swatch.setStyleSheet(f"background: {color.name()}; border-radius: 2px;")
 
 
-def create_usage_plot() -> pg.PlotWidget:
+def create_usage_plot(*, y_axis: pg.AxisItem | None = None) -> pg.PlotWidget:
     """分时与本机统计共用坐标、字体和基础交互，避免各自维护一套图表外观。"""
-    plot = pg.PlotWidget(axisItems={"left": TokenAxis(orientation="left")})
+    # 此处始终禁用右键菜单，构造时直接关闭可避免创建不使用的原生菜单。
+    plot = pg.PlotWidget(viewBox=pg.ViewBox(enableMenu=False), axisItems={"left": y_axis if y_axis is not None else TokenAxis(orientation="left")})
     plot.setStyleSheet("border: 0;")
     plot.setMouseEnabled(x=True, y=False)
     plot.hideButtons()
@@ -1367,7 +1407,7 @@ def refresh_usage_plot_theme(plot: pg.PlotWidget) -> None:
 
 
 def create_usage_navigator() -> tuple[pg.PlotWidget, pg.LinearRegionItem]:
-    navigator = pg.PlotWidget()
+    navigator = pg.PlotWidget(viewBox=pg.ViewBox(enableMenu=False))
     navigator.setStyleSheet("border: 0;")
     navigator.setFixedHeight(34)
     navigator.setMouseEnabled(x=False, y=False)
@@ -1432,6 +1472,7 @@ class MinuteUsageChart(QWidget):
         self._model_names: list[list[str]] = [[] for _minute in range(1440)]
         self._visible = {key: True for key, _label in self.SERIES}
         self._signature: tuple | None = None
+        self._hover_key = None
         self._updating_region = False
         self._bars: dict[str, pg.BarGraphItem] = {}
         self._lines: dict[str, pg.PlotDataItem] = {}
@@ -1619,7 +1660,7 @@ class MinuteUsageChart(QWidget):
 
     @staticmethod
     def _smooth_curve_data(
-        x_values: list[float], y_values: list[int], samples_per_segment: int = 8
+        x_values: Sequence[float], y_values: Sequence[float], samples_per_segment: int = 8
     ) -> tuple[list[float], list[float]]:
         """用有界单调 Hermite 曲线连接原始节点，避免平滑后产生虚假峰值或负数。"""
         if len(x_values) != len(y_values):
@@ -1670,6 +1711,8 @@ class MinuteUsageChart(QWidget):
         return smooth_x, smooth_y
 
     def _render_series(self) -> None:
+        # 重建图形后旧的悬浮信息不再对应新节点，下一次移动须重新更新提示和高亮。
+        self._hover_key = None
         hit = self._values["PROMPT_CACHE_HIT_TOKEN"]
         miss = self._values["PROMPT_CACHE_MISS_TOKEN"]
         output = self._values["RESPONSE_TOKEN"]
@@ -2062,6 +2105,12 @@ class MinuteUsageChart(QWidget):
         if hover_x is None:
             self._hide_hover()
             return
+        key = (bucket_index, current_language())
+        changed = key != self._hover_key
+        if not changed:
+            show_usage_tooltip(self.plot, self.hover_tooltip, local, refresh_layout=False)
+            return
+        self._hover_key = key
         if self._hover_line is not None:
             self._hover_line.setPos(hover_x)
             self._hover_line.show()
@@ -2083,6 +2132,7 @@ class MinuteUsageChart(QWidget):
         show_usage_tooltip(self.plot, self.hover_tooltip, local)
 
     def _hide_hover(self) -> None:
+        self._hover_key = None
         self.hover_tooltip.hide()
         if self._hover_line is not None:
             self._hover_line.hide()
@@ -2275,6 +2325,8 @@ class MainPanel(QFrame):
         self._minute_current_cost_rows: list[dict] = []
         self._minute_current_model_rows: list[dict] = []
         self._minute_current_status = "unavailable"
+        self._speed_enabled = False
+        self._speed_rows: list[dict] = []
         self._minute_usage_source = ""
         self._minute_usage_history: dict[str, list[dict]] = {}
         self._minute_cost_usage_history: dict[str, list[dict]] = {}
@@ -2499,10 +2551,14 @@ class MainPanel(QFrame):
         self.activity_mode_group.setExclusive(True)
         self.annual_activity_button = self._activity_mode_button("年度活动", True)
         self.minute_activity_button = self._activity_mode_button("今日分时", False)
+        self.speed_activity_button = self._activity_mode_button("Token 速度", False)
+        self.speed_activity_button.hide()
         self.activity_mode_group.addButton(self.annual_activity_button)
         self.activity_mode_group.addButton(self.minute_activity_button)
+        self.activity_mode_group.addButton(self.speed_activity_button)
         self.annual_activity_button.clicked.connect(lambda: self._set_activity_view("annual"))
         self.minute_activity_button.clicked.connect(lambda: self._set_activity_view("minute"))
+        self.speed_activity_button.clicked.connect(lambda: self._set_activity_view("speed"))
         self.activity_mode_segment = QFrame()
         self.activity_mode_segment.setObjectName("activityModeSegment")
         # 分时头部控件较多，固定紧凑尺寸可避免切换后被布局压缩而产生位移。
@@ -2512,6 +2568,7 @@ class MainPanel(QFrame):
         mode_layout.setSpacing(0)
         mode_layout.addWidget(self.annual_activity_button)
         mode_layout.addWidget(self.minute_activity_button)
+        mode_layout.addWidget(self.speed_activity_button)
 
         self.minute_date_edit = MinuteDateEdit()
         self.minute_date_edit.setEnabled(False)
@@ -2581,6 +2638,13 @@ class MainPanel(QFrame):
             self.minute_legend_buttons[token_type] = button
             activity_header.addWidget(button)
             button.hide()
+        self.speed_legend_slot = QWidget()
+        self.speed_legend_slot.setMinimumWidth(60)
+        self.speed_legend_slot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        speed_legend_layout = QHBoxLayout(self.speed_legend_slot)
+        speed_legend_layout.setContentsMargins(0, 0, 0, 0)
+        self.speed_legend_slot.hide()
+        activity_header.addWidget(self.speed_legend_slot, 1)
         activity_header.addWidget(self.activity_summary)
         activity_header.addWidget(self.quota_details_button)
         activity_layout.addLayout(activity_header)
@@ -2610,6 +2674,7 @@ class MainPanel(QFrame):
         # 默认年度视图不需要两套分时 PlotWidget；首次切换时再创建，
         # 避免仅查看额度或年度活动也常驻完整分时图表。
         self._minute_chart: MinuteUsageChart | None = None
+        self._speed_chart = None
         self.activity_stack = QStackedWidget()
         self.activity_stack.setObjectName("activityStack")
         self.activity_stack.addWidget(self.activity_scroll)
@@ -2661,12 +2726,13 @@ class MainPanel(QFrame):
     def refresh_language_layout(self) -> None:
         # 外语短标签的字宽不同；按实际文字安排固定按钮，避免最小面板宽度下互相覆盖。
         chinese = current_language() == "zh-cn"
-        for button in (self.annual_activity_button, self.minute_activity_button):
+        for button in (self.annual_activity_button, self.minute_activity_button, self.speed_activity_button):
             button.ensurePolished()
             width = 72 if chinese else max(42, button.fontMetrics().horizontalAdvance(button.text()) + 20)
             button.setFixedWidth(width)
         self.activity_mode_segment.setFixedWidth(
-            self.annual_activity_button.width() + self.minute_activity_button.width() + 4
+            sum(button.width() for button in (self.annual_activity_button, self.minute_activity_button,
+                                             self.speed_activity_button) if not button.isHidden()) + 4
         )
         for button, width in zip(self.minute_legend_buttons.values(), (64, 54, 44)):
             button.ensurePolished()
@@ -2771,6 +2837,16 @@ class MainPanel(QFrame):
             self.activity_stack.addWidget(self._minute_chart)
         return self._minute_chart
 
+    @property
+    def speed_chart(self):
+        if self._speed_chart is None:
+            from ui.token_speed import TokenSpeedChart
+
+            self._speed_chart = TokenSpeedChart()
+            self.activity_stack.addWidget(self._speed_chart)
+            self.speed_legend_slot.layout().addWidget(self._speed_chart.legend_scroll)
+        return self._speed_chart
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, "provider_shortcuts"):
@@ -2824,7 +2900,7 @@ class MainPanel(QFrame):
             return
         selected_date = self._minute_selected_date
         show_selected_date = (
-            self._activity_view == "minute"
+            self._activity_view in {"minute", "speed"}
             and selected_date
             and selected_date != self._minute_current_date
         )
@@ -2961,12 +3037,17 @@ class MainPanel(QFrame):
             and current_date.isValid()
             and data.minute_usage_status != "unavailable"
         )
-        if self._minute_chart is not None or self._activity_view == "minute":
+        if self._activity_view == "speed":
+            self._render_speed_date(loading)
+        elif self._minute_chart is not None or self._activity_view == "minute":
             self._render_minute_date(loading)
         else:
             self._render_usage_card()
 
     def _render_minute_date(self, loading: bool) -> None:
+        if self._activity_view == "speed":
+            self._render_speed_date(loading)
+            return
         selected_date = self._minute_selected_date
         read_failed = False
         if (
@@ -3035,15 +3116,32 @@ class MainPanel(QFrame):
             else self._annual_activity_summary)
         self._render_usage_card()
 
+    def _render_speed_date(self, loading: bool) -> None:
+        rows = [row for row in self._speed_rows
+                if str(row.get("usage_date")) == self._minute_selected_date]
+        try:
+            interval = int(config_manager.get("MINUTE_USAGE_INTERVAL_MINUTES", 5))
+        except (TypeError, ValueError):
+            interval = 5
+        self.speed_chart.set_rows(rows, self._minute_selected_date,
+                                  status=self._minute_current_status, loading=loading,
+                                  interval_minutes=interval)
+        count = len(self.speed_chart._rows)
+        bind_text(self.activity_summary, lambda: tr("该日有效请求 {count} 条", count=count))
+        self._render_usage_card()
+
     def _set_activity_view(self, view: str) -> None:
+        if view == "speed" and not self._speed_enabled:
+            view = "annual"
         minute_view = view == "minute"
+        chart_view = view in {"minute", "speed"}
         self._activity_view = view
-        if not minute_view:
+        if not chart_view:
             self.minute_date_edit.popup.close()
         activity_height = (
-            ACTIVITY_SECTION_HEIGHT if minute_view else ANNUAL_ACTIVITY_SECTION_HEIGHT
+            ACTIVITY_SECTION_HEIGHT if chart_view else ANNUAL_ACTIVITY_SECTION_HEIGHT
         )
-        panel_height = PANEL_HEIGHT if minute_view else ANNUAL_PANEL_HEIGHT
+        panel_height = PANEL_HEIGHT if chart_view else ANNUAL_PANEL_HEIGHT
         # 两种视图的内容高度不同；同步收紧面板可消除年度页底部占位，同时保留分时图空间。
         self.activity_card.setFixedHeight(activity_height)
         self.setFixedHeight(panel_height)
@@ -3051,22 +3149,32 @@ class MainPanel(QFrame):
             chart = self._ensure_minute_chart()
             self.activity_stack.setCurrentWidget(chart)
             self._render_minute_date(loading=False)
+        elif view == "speed":
+            self.activity_stack.setCurrentWidget(self.speed_chart)
+            self._render_speed_date(loading=False)
         else:
             self.activity_stack.setCurrentWidget(self.activity_scroll)
-        self.annual_activity_button.setChecked(not minute_view)
+        self.annual_activity_button.setChecked(not chart_view)
         self.minute_activity_button.setChecked(minute_view)
+        self.speed_activity_button.setChecked(view == "speed")
         for control in self.minute_controls:
-            control.setVisible(minute_view)
+            control.setVisible(chart_view)
         for button in self.minute_legend_buttons.values():
             button.setVisible(minute_view)
-        bind_text(self.activity_summary, self._minute_chart.summary_text()
-            if minute_view
-            else self._annual_activity_summary)
+        if view != "speed":
+            bind_text(self.activity_summary, self._minute_chart.summary_text()
+                if minute_view
+                else self._annual_activity_summary)
         self._render_usage_card()
         self.activity_card.layout().invalidate()
         self._refresh_minute_control_colors()
         self._update_activity_header_visibility()
-        if minute_view:
+        if view == "speed":
+            speed_tip = "按有效请求的输出 Token ÷ 请求耗时估算，包含首字等待；输出不足 200 Token 或耗时不足 1 秒时不计速。"
+            bind_text(self.minute_estimate_label, speed_tip, method="setToolTip")
+            bind_text(self.activity_summary, speed_tip, method="setToolTip")
+        elif minute_view:
+            bind_text(self.minute_estimate_label, self._minute_estimate_tooltip, method="setToolTip")
             bind_text(self.activity_summary, self._minute_estimate_tooltip, method='setToolTip')
         elif self._quota_data is not None:
             bind_text(self.activity_summary, self._annual_activity_tooltip, method='setToolTip')
@@ -3074,10 +3182,12 @@ class MainPanel(QFrame):
 
     def _update_activity_header_visibility(self) -> None:
         minute_view = self._activity_view == "minute"
-        wrapped = minute_view and self._quota_data is not None
+        speed_view = self._activity_view == "speed"
+        chart_view = self._activity_view in {"minute", "speed"}
+        wrapped = speed_view or (chart_view and self._quota_data is not None)
         if wrapped != self._minute_details_wrapped:
             # 订阅页还包含来源和额度明细，单行放不下；分成两行以保留按钮和日期的固定宽度。
-            controls = [self.minute_estimate_label, *self.minute_legend_buttons.values(),
+            controls = [self.minute_estimate_label, *self.minute_legend_buttons.values(), self.speed_legend_slot,
                         self.activity_summary, self.quota_details_button]
             for control in controls:
                 self.activity_header_layout.removeWidget(control)
@@ -3093,8 +3203,18 @@ class MainPanel(QFrame):
                 button.setVisible(minute_view)
             self.quota_details_button.setVisible(self._quota_data is not None)
         self.minute_details_row.setVisible(wrapped)
-        self.activity_summary.setVisible(not minute_view or self.width() >= 775)
-        self.minute_estimate_label.setVisible(minute_view)
+        for button in self.minute_legend_buttons.values():
+            button.setVisible(minute_view)
+        self.speed_legend_slot.setVisible(speed_view)
+        if wrapped:
+            self.minute_details_layout.setStretch(1, 0 if speed_view else 1)
+            self.minute_details_layout.setStretchFactor(self.speed_legend_slot, 1)
+        # 三个 Tab 的订阅页在窄窗口优先保留操作，年度汇总仍可在图表提示中查看。
+        summary_fits = self.width() >= 775 if chart_view else not (
+            self._speed_enabled and self._quota_data is not None and self.width() < 725
+        )
+        self.activity_summary.setVisible(summary_fits and not speed_view)
+        self.minute_estimate_label.setVisible(chart_view)
 
     def _refresh_minute_control_colors(self) -> None:
         if self._minute_chart is None:
@@ -3192,6 +3312,8 @@ class MainPanel(QFrame):
         self.status_dot.refresh_theme()
         if self._minute_chart is not None:
             self._minute_chart.refresh_theme()
+        if self._speed_chart is not None:
+            self._speed_chart.refresh_theme()
         self.minute_date_edit.refresh_theme()
         self._refresh_minute_control_colors()
         self._refresh_icons()
@@ -3271,6 +3393,13 @@ class MainPanel(QFrame):
                 self.provider_quick_combo.setCurrentIndex(provider_index)
             del provider_blocker
         provider_cls = PROVIDERS.get(provider_id)
+        self._speed_rows = data.token_speed_usage
+        self._speed_enabled = bool(provider_cls and provider_cls.supports_token_speed
+                                   and data.minute_usage_status != "unavailable")
+        self.speed_activity_button.setVisible(self._speed_enabled)
+        self.refresh_language_layout()
+        if self._activity_view == "speed" and not self._speed_enabled:
+            self._activity_view = "annual"
         self.provider_shortcuts.set_current(provider_id)
         quota_mode = bool(
             data.quota_windows

@@ -111,6 +111,7 @@ class NayutoProvider(Provider):
     supports_cost = True
     supports_exact_minute_usage = True
     supports_model_usage = True
+    supports_token_speed = True
     supports_browser_credential_acquisition = True
     credential_acquisition_label = "Bearer"
     credential_acquisition_automatic = False
@@ -443,6 +444,7 @@ class NayutoProvider(Provider):
         minute_tokens: dict[tuple[date, int, str], int] = {}
         minute_costs: dict[tuple[date, int], Decimal] = {}
         minute_models: dict[tuple[date, int, str], dict[str, Any]] = {}
+        speed_rows = []
         usage_dates: set[date] = set()
         dirty_rows = 0
 
@@ -472,6 +474,12 @@ class NayutoProvider(Provider):
             # status is deliberately not filtered: the provider's billed actual_cost
             # remains authoritative until failed/cancelled billing semantics are proven.
             model = str(record.get("model") or "unknown").strip() or "unknown"
+            duration = record.get("duration_ms")
+            # 耗时是可选请求字段；缺失或异常只跳过计速，不能影响现有账单与 Token 统计。
+            speed_rows.append({"usage_date": usage_date, "timestamp": observed_at.isoformat(),
+                               "model": model, "output_tokens": output,
+                               "duration_ms": duration if type(duration) is int and duration >= 0 else None,
+                               "status": record.get("status")})
             model_data = daily.setdefault(month_key, {}).setdefault(
                 usage_date, {}
             ).setdefault(
@@ -572,6 +580,7 @@ class NayutoProvider(Provider):
                 cost_rows=cost_rows,
                 complete_months=tuple(sorted(requested_months)),
                 model_rows=model_rows,
+                speed_rows=tuple(speed_rows),
             ),
             dirty_rows,
         )

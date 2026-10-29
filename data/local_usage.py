@@ -31,6 +31,88 @@ class LocalUsage:
     total: int
     # 旧快照没有请求时间，保留默认值以继续读取；新扫描保留时间供分时聚合。
     timestamp: str = ""
+    duration_ms: int | None = None
+    first_token_ms: int | None = None
+
+
+@dataclass
+class _CodexTiming:
+    boundary: datetime | None = None
+    last_token: datetime | None = None
+    started: datetime | None = None
+    output_at: datetime | None = None
+    tool_at: datetime | None = None
+    usage_end: tuple[datetime, dict] | None = None
+    first_output_ms: int | None = None
+
+    def observe(self, record: dict) -> None:
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            return
+        kind, event = record.get("type"), payload.get("type")
+        if kind == "event_msg" and event == "token_count":
+            return
+        try:
+            stamp = datetime.fromisoformat(str(record.get("timestamp", "")).replace("Z", "+00:00")).astimezone()
+        except (ValueError, OverflowError, OSError):
+            return
+        if kind == "event_msg" and event in {"task_started", "turn_aborted"}:
+            # 中断的请求没有用量结算，下一轮不能继承它的起点。
+            self.started = self.output_at = self.tool_at = self.usage_end = None
+            self.first_output_ms = None
+            self.boundary = max(self.boundary, stamp) if self.boundary else stamp
+        elif kind == "event_msg" and event == "item_completed":
+            item, started = payload.get("item"), payload.get("started_at_ms")
+            # 完成时间不等于首字时间；仅使用日志明确记录的模型输出开始时刻。
+            if (isinstance(item, dict) and item.get("type") in {"Reasoning", "AgentMessage"}
+                    and type(started) is int and started >= 0
+                    and (self.last_token is None or started > self.last_token.timestamp() * 1000)):
+                self.first_output_ms = started if self.first_output_ms is None else min(self.first_output_ms, started)
+        elif kind in {"session_meta", "turn_context"} or (
+            kind == "response_item" and event == "message" and payload.get("role") != "assistant"
+        ):
+            self.boundary = max(self.boundary, stamp) if self.boundary else stamp
+        elif kind == "response_item" and event in {"function_call_output", "custom_tool_call_output"}:
+            self.boundary = max(self.boundary, stamp) if self.boundary else stamp
+            self.tool_at = stamp if self.output_at else None
+        elif kind == "response_item" and (
+            event in {"reasoning", "function_call", "custom_tool_call"}
+            or (event == "message" and payload.get("role") == "assistant")
+        ):
+            # 旧日志会在 token_count 后补写上一响应，不能把这些输出算进下一请求。
+            if self.started is None and self.last_token and (stamp - self.last_token).total_seconds() <= 0.1:
+                return
+            if self.started is None:
+                self.started = self.boundary
+            self.output_at, self.tool_at = stamp, None
+        elif kind == "token_usage_record" and isinstance(payload.get("usage"), dict):
+            # 仅保留计数用于匹配随后到达的 token_count，不保留消息或工具正文。
+            self.usage_end = (stamp, {name: payload["usage"].get(name) for name in (
+                "input_tokens", "cached_input_tokens", "output_tokens",
+            )})
+
+    def finish(self, stamp: datetime, counts: dict[str, int]) -> tuple[int | None, int | None]:
+        start, end = self.started or self.boundary, stamp
+        first_output_ms = self.first_output_ms
+        if self.usage_end and all(counts.get(name) == value for name, value in self.usage_end[1].items()):
+            end = self.usage_end[0]
+        elif self.tool_at and (stamp - self.tool_at).total_seconds() <= 0.1:
+            # 部分旧日志在工具结束后才写用量，结束点须回退到模型输出，避免把工具耗时计入速度。
+            end = self.output_at
+        self.boundary = max(self.boundary, stamp) if self.boundary else stamp
+        self.last_token = stamp
+        self.started = self.output_at = self.tool_at = self.usage_end = None
+        self.first_output_ms = None
+        if start is None or end is None:
+            return None, None
+        duration = round((end - start).total_seconds() * 1000)
+        # 与 CC 日志估算口径一致；异常短窗口或长时间休眠不能当作模型请求耗时。
+        if not 100 <= duration <= 3_600_000:
+            return None, None
+        first_token = first_output_ms - round(start.timestamp() * 1000) if first_output_ms is not None else None
+        if first_token is not None and not 0 <= first_token <= duration:
+            first_token = None
+        return duration, first_token
 
 
 @dataclass
@@ -43,6 +125,7 @@ class _FileUsage:
     issues: int = 0
     previous: dict[str, int] = field(default_factory=dict)
     events: dict[str, LocalUsage] = field(default_factory=dict)
+    timing: _CodexTiming = field(default_factory=_CodexTiming)
 
 
 def _count(value) -> int:
@@ -195,9 +278,16 @@ class LocalUsageScanner:
                         break
                     if oversized:
                         data.issues += 1
+                        if provider == "codex":
+                            # 丢失的大行可能是请求边界，清除计时以免把工具或空闲耗时算进速度。
+                            data.timing = _CodexTiming(last_token=data.timing.last_token)
                         continue
-                    # 先过滤记录类型，避免反序列化不参与统计的大段对话和工具输出。
-                    if not any(marker in raw for marker in (b'"usage"', b'"token_count"', b'"session_meta"', b'"turn_context"')):
+                    # 只解析计数与请求计时所需的事件，对话与工具正文不保留到扫描缓存。
+                    markers = (b'"usage"', b'"token_count"', b'"session_meta"', b'"turn_context"')
+                    timing_record = provider == "codex" and any(marker in raw for marker in (
+                        b'"response_item"', b'"task_started"', b'"turn_aborted"', b'"item_completed"',
+                    ))
+                    if not timing_record and not any(marker in raw for marker in markers):
                         continue
                     try:
                         record = json.loads(raw)
@@ -216,9 +306,12 @@ class LocalUsageScanner:
 
     def _record(self, provider: str, record: dict, data: _FileUsage) -> None:
         payload = record.get("payload", {})
+        duration_ms = None
+        first_token_ms = None
         if provider == "codex":
             if not isinstance(payload, dict):
                 return
+            data.timing.observe(record)
             if record.get("type") == "session_meta":
                 data.session = str(payload.get("id") or data.session)
                 data.project = Path(str(payload.get("cwd") or "")).name
@@ -256,6 +349,7 @@ class LocalUsageScanner:
                 # 单次用量优先于累计差分，避免续聊继承的累计历史被归到首个新请求。
                 counts = {name: last[name] for name in current}
             data.previous = current
+            duration_ms, first_token_ms = data.timing.finish(stamp, counts)
             event_id = f"{record.get('timestamp')}:{current['total_tokens']}"
             values = (counts["input_tokens"], counts["output_tokens"], counts["cached_input_tokens"], 0, counts["total_tokens"])
         else:
@@ -287,7 +381,7 @@ class LocalUsageScanner:
             values = (uncached + read + write, output, read, write, uncached + output + read + write)
         if values[-1] <= 0:
             return
-        row = LocalUsage(provider, data.session, data.project, day, data.model, *values, stamp.isoformat())
+        row = LocalUsage(provider, data.session, data.project, day, data.model, *values, stamp.isoformat(), duration_ms, first_token_ms)
         existing = data.events.get(event_id)
         if existing is None or row.total > existing.total:
             data.events[event_id] = row
@@ -373,6 +467,13 @@ def load_local_report(scope: str) -> tuple[list[LocalUsage], int] | None:
             date.fromisoformat(row.day)
             if row.timestamp:
                 datetime.fromisoformat(row.timestamp)
+            if row.duration_ms is not None and (type(row.duration_ms) is not int or row.duration_ms < 0):
+                return None
+            if row.first_token_ms is not None and (
+                type(row.first_token_ms) is not int or row.first_token_ms < 0
+                or row.duration_ms is None or row.first_token_ms > row.duration_ms
+            ):
+                return None
         return rows, max(0, int(record[1]))
     except (ValueError, TypeError):
         return None
