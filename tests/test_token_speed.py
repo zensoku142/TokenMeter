@@ -122,30 +122,40 @@ def test_chart_uses_weighted_model_buckets_and_clickable_legend_without_zero_sam
                     speed_row(stamp, 500, 10000, "model-b"),
                     speed_row(stamp, 199, 10000, "too-short"), speed_row(stamp, 400, 999, "bad-duration"),
                     speed_row(stamp + timedelta(hours=1), 600, 10000)], stamp.date().isoformat())
-    assert len(chart._points) == 3
+    assert len(chart._points) == 2
     assert chart._points[0]["speed"] == 10
-    assert {point["model"] for point in chart._points} == {"model-a", "model-b"}
-    assert [point["x"] for point in chart._points] == [0, 0, 1]
+    assert {point["model"] for point in chart._points} == {"model-a"}
+    assert set(chart.legend_buttons) == {"model-a", "model-b"}
+    assert chart.legend_buttons["model-a"].isChecked()
+    assert not chart.legend_buttons["model-b"].isChecked()
+    assert [point["x"] for point in chart._points] == [0, 1]
     assert chart._points[0]["open"] == 100
     assert chart._points[0]["high"] == 100 and chart._points[0]["low"] == 10
     assert chart._points[-1]["open"] == 10 and chart._points[-1]["speed"] == 60
     assert chart.plot.getAxis("bottom").tickStrings([0, 1], 1, 1) == ["10:00", "11:00"]
-    assert "≈46.0" in chart.summary.text()
+    assert "均速 ≈45.0" in chart.summary.text()
     assert not chart.findChildren(QComboBox)
     chart.legend_buttons["model-b"].click()
-    assert {point["model"] for point in chart._points} == {"model-a"}
-    chart.legend_buttons["model-a"].click()
-    assert not chart._points
-    assert "图例" in chart.state_label.text()
-    chart.legend_buttons["model-b"].click()
     assert len(chart._points) == 1
+    assert chart._points[0]["model"] == "model-b"
     assert chart._points[0]["output"] == 500
+    assert chart.legend_buttons["model-b"].isChecked()
+    assert not chart.legend_buttons["model-a"].isChecked()
+    assert "均速 ≈50.0" in chart.summary.text()
+    chart.legend_buttons["model-b"].click()
+    assert chart.legend_buttons["model-b"].isChecked()
+    assert len(chart._points) == 1
     chart._show_hover(chart._points[0], QPoint(100, 50))
     assert "≈50.0" in chart.tooltip.total_label.text()
+    chart.legend_buttons["model-a"].click()
+    assert len(chart._points) == 2
+    assert {point["model"] for point in chart._points} == {"model-a"}
+    assert not chart.tooltip.isVisible()
+    assert len(chart._rows) == 4
     chart.close()
 
 
-def test_model_switch_preserves_concurrent_points_and_uses_previous_speed():
+def test_model_switch_keeps_kline_open_and_hover_within_selected_model():
     stamp = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
     chart = TokenSpeedChart()
     chart.set_rows([speed_row(stamp, 400, 10000, "model-a"),
@@ -153,14 +163,47 @@ def test_model_switch_preserves_concurrent_points_and_uses_previous_speed():
                     speed_row(stamp + timedelta(minutes=10), 300, 10000, "model-a"),
                     speed_row(stamp + timedelta(minutes=10), 200, 10000, "model-b")],
                    stamp.date().isoformat())
-    primary = [chart._hover_primary[index] for index in range(3)]
-    assert [point["model"] for point in primary] == ["model-a", "model-b", "model-a"]
-    assert [point["open"] for point in primary] == [40, 40, 60]
-    assert [point["speed"] for point in primary] == [40, 60, 30]
-    assert len(chart._points) == 4 and len(chart._hover_series) == 1
+    primary = list(chart._hover_primary.values())
+    assert [point["model"] for point in primary] == ["model-b", "model-b"]
+    assert [point["open"] for point in primary] == [60, 60]
+    assert [point["speed"] for point in primary] == [60, 20]
     chart.legend_buttons["model-a"].click()
-    assert all(point["model"] == "model-b" for point in chart._points)
+    assert all(point["model"] == "model-a" for point in chart._points)
     assert list(chart._hover_primary) == [0, 1]
+    assert [point["open"] for point in chart._points] == [40, 40]
+    assert [point["speed"] for point in chart._points] == [40, 30]
+    assert chart.plot.getAxis("bottom").minutes == [600, 610]
+    nav_bars = next(item for item in chart.navigator.items() if isinstance(item, pg.BarGraphItem))
+    assert nav_bars.opts["height"] == [40, 30]
+    chart._show_hover(chart._points[1], QPoint(100, 50))
+    assert chart.tooltip.model_label.text() == "model-a"
+    assert chart.tooltip.total_label.text() == "≈30.0 token/s"
+    chart.close()
+
+
+def test_model_selection_survives_refresh_and_falls_back_when_selected_model_disappears():
+    stamp = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    today = stamp.date().isoformat()
+    chart = TokenSpeedChart()
+    rows = [speed_row(stamp, 400, 10000), speed_row(stamp, 300, 10000, "model-b")]
+    chart.set_rows(rows, today)
+    chart.legend_buttons["model-b"].click()
+    chart.set_rows([*rows, speed_row(stamp + timedelta(minutes=5), 800, 10000)], today)
+    assert {point["model"] for point in chart._points} == {"model-b"}
+    assert chart.legend_buttons["model-b"].isChecked()
+    chart.set_rows(rows, today, status="failed")
+    assert {point["model"] for point in chart._points} == {"model-b"}
+    assert chart.legend_buttons["model-b"].isChecked()
+    chart.set_rows([rows[0]], today)
+    assert {point["model"] for point in chart._points} == {"model-a"}
+    assert set(chart.legend_buttons) == {"model-a"}
+    assert chart.legend_buttons["model-a"].isChecked()
+    chart.set_rows([], today)
+    assert not chart._points and not chart.legend_buttons
+    assert "暂无可计速请求" in chart.state_label.text()
+    chart.set_rows([rows[1]], today)
+    assert {point["model"] for point in chart._points} == {"model-b"}
+    assert chart.legend_buttons["model-b"].isChecked()
     chart.close()
 
 
@@ -168,8 +211,11 @@ def test_dense_speed_chart_navigates_without_permanent_main_line_dots():
     stamp = datetime.now().astimezone().replace(hour=8, minute=0, second=0, microsecond=0)
     chart = TokenSpeedChart()
     chart.resize(640, 230)
-    chart.set_rows([speed_row(stamp + timedelta(minutes=5 * index), 400 + index, 10000)
-                    for index in range(72)], stamp.date().isoformat())
+    rows = [speed_row(stamp + timedelta(minutes=5 * index), 400 + index, 10000)
+            for index in range(72)]
+    rows.extend(speed_row(stamp + timedelta(minutes=15 * index), 300, 10000, "model-b")
+                for index in range(8))
+    chart.set_rows(rows, stamp.date().isoformat())
     chart.show()
     APP.processEvents()
     assert len(chart._points) == 72
@@ -191,6 +237,12 @@ def test_dense_speed_chart_navigates_without_permanent_main_line_dots():
     assert chart._hover_marker.isVisible()
     chart._hide_hover()
     assert not chart._hover_marker.isVisible()
+    chart.legend_buttons["model-b"].click()
+    assert len(chart._points) == 8
+    assert chart.region.getRegion() == pytest.approx((-0.5, 7.5))
+    chart.legend_buttons["model-a"].click()
+    assert len(chart._points) == 72
+    assert chart.region.getRegion() == pytest.approx((47.5, 71.5))
     chart.close()
 
 
@@ -321,6 +373,16 @@ def test_kline_ma5_uses_only_five_observed_intervals():
     assert [point["speed"] for point in chart._points] == [20, 25, 40, 50, 100, 200]
     assert list(chart._ma_line.xData) == [4, 5]
     assert list(chart._ma_line.yData) == [47, 83]
+    other_rows = [speed_row(stamp + timedelta(minutes=5 * index), 400, 1000, "model-b")
+                  for index in range(6)]
+    chart.set_rows([*rows, *other_rows], stamp.date().isoformat())
+    assert {point["model"] for point in chart._points} == {"model-a"}
+    assert list(chart._ma_line.yData) == [47, 83]
+    chart.legend_buttons["model-b"].click()
+    assert {point["model"] for point in chart._points} == {"model-b"}
+    assert list(chart._ma_line.yData) == [400, 400]
+    chart.legend_buttons["model-a"].click()
+    assert list(chart._ma_line.yData) == [47, 83]
     chart.set_rows(rows[:4], stamp.date().isoformat())
     assert chart._ma_line is None
     assert chart.ma_label.isHidden()
@@ -406,13 +468,19 @@ def test_speed_tab_uses_model_legends_and_keeps_date_refresh_theme_and_other_tab
     try:
         assert panel._activity_view == "speed"
         assert panel.activity_stack.currentWidget() is panel.speed_chart
-        assert len(panel.speed_chart._points) == 2
+        assert len(panel.speed_chart._points) == 1
+        assert panel.speed_chart._points[0]["model"] == "model-b"
         assert not panel.speed_legend_slot.isHidden()
         assert all(button.isHidden() for button in panel.minute_legend_buttons.values())
         assert panel.activity_summary.isHidden()
         buttons = list(panel.speed_chart.legend_buttons.values())
+        hint = "Click to switch to this model" if language == "en" else "点击切换到此模型"
+        assert all(hint in button.toolTip() for button in buttons)
         legend_center = (buttons[0].geometry().left() + buttons[-1].geometry().right()) / 2
         assert abs(legend_center - panel.speed_chart.legend_content.rect().center().x()) <= 2
+        panel.speed_chart.legend_buttons["model-a"].click()
+        assert panel.speed_chart._points[0]["model"] == "model-a"
+        assert sum(button.isChecked() for button in buttons) == 1
         controls = [panel.activity_mode_segment, panel.minute_date_edit, panel.minute_estimate_label,
                     panel.speed_legend_slot, panel.quota_details_button]
         rects = [QRect(control.mapTo(panel, QPoint()), control.size()) for control in controls if control.isVisible()]
@@ -421,9 +489,11 @@ def test_speed_tab_uses_model_legends_and_keeps_date_refresh_theme_and_other_tab
         assert all(not left.intersects(right) for index, left in enumerate(rects) for right in rects[index + 1:])
         panel.update_data(data)
         assert panel._activity_view == "speed"
+        assert panel.speed_chart._points[0]["model"] == "model-a"
         assert all(button.isHidden() for button in panel.minute_legend_buttons.values())
         configure_theme(app, "light")
-        assert len(panel.speed_chart._points) == 2
+        assert len(panel.speed_chart._points) == 1
+        assert panel.speed_chart._points[0]["model"] == "model-a"
         panel.minute_activity_button.click()
         assert all(not button.isHidden() for button in panel.minute_legend_buttons.values())
         assert panel.speed_legend_slot.isHidden()

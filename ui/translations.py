@@ -31,8 +31,7 @@ MESSAGES = {
         "선택한 날짜의 마지막 측정 가능 요청입니다. 미완료, 출력 200 Token 미만 또는 1초 미만 요청은 제외합니다.",
     ),
     "Token 速度": ("Token speed", "Token 速度", "Token 速度", "Token 속도"),
-    "点击显示或隐藏此模型": ("Click to show or hide this model", "點擊顯示或隱藏此模型", "クリックでこのモデルの表示を切り替える", "클릭하여 이 모델 표시 또는 숨기기"),
-    "已隐藏全部模型，点击图例恢复": ("All models are hidden. Click a legend to restore.", "已隱藏全部模型，點擊圖例恢復", "すべて非表示です。凡例をクリックして表示します", "모든 모델이 숨겨졌습니다. 범례를 클릭하여 복원하세요"),
+    "点击切换到此模型": ("Click to switch to this model", "點擊切換到此模型", "クリックでこのモデルに切り替える", "클릭하여 이 모델로 전환"),
     "正在加载速度数据…": ("Loading speed data…", "正在載入速度資料…", "速度データを読み込み中…", "속도 데이터 불러오는 중…"),
     "速度数据暂不可用，请刷新后重试": (
         "Speed data is unavailable. Refresh to retry.", "速度資料暫不可用，請重新整理後重試",

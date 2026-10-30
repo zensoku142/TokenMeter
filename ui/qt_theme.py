@@ -266,6 +266,8 @@ def _theme_tokens(theme: ThemeTokens | str | None) -> ThemeTokens:
 def build_app_style(theme: ThemeTokens | str | None = None) -> str:
     """Build the complete application QSS for one resolved theme."""
     tokens = _theme_tokens(theme)
+    # 保持默认蓝色选中态的白字，同时避免极浅自定义主色导致白字不可见。
+    activity_text = "#FFFFFF" if _contrast("#FFFFFF", tokens.selection) >= 4.0 else "#000000"
     panel_surface = _panel_css(tokens.surface, tokens)
     panel_elevated = _panel_css(tokens.elevated, tokens)
     divider = QColor(tokens.border)
@@ -536,7 +538,7 @@ QToolButton#activityModeButton {{
     font-size: 11px;
 }}
 QToolButton#activityModeButton:checked {{
-    color: {tokens.on_accent};
+    color: {activity_text};
     background: {tokens.selection};
 }}
 QToolButton#minuteDatePreviousButton,

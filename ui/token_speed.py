@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime
 from html import escape
-from math import isfinite
 from typing import cast
 
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -60,9 +59,8 @@ class TokenSpeedChart(QWidget):
         self._candles = []
         self._wicks = []
         self._candle_style = None
-        self._hidden_models = set()
+        self._selected_model = None
         self._model_colors = {}
-        self._hover_series = []
         self._hover_primary = {}
         self._hover_key = None
         self._pointer_inside = False
@@ -74,6 +72,8 @@ class TokenSpeedChart(QWidget):
         self._latest = None
         self._latest_cached = False
         self.legend_buttons = {}
+        self._model_group = QButtonGroup(self)
+        self._model_group.setExclusive(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
@@ -181,7 +181,10 @@ class TokenSpeedChart(QWidget):
         bind_text(self.summary, lambda: f"<p>{escape(tr('最近显示所选日期最后一次可计速请求；未完成、输出不足 200 Token 或耗时不足 1 秒的请求不计入。'))}<br>{escape(details)}</p>", method="setToolTip")
         self._refresh_model_colors()
         models = list(self._model_colors)
-        self._hidden_models.intersection_update(models)
+        # 刷新时保留选择；首次加载或原模型已无有效请求时，使用输出量最多的模型，避免空图。
+        if self._selected_model not in models:
+            self._selected_model = models[0] if models else None
+            self._has_initial_range = False
         self._update_legend(models)
         if loading and not self._rows:
             bind_text(self.state_label, "正在加载速度数据…")
@@ -193,11 +196,10 @@ class TokenSpeedChart(QWidget):
 
     def render(self):
         self._hide_hover()
-        self._hover_series = []
         self._hover_primary = {}
         previous_region = cast(tuple[float, float], self.region.getRegion())
         previous_high = self._axis_high
-        rows = [row for row in self._rows if row["model"] not in self._hidden_models]
+        rows = [row for row in self._rows if row["model"] == self._selected_model]
         groups = {}
         for row in rows:
             key = (row["minute"] // self._interval * self._interval, row["model"])
@@ -237,24 +239,14 @@ class TokenSpeedChart(QWidget):
         self.state_label.setVisible(not self._points)
         if not self._points:
             self.ma_label.hide()
-            if self._rows:
-                bind_text(self.state_label, "已隐藏全部模型，点击图例恢复")
             self._set_summary(None, None)
             return
         # 汇总分子和分母，不能平均每条请求的 tok/s；并行请求也不会被混算成吞吐量。
         average = sum(row["output"] for row in rows) * 1000 / sum(row["duration"] for row in rows)
         peak = max(point["high"] for point in self._points)
         self._set_summary(average, peak)
-        series = defaultdict(list)
-        for point in self._points:
-            series[point["model"]].append(point)
-        # 同一时段可能有并发模型；用输出最多的模型形成主线，其余点仍可悬停和筛选。
-        dominant = {}
-        for point in self._points:
-            previous = dominant.get(point["x"])
-            if previous is None or (point["output"], point["model"]) > (previous["output"], previous["model"]):
-                dominant[point["x"]] = point
-        primary = [dominant[index] for index in range(len(minutes))]
+        # K 线、均线、导航和悬停均使用当前模型，避免跨模型衔接造成速度跳变。
+        primary = self._points
         self._hover_primary = {point["x"]: point for point in primary}
         candles = defaultdict(list)
         for index, point in enumerate(primary):
@@ -300,27 +292,17 @@ class TokenSpeedChart(QWidget):
         self.navigator.addItem(pg.BarGraphItem(x=[point["x"] for point in primary],
                                height=[point["speed"] for point in primary], width=0.8,
                                pen=None, brush=pg.mkBrush(nav_color)))
-        primary_ids = {id(point) for point in primary}
-        for model, points in series.items():
-            color = self._model_colors[model]
-            secondary = [point for point in points if id(point) not in primary_ids]
-            if secondary:
-                secondary_x = [point["x"] for point in secondary]
-                # 共用同一横坐标列表标记“仅命中散点”，避免并发模型的点被误当作连线。
-                self._hover_series.append((secondary_x, [point["speed"] for point in secondary],
-                                           secondary_x, secondary))
-            # 密集时段只保留并发模型的独立点；主线数据仍可在悬停时逐点查看。
-            visible_points = points if len(minutes) <= 24 else [point for point in points if id(point) not in primary_ids]
-            if len(visible_points) > 24:
-                visible_points = visible_points[::(len(visible_points) + 23) // 24]
-            dots = pg.ScatterPlotItem(
-                spots=[{"pos": (point["x"], point["speed"]), "data": point} for point in visible_points],
-                # Qt/PySide 部分版本的缓存散点绘制参数不兼容；少量点直接绘制更可靠。
-                size=6, pen=pg.mkPen(color), brush=pg.mkBrush(color), antialias=True, tip=None, useCache=False,
-            )
-            dots.setAcceptHoverEvents(False)
-            self.plot.addItem(dots)
-            self._items.append(dots)
+        # 密集时段通过悬停逐点查看，避免常驻圆点遮住 K 线。
+        visible_points = primary if len(minutes) <= 24 else []
+        color = self._model_colors[self._selected_model]
+        dots = pg.ScatterPlotItem(
+            spots=[{"pos": (point["x"], point["speed"]), "data": point} for point in visible_points],
+            # Qt/PySide 部分版本的缓存散点绘制参数不兼容；少量点直接绘制更可靠。
+            size=6, pen=pg.mkPen(color), brush=pg.mkBrush(color), antialias=True, tip=None, useCache=False,
+        )
+        dots.setAcceptHoverEvents(False)
+        self.plot.addItem(dots)
+        self._items.append(dots)
         self._hover_marker = pg.ScatterPlotItem(size=9, antialias=True, tip=None, useCache=False)
         self._hover_marker.setAcceptHoverEvents(False)
         self._hover_marker.setZValue(10)
@@ -415,7 +397,7 @@ class TokenSpeedChart(QWidget):
         base_hue = accent.hslHue() if accent.hslHue() >= 0 else 210
         offsets = (0, 60, -55, 115, -115, 165, -165)
         for index, model in enumerate(sorted(totals, key=lambda name: (-totals[name], name))):
-            # 主模型保留主题色，其他模型使用相邻但可辨认的色相；隐藏图例不改变已有配色。
+            # 主模型保留主题色，其他模型使用相邻但可辨认的色相；切换模型不改变已有配色。
             color = QColor(accent) if index == 0 else QColor.fromHsl(
                 (base_hue + offsets[index % len(offsets)]) % 360,
                 max(140, min(220, accent.hslSaturation())),
@@ -433,6 +415,7 @@ class TokenSpeedChart(QWidget):
     def _update_legend(self, models):
         for model in set(self.legend_buttons) - set(models):
             button = self.legend_buttons.pop(model)
+            self._model_group.removeButton(button)
             self.legend_layout.removeWidget(button)
             button.deleteLater()
         for index, model in enumerate(models):
@@ -443,30 +426,32 @@ class TokenSpeedChart(QWidget):
                 button.setAutoRaise(True)
                 button.setIconSize(QSize(8, 8))
                 button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-                button.clicked.connect(lambda checked, name=model: self._set_model_visible(name, checked))
+                button.clicked.connect(lambda _checked, name=model: self._select_model(name))
+                self._model_group.addButton(button)
                 button.installEventFilter(self)
                 self.legend_buttons[model] = button
             button = self.legend_buttons[model]
             # 长模型名不撑宽单行图例；提示保留全名，并转义接口提供的文本。
             button.setText(model if len(model) <= 24 else model[:21] + "…")
-            button.setToolTip(f"<p>{escape(model)}<br>{escape(tr('点击显示或隐藏此模型'))}</p>")
+            bind_text(button, lambda name=model: f"<p>{escape(name)}<br>{escape(tr('点击切换到此模型'))}</p>", method="setToolTip")
             button.setAccessibleName(model)
-            visible = model not in self._hidden_models
+            visible = model == self._selected_model
             button.setChecked(visible)
             color = self._model_colors[model] if visible else QColor(current_theme().muted)
             swatch = QPixmap(8, 8)
             swatch.fill(color)
             button.setIcon(QIcon(swatch))
             font = button.font()
-            font.setStrikeOut(not visible)
+            font.setBold(visible)
             button.setFont(font)
             self.legend_layout.insertWidget(index + 1, button)
 
-    def _set_model_visible(self, model, visible):
-        if visible:
-            self._hidden_models.discard(model)
-        else:
-            self._hidden_models.add(model)
+    def _select_model(self, model):
+        if model == self._selected_model:
+            return
+        self._selected_model = model
+        # 横轴压缩了空闲时段，不同模型的索引不对应同一时间；切换后重新定位最近时段。
+        self._has_initial_range = False
         self._update_legend(list(self._model_colors))
         self.render()
 
@@ -505,22 +490,14 @@ class TokenSpeedChart(QWidget):
         if not pixel_x or not pixel_y:
             return
         pixel_x, pixel_y = abs(pixel_x), abs(pixel_y)
-        closest, distance = None, 100.0
+        closest = None
         point = self._hover_primary.get(round(mouse.x()))
         if point is not None:
             dx = abs(mouse.x() - point["x"]) / pixel_x
             low, high = point["low"], point["high"]
             dy = max(low - mouse.y(), 0, mouse.y() - high) / pixel_y
             if dx <= max(10, self._candles[0].opts["width"] / (2 * pixel_x) + 2) and dy <= 10:
-                closest, distance = point, min(100.0, dx * dx + dy * dy)
-        for _curve_x, _curve_y, node_x, points in self._hover_series:
-            node = bisect_left(node_x, mouse.x())
-            indices = range(max(0, node - 1), min(len(points), node + 1))
-            for index in indices:
-                point = points[index]
-                gap = ((mouse.x() - point["x"]) / pixel_x) ** 2 + ((mouse.y() - point["speed"]) / pixel_y) ** 2
-                if isfinite(gap) and gap <= distance:
-                    closest, distance = point, gap
+                closest = point
         if closest is None:
             self._hide_hover()
         else:

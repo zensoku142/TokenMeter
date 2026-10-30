@@ -161,6 +161,22 @@ def test_activity_selected_mode_uses_the_specified_blue_and_white_text():
     assert "background: #2076FA;" in checked_rule
 
 
+@pytest.mark.parametrize("base", [LIGHT_THEME, DARK_THEME])
+@pytest.mark.parametrize("accent, expected_text", [
+    ("#2076FA", "#FFFFFF"), ("#3478F6", "#FFFFFF"),
+    ("#3154A2", "#FFFFFF"), ("#FFADFA", "#000000"),
+    ("#FFE58A", "#000000"), ("#FFFFFF", "#000000"),
+])
+def test_activity_selected_mode_remains_readable_with_custom_accent(base, accent, expected_text):
+    tokens = derive_theme_tokens(base, accent)
+    style = build_app_style(tokens)
+    checked_rule = style.split("QToolButton#activityModeButton:checked", 1)[1].split("}", 1)[0]
+
+    assert f"color: {expected_text};" in checked_rule
+    assert f"background: {tokens.selection};" in checked_rule
+    assert _contrast(expected_text, tokens.selection) >= 4.0
+
+
 def test_context_menu_palette_tracks_light_and_dark_theme():
     menu = QMenu()
     menu.addAction("显示/隐藏")
