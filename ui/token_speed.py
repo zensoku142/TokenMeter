@@ -391,24 +391,15 @@ class TokenSpeedChart(QWidget):
         totals = defaultdict(int)
         for row in self._rows:
             totals[row["model"]] += row["output"]
-        levels = {amount: rank for rank, amount in enumerate(sorted(set(totals.values()), reverse=True))}
-        self._model_colors = {}
         accent = QColor(current_theme().accent)
-        base_hue = accent.hslHue() if accent.hslHue() >= 0 else 210
-        offsets = (0, 60, -55, 115, -115, 165, -165)
-        for index, model in enumerate(sorted(totals, key=lambda name: (-totals[name], name))):
-            # 主模型保留主题色，其他模型使用相邻但可辨认的色相；切换模型不改变已有配色。
-            color = QColor(accent) if index == 0 else QColor.fromHsl(
-                (base_hue + offsets[index % len(offsets)]) % 360,
-                max(140, min(220, accent.hslSaturation())),
-                105 if current_theme().name == "light" else 165,
-            )
-            color.setAlphaF(1 - 0.30 * levels[totals[model]] / max(1, len(levels) - 1))
-            self._model_colors[model] = color
+        # 每次只展示一个模型；保持排序不变，图例和图表都使用当前主题色。
+        self._model_colors = {
+            model: QColor(accent) for model in sorted(totals, key=lambda name: (-totals[name], name))
+        }
 
     def _ma_color(self):
-        # 均线仅用于辅助观察趋势，采用主题次级文字色并降低不透明度，避免压过 K 线。
-        color = QColor(current_theme().subtext)
+        # 均线沿用主题色并降低不透明度，避免压过 K 线。
+        color = QColor(current_theme().accent)
         color.setAlpha(110)
         return color
 
@@ -421,7 +412,7 @@ class TokenSpeedChart(QWidget):
         for index, model in enumerate(models):
             if model not in self.legend_buttons:
                 button = QToolButton()
-                button.setObjectName("minuteLegendButton")
+                button.setObjectName("speedLegendButton")
                 button.setCheckable(True)
                 button.setAutoRaise(True)
                 button.setIconSize(QSize(8, 8))
@@ -437,13 +428,18 @@ class TokenSpeedChart(QWidget):
             button.setAccessibleName(model)
             visible = model == self._selected_model
             button.setChecked(visible)
+            button.setProperty("speedSelected", visible)
             color = self._model_colors[model] if visible else QColor(current_theme().muted)
             swatch = QPixmap(8, 8)
             swatch.fill(color)
             button.setIcon(QIcon(swatch))
+            # 动态属性变化后 Qt 不一定重新匹配样式；重新应用以免图例保留旧的选中态。
+            button.style().unpolish(button)
+            button.style().polish(button)
             font = button.font()
             font.setBold(visible)
             button.setFont(font)
+            button.update()
             self.legend_layout.insertWidget(index + 1, button)
 
     def _select_model(self, model):

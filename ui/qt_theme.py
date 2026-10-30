@@ -629,7 +629,8 @@ QCalendarWidget#minuteCalendar QAbstractItemView {{
     outline: 0;
     font-size: 11px;
 }}
-QToolButton#minuteLegendButton {{
+QToolButton#minuteLegendButton,
+QToolButton#speedLegendButton {{
     min-height: 22px;
     padding: 0;
     color: {tokens.subtext};
@@ -640,6 +641,8 @@ QToolButton#minuteLegendButton {{
 QToolButton#minuteLegendButton:!checked {{
     color: {tokens.disabled};
 }}
+QToolButton#speedLegendButton[speedSelected="true"] {{ color: {tokens.subtext}; font-weight: bold; }}
+QToolButton#speedLegendButton[speedSelected="false"] {{ color: {tokens.disabled}; font-weight: normal; }}
 QFrame#minuteTooltip {{
     color: {tokens.text};
     background: {tokens.elevated};

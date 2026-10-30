@@ -5,7 +5,8 @@ from unittest.mock import Mock
 
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QComboBox
 
@@ -18,7 +19,7 @@ from data.store import PerProviderData, TokenData
 from ui import token_speed as speed_ui
 from ui.i18n import configure_language
 from ui.qt_panel import MainPanel, MinuteUsageTooltip
-from ui.qt_theme import configure_theme
+from ui.qt_theme import configure_theme, current_theme
 from ui.token_speed import TokenSpeedChart
 
 # 与现有 UI 用例保持一致：整个模块持有应用，避免回收后重建 QApplication 导致 Qt 原生崩溃。
@@ -111,6 +112,124 @@ def test_optional_duration_reads_each_legacy_cache_format(tmp_path, columns):
 def speed_row(stamp, output, duration, model="model-a"):
     return {"usage_date": stamp.date(), "timestamp": stamp.isoformat(), "model": model,
             "output_tokens": output, "duration_ms": duration}
+
+
+def test_visible_model_legend_click_refreshes_selection_style_and_chart():
+    configure_language(APP, "zh-cn")
+    controller = configure_theme(APP, "light")
+    stamp = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    today = stamp.date().isoformat()
+    rows = [speed_row(stamp, 400, 10000), speed_row(stamp + timedelta(minutes=5), 800, 10000),
+            speed_row(stamp + timedelta(minutes=10), 300, 10000, "model-b"),
+            speed_row(stamp + timedelta(minutes=15), 500, 20000, "model-b")]
+    data = TokenData(per_provider=[PerProviderData("codex", "Codex")], minute_usage_date=today,
+                     minute_usage_days=[today], minute_usage_status="recorded", minute_usage_source="local",
+                     token_speed_usage=rows)
+    panel = MainPanel()
+    try:
+        panel.update_data(data)
+        panel.speed_activity_button.click()
+        panel.show()
+        APP.processEvents()
+        chart = panel.speed_chart
+        first, second = chart.legend_buttons["model-a"], chart.legend_buttons["model-b"]
+        subtext = QColor(current_theme().subtext).name()
+        disabled = QColor(current_theme().disabled).name()
+        assert chart._selected_model == "model-a"
+        assert first.font().bold() and not second.font().bold()
+        assert first.palette().color(QPalette.ColorRole.ButtonText).name() == subtext
+        assert second.palette().color(QPalette.ColorRole.ButtonText).name() == disabled
+        assert "最近 ≈25.0" in chart.summary.text()
+        assert "均速 ≈60.0" in chart.summary.text()
+        before = chart.plot.grab().toImage()
+
+        QTest.mouseClick(second, Qt.MouseButton.LeftButton)
+        APP.processEvents()
+        assert second.isChecked() and second.font().bold()
+        assert not first.isChecked() and not first.font().bold()
+        assert second.palette().color(QPalette.ColorRole.ButtonText).name() == subtext
+        assert first.palette().color(QPalette.ColorRole.ButtonText).name() == disabled
+        selected = second.icon().pixmap(8, 8).toImage()
+        unselected = first.icon().pixmap(8, 8).toImage()
+        assert selected.pixelColor(3, 3).name() == QColor(current_theme().accent).name()
+        assert unselected.pixelColor(3, 3).name() == QColor(current_theme().muted).name()
+        assert [point["speed"] for point in chart._points] == [30, 25]
+        assert "最近 ≈25.0" in chart.summary.text()
+        assert "均速 ≈26.7" in chart.summary.text()
+        assert chart.plot.grab().toImage() != before
+
+        controller.set_appearance("light", "#A42ACB", 100)
+        APP.processEvents()
+        assert second.isChecked() and second.font().bold()
+        assert second.icon().pixmap(8, 8).toImage().pixelColor(3, 3).name() == "#a42acb"
+        assert [point["speed"] for point in chart._points] == [30, 25]
+
+        QTest.mouseClick(first, Qt.MouseButton.LeftButton)
+        APP.processEvents()
+        assert [point["speed"] for point in chart._points] == [40, 80]
+        assert first.font().bold() and not second.font().bold()
+    finally:
+        panel.close()
+        configure_theme(APP, "dark")
+
+
+@pytest.mark.parametrize("mode,accent", [("light", "#A42ACB"), ("dark", "#30B57B")])
+def test_speed_models_and_average_line_use_current_theme_accent(mode, accent):
+    configure_theme(APP, mode, light_accent=accent, dark_accent=accent)
+    stamp = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    rows = [speed_row(stamp + timedelta(minutes=5 * index), 400 + index * 50, 10000, model)
+            for model in ("model-a", "model-b") for index in range(6)]
+    chart = TokenSpeedChart()
+    try:
+        chart.set_rows(rows, stamp.date().isoformat())
+        chart.show()
+        APP.processEvents()
+        expected = QColor(current_theme().accent).name()
+        for model in ("model-a", "model-b"):
+            QTest.mouseClick(chart.legend_buttons[model], Qt.MouseButton.LeftButton)
+            APP.processEvents()
+            assert chart._selected_model == model
+            assert chart._model_colors[model].name() == expected
+            assert chart._model_colors[model].alpha() == 255
+            assert all(pg.mkPen(item.opts["pen"]).color().name() == expected for item in chart._candles)
+            assert all(pg.mkPen(item.opts["pen"]).color().name() == expected for item in chart._wicks)
+            assert pg.mkPen(chart._ma_line.opts["pen"]).color().name() == expected
+            nav = next(item for item in chart.navigator.items() if isinstance(item, pg.BarGraphItem))
+            assert pg.mkBrush(nav.opts["brush"]).color().name() == expected
+            swatch = chart.legend_buttons[model].icon().pixmap(8, 8).toImage()
+            assert swatch.pixelColor(3, 3).name() == expected
+    finally:
+        chart.close()
+        configure_theme(APP, "dark")
+
+
+def test_legend_selection_style_survives_model_reordering_on_refresh():
+    configure_theme(APP, "light", light_accent="#A42ACB")
+    stamp = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    rows = [speed_row(stamp, 400, 10000), speed_row(stamp, 600, 10000, "model-b")]
+    chart = TokenSpeedChart()
+    try:
+        chart.set_rows(rows, stamp.date().isoformat())
+        chart.show()
+        APP.processEvents()
+        assert chart._selected_model == "model-b"
+
+        chart.set_rows([*rows, speed_row(stamp + timedelta(minutes=5), 1000, 10000)],
+                       stamp.date().isoformat())
+        APP.processEvents()
+        assert list(chart._model_colors) == ["model-a", "model-b"]
+        assert chart.legend_buttons["model-b"].font().bold()
+        assert not chart.legend_buttons["model-a"].font().bold()
+        assert chart.legend_buttons["model-b"].icon().pixmap(8, 8).toImage().pixelColor(3, 3).name() == "#a42acb"
+
+        QTest.mouseClick(chart.legend_buttons["model-a"], Qt.MouseButton.LeftButton)
+        APP.processEvents()
+        assert chart.legend_buttons["model-a"].font().bold()
+        assert not chart.legend_buttons["model-b"].font().bold()
+        assert chart.legend_buttons["model-a"].icon().pixmap(8, 8).toImage().pixelColor(3, 3).name() == "#a42acb"
+    finally:
+        chart.close()
+        configure_theme(APP, "dark")
 
 
 def test_chart_uses_weighted_model_buckets_and_clickable_legend_without_zero_samples():
