@@ -5775,6 +5775,324 @@ def test_update_dialog_shows_upgrade_range_history_and_fallback_notice(incomplet
                for button in dialog.findChildren(QPushButton))
 
 
+def _native_window_order(*widgets):
+    if APP.platformName() != "windows":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetTopWindow.argtypes = [wintypes.HWND]
+    user32.GetTopWindow.restype = wintypes.HWND
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    handles = {int(widget.winId()): index for index, widget in enumerate(widgets)}
+    order = []
+    handle = user32.GetTopWindow(None)
+    while handle:
+        if handle in handles:
+            order.append(handles[handle])
+        handle = user32.GetWindow(handle, 2)  # GW_HWNDNEXT
+    return order
+
+
+@pytest.mark.parametrize("open_settings", [False, True])
+def test_update_prompt_stays_above_panel_opened_while_prompt_is_visible(open_settings):
+    from PySide6.QtCore import QTimer
+
+    with patch.object(FloatingWidget, "refresh"):
+        widget = FloatingWidget()
+        seen = {}
+
+        def open_panel_and_dismiss():
+            dialog = APP.activeModalWidget()
+            try:
+                widget.open_settings() if open_settings else widget.expand_panel()
+                widget.raise_()
+                APP.processEvents()
+                seen["order"] = _native_window_order(dialog, widget)
+                button = next(button for button in dialog.findChildren(QPushButton)
+                              if button.text() == "稍后提醒")
+                QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+            finally:
+                if dialog is not None and dialog.isVisible():
+                    dialog.reject()
+
+        try:
+            QTimer.singleShot(0, open_panel_and_dismiss)
+            widget._update_controller._prompt_for_release(sample_release(), widget)
+            if seen["order"] is not None:
+                assert seen["order"] == [0, 1]
+            assert APP.activeModalWidget() is None
+            widget.collapse_panel()
+            assert not widget._expanded
+        finally:
+            widget._closed = True
+            widget.hide()
+
+
+@pytest.mark.parametrize("already_created", [False, True])
+def test_update_prompt_stays_above_compact_overview_opened_during_prompt(already_created):
+    from PySide6.QtCore import QTimer
+
+    with (
+        patch.object(FloatingWidget, "refresh"),
+        patch.object(FloatingWidget, "_update_provider_overview"),
+        patch("ui.qt_widget.configured_provider_ids", return_value=[]),
+    ):
+        widget = FloatingWidget()
+        seen = {}
+        try:
+            widget.expand_panel()
+            if already_created:
+                widget._open_compact_overview()
+                widget._compact_overview.hide()
+
+            def open_compact_and_dismiss():
+                dialog = APP.activeModalWidget()
+                try:
+                    widget._open_compact_overview()
+                    compact = widget._compact_overview
+                    APP.processEvents()
+                    seen["order"] = _native_window_order(dialog, compact, widget)
+                    button = next(button for button in dialog.findChildren(QPushButton)
+                                  if button.text() == "稍后提醒")
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+                except Exception as exc:
+                    seen["error"] = exc
+                finally:
+                    if dialog is not None and dialog.isVisible():
+                        dialog.reject()
+
+            QTimer.singleShot(0, open_compact_and_dismiss)
+            widget._update_controller._prompt_for_release(sample_release(), widget)
+            assert "error" not in seen
+            if seen["order"] is not None:
+                assert seen["order"] == [0, 1, 2]
+            assert APP.activeModalWidget() is None
+            assert widget._compact_overview.isVisible()
+            widget._compact_overview.close_button.click()
+            assert not widget._compact_overview.isVisible()
+        finally:
+            widget._closed = True
+            widget.hide()
+
+
+@pytest.mark.parametrize("manual", [False, True])
+def test_update_prompt_stays_above_compact_overview_and_can_be_dismissed(manual):
+    from PySide6.QtCore import QTimer
+
+    release = sample_release()
+    result = CheckResult("1.3.3", release, True, "new version")
+    with (
+        patch.object(FloatingWidget, "refresh"),
+        patch.object(FloatingWidget, "_update_provider_overview"),
+        patch("ui.qt_widget.configured_provider_ids", return_value=[]),
+        patch("ui.qt_update.skipped_version", return_value=""),
+    ):
+        widget = FloatingWidget()
+        try:
+            widget.open_settings() if manual else widget.expand_panel()
+            widget._open_compact_overview()
+            compact = widget._compact_overview
+            controller = widget._update_controller
+            seen = {}
+
+            def dismiss_prompt():
+                dialog = APP.activeModalWidget()
+                try:
+                    seen["dialog"] = isinstance(dialog, UpdatePromptDialog)
+                    seen["parent"] = dialog.parentWidget()
+                    # 置顶看板被重新唤出时，模态更新窗口仍必须排在它前面。
+                    compact.raise_()
+                    APP.processEvents()
+                    seen["order"] = _native_window_order(dialog, compact, widget)
+                    widget.raise_()
+                    APP.processEvents()
+                    seen["main_order"] = _native_window_order(dialog, compact, widget)
+                    button = next(button for button in dialog.findChildren(QPushButton)
+                                  if button.text() == "稍后提醒")
+                    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+                except Exception as exc:
+                    seen["error"] = exc
+                finally:
+                    if dialog is not None and dialog.isVisible():
+                        dialog.reject()
+
+            QTimer.singleShot(0, dismiss_prompt)
+            with patch.object(controller, "check_pet_updates"):
+                controller._finish_check(
+                    result, None, manual=manual,
+                    parent=widget._settings_window if manual else None,
+                )
+
+            assert "error" not in seen
+            assert seen["dialog"] and seen["parent"] is compact
+            if seen["order"] is not None:
+                assert seen["order"] == [0, 1, 2]
+                assert seen["main_order"] == [0, 1, 2]
+            assert APP.activeModalWidget() is None
+            compact.close_button.click()
+            widget.collapse_panel()
+            assert not compact.isVisible()
+            assert not widget._expanded
+        finally:
+            widget._closed = True
+            widget.hide()
+
+
+def test_update_prompt_stays_above_an_existing_modal_dialog():
+    from PySide6.QtCore import QTimer
+
+    release = sample_release()
+    with patch.object(FloatingWidget, "refresh"):
+        widget = FloatingWidget()
+        widget.expand_panel()
+        previous = QDialog(widget)
+        previous.setModal(True)
+        previous.show()
+        APP.processEvents()
+        expected_parent = previous if previous.windowHandle().transientParent() else widget
+        seen = {}
+
+        def dismiss_prompt():
+            dialog = APP.activeModalWidget()
+            try:
+                seen["parent"] = dialog.parentWidget()
+                previous.raise_()
+                APP.processEvents()
+                seen["order"] = _native_window_order(dialog, previous, widget)
+            finally:
+                dialog.reject()
+
+        try:
+            QTimer.singleShot(0, dismiss_prompt)
+            widget._update_controller._prompt_for_release(release, widget)
+            assert seen["parent"] is expected_parent
+            if seen["order"] is not None:
+                assert seen["order"][0] == 0
+            assert APP.activeModalWidget() is previous
+            previous.reject()
+            assert APP.activeModalWidget() is None
+        finally:
+            previous.close()
+            widget._closed = True
+            widget.hide()
+
+
+def test_update_download_can_be_cancelled_above_compact_overview():
+    from PySide6.QtCore import QTimer
+    from updater.client import DownloadCancelled
+
+    with (
+        patch.object(FloatingWidget, "refresh"),
+        patch.object(FloatingWidget, "_update_provider_overview"),
+        patch("ui.qt_widget.configured_provider_ids", return_value=[]),
+        patch("ui.qt_update.UpdateDownloadWorker") as worker_type,
+    ):
+        widget = FloatingWidget()
+        try:
+            widget.open_settings()
+            widget._open_compact_overview()
+            compact = widget._compact_overview
+            controller = widget._update_controller
+
+            def start_download():
+                dialog = APP.activeModalWidget()
+                button = next(button for button in dialog.findChildren(QPushButton)
+                              if button.text() == "下载并更新")
+                QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+
+            QTimer.singleShot(0, start_download)
+            controller._prompt_for_release(sample_release(), widget._settings_window)
+            dialog = controller._progress_dialog
+            APP.processEvents()
+
+            assert dialog.parentWidget() is compact
+            assert APP.activeModalWidget() is dialog
+            compact.raise_()
+            APP.processEvents()
+            order = _native_window_order(dialog, compact, widget)
+            if order is not None:
+                assert order == [0, 1, 2]
+                widget.raise_()
+                APP.processEvents()
+                assert _native_window_order(dialog, compact, widget) == [0, 1, 2]
+            QTest.mouseClick(dialog.cancel_button, Qt.MouseButton.LeftButton)
+            worker_type.return_value.cancel.assert_called_once()
+            with patch.object(controller, "check_pet_updates"):
+                controller._finish_download(None, DownloadCancelled("cancelled"), widget._settings_window)
+            assert controller._progress_dialog is None
+            assert APP.activeModalWidget() is None
+            compact.close_button.click()
+            widget.collapse_panel()
+            assert not compact.isVisible()
+            assert not widget._expanded
+        finally:
+            widget._closed = True
+            widget.hide()
+
+
+@pytest.mark.parametrize("pet_update", [False, True])
+def test_update_message_stays_above_compact_overview(tmp_path, pet_update):
+    from PySide6.QtCore import QTimer
+    from shiboken6 import isValid
+
+    with (
+        patch.object(FloatingWidget, "refresh"),
+        patch.object(FloatingWidget, "_update_provider_overview"),
+        patch("ui.qt_widget.configured_provider_ids", return_value=[]),
+        patch("ui.qt_update.pet_extension.removable_directories", return_value=[tmp_path]),
+        patch("ui.qt_update.pet_extension.installed_manifest", return_value={"version": "1.0.0"}),
+    ):
+        widget = FloatingWidget()
+        try:
+            widget.expand_panel()
+            widget._open_compact_overview()
+            compact = widget._compact_overview
+            controller = widget._update_controller
+            seen = {}
+
+            def dismiss_message():
+                dialog = APP.activeModalWidget()
+                try:
+                    seen["dialog"] = dialog
+                    seen["parent"] = dialog.parentWidget()
+                    compact.raise_()
+                    APP.processEvents()
+                    seen["order"] = _native_window_order(dialog, compact, widget)
+                    widget.raise_()
+                    APP.processEvents()
+                    seen["main_order"] = _native_window_order(dialog, compact, widget)
+                    button = QMessageBox.StandardButton.No if pet_update else QMessageBox.StandardButton.Ok
+                    QTest.mouseClick(dialog.button(button), Qt.MouseButton.LeftButton)
+                finally:
+                    if dialog is not None and dialog.isVisible():
+                        dialog.reject()
+
+            QTimer.singleShot(0, dismiss_message)
+            if pet_update:
+                asset = ReleaseAsset("pet.zip", "https://example.invalid/pet.zip", 1)
+                controller._latest_pet_release = PetReleaseInfo("9.0.0", {}, asset, "a" * 64)
+                controller._prompt_for_pet_release(manual=True)
+            else:
+                controller._latest_release = None
+                controller.skip_available_version()
+
+            assert seen["parent"] is compact
+            if seen["order"] is not None:
+                assert seen["order"] == [0, 1, 2]
+                assert seen["main_order"] == [0, 1, 2]
+            assert APP.activeModalWidget() is None
+            APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert not isValid(seen["dialog"])
+            compact.close_button.click()
+            assert not compact.isVisible()
+        finally:
+            widget._closed = True
+            widget.hide()
+
+
 def test_auto_update_prompt_only_deduplicates_within_current_session():
     release = sample_release()
     result = CheckResult(
@@ -5801,6 +6119,87 @@ def test_auto_update_prompt_only_deduplicates_within_current_session():
     finally:
         first_owner.close()
         second_owner.close()
+
+
+def test_auto_update_result_does_not_open_a_prompt_during_download():
+    release = sample_release()
+    result = CheckResult("1.3.3", release, True, "new version")
+    owner = QWidget()
+    controller = AppUpdateController(owner)
+    try:
+        controller._download_worker = Mock()
+        with (
+            patch.object(controller, "_prompt_for_release") as prompt,
+            patch.object(controller, "check_pet_updates"),
+            patch("ui.qt_update.skipped_version", return_value=""),
+        ):
+            controller._finish_check(result, None, manual=False, parent=owner)
+            prompt.assert_not_called()
+            controller._download_worker = None
+            controller._finish_check(result, None, manual=False, parent=owner)
+            prompt.assert_called_once_with(release, owner)
+    finally:
+        controller._download_worker = None
+        owner.close()
+
+
+def test_hotfix_prompt_identifies_a_same_version_update():
+    from dataclasses import replace
+    from updater.client import release_display_time
+
+    release = sample_release()
+    release = replace(release, is_hotfix=True,
+                      setup_asset=replace(release.setup_asset, updated_at="2026-10-30T06:00:00Z"))
+    dialog = UpdatePromptDialog(release)
+    try:
+        assert any(label.text() == f"发现同版本更新 v{release.version}"
+                   for label in dialog.findChildren(QLabel))
+        assert any(label.text() == "同版本更新" for label in dialog.findChildren(QLabel))
+        assert any(label.text() == release_display_time(release.setup_asset.updated_at)
+                   for label in dialog.findChildren(QLabel))
+        assert any(button.text() == "跳过本次更新" for button in dialog.findChildren(QPushButton))
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("skipped_sha,expected", [
+    ("a" * 64, ["b" * 64]),
+    ("", ["a" * 64, "b" * 64]),
+    ("c" * 64, ["a" * 64, "b" * 64]),
+])
+def test_hotfix_skip_and_session_deduplication_follow_installer_identity(skipped_sha, expected):
+    from dataclasses import replace
+
+    first = sample_release()
+    first = replace(first, setup_asset=replace(first.setup_asset, sha256="a" * 64), is_hotfix=True)
+    second = replace(first, setup_asset=replace(first.setup_asset, sha256="b" * 64))
+    owner = QWidget()
+    controller = AppUpdateController(owner)
+    config_manager.save_config({"UPDATE_SKIPPED_VERSION": first.version, "UPDATE_SKIPPED_ASSET_SHA256": skipped_sha})
+    try:
+        with (patch.object(controller, "_prompt_for_release") as prompt,
+              patch.object(controller, "check_pet_updates")):
+            for item in (first, first, second, second):
+                result = CheckResult(first.version, item, True, "new")
+                controller._finish_check(result, None, manual=False, parent=owner)
+        assert [call.args[0].setup_asset.sha256 for call in prompt.call_args_list] == expected
+    finally:
+        owner.close()
+
+
+def test_legacy_skipped_version_still_suppresses_the_original_release():
+    release = sample_release()
+    owner = QWidget()
+    controller = AppUpdateController(owner)
+    config_manager.save_config({"UPDATE_SKIPPED_VERSION": release.version, "UPDATE_SKIPPED_ASSET_SHA256": ""})
+    try:
+        with (patch.object(controller, "_prompt_for_release") as prompt,
+              patch.object(controller, "check_pet_updates")):
+            controller._finish_check(CheckResult("1.3.3", release, True, "new"), None,
+                                     manual=False, parent=owner)
+        prompt.assert_not_called()
+    finally:
+        owner.close()
 
 
 def test_manual_update_check_still_allows_reprompt_for_same_version():

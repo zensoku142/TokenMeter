@@ -389,6 +389,25 @@ def test_download_keeps_progress_while_language_changes(isolated_language):
     dialog.close()
 
 
+def test_same_version_update_prompt_changes_language_in_place(isolated_language):
+    from PySide6.QtWidgets import QPushButton
+    from ui.qt_update import UpdatePromptDialog
+    from updater.client import ReleaseAsset, ReleaseInfo, SemVer
+
+    asset = ReleaseAsset("setup.exe", "https://example.invalid/setup.exe", 1)
+    release = ReleaseInfo("1.16.7", SemVer.parse("1.16.7"), "v1.16.7", "", "Fix", False,
+                          asset, asset, is_hotfix=True)
+    dialog = UpdatePromptDialog(release)
+    try:
+        isolated_language.set_language("en")
+        assert any(label.text() == "Update available for v1.16.7" for label in dialog.findChildren(QLabel))
+        assert any(button.text() == "Skip this update" for button in dialog.findChildren(QPushButton))
+        isolated_language.set_language("zh-cn")
+        assert any(label.text() == "发现同版本更新 v1.16.7" for label in dialog.findChildren(QLabel))
+    finally:
+        dialog.close()
+
+
 def test_panel_translation_does_not_reset_chart_state(isolated_language):
     panel = MainPanel()
     data = TokenData(

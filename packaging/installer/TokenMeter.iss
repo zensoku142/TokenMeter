@@ -3,6 +3,8 @@
 #endif
 #define MyAppName "TokenMeter"
 #define MyAppExeName "TokenMeter.exe"
+; 记录构建时的主程序摘要，安装文件被延迟替换时不能误记为已完成更新。
+#define MyAppExeSHA256 GetSHA256OfFile(AddBackslash(SourcePath) + "..\..\dist\TokenMeter\TokenMeter.exe")
 
 [Setup]
 AppId={{6CF354B5-80AE-48BF-AFC5-890BDA5D8862}
@@ -57,6 +59,7 @@ Name: "{group}\卸载 TokenMeter"; Filename: "{uninstallexe}"
 
 [UninstallDelete]
 Type: files; Name: "{userstartup}\TokenMeter.lnk"
+Type: files; Name: "{app}\.tokenmeter-install-receipt"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent; Check: not IsUpdateMode
@@ -64,6 +67,35 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifdoesntexist; Check: IsUpdateMode
 
 [Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ReceiptPath: String;
+  ReceiptText: AnsiString;
+begin
+  ReceiptPath := ExpandConstant('{app}\.tokenmeter-install-receipt');
+  if CurStep = ssInstall then
+    DeleteFile(ReceiptPath)
+  else if CurStep = ssPostInstall then
+  begin
+    try
+      // 只有安装后的主程序与本安装包一致时才写入记录，失败时保留旧版检查方式。
+      if CompareText(GetSHA256OfFile(ExpandConstant('{app}\{#MyAppExeName}')), '{#MyAppExeSHA256}') = 0 then
+      begin
+        ReceiptText := AnsiString('{#MyAppVersion}' + #13#10 +
+          GetSHA256OfFile(ExpandConstant('{srcexe}')) + #13#10 + '{#MyAppExeSHA256}' + #13#10);
+        if not SaveStringToFile(ReceiptPath, ReceiptText, False) then
+        begin
+          DeleteFile(ReceiptPath);
+          Log('Could not write update installation receipt');
+        end;
+      end;
+    except
+      DeleteFile(ReceiptPath);
+      Log('Could not record update installation receipt: ' + GetExceptionMessage);
+    end;
+  end;
+end;
+
 function IsUpdateMode: Boolean;
 var
   I: Integer;

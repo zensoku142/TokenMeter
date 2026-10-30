@@ -201,6 +201,20 @@ def test_release_workflow_uses_installer_pipeline_order():
     assert "dist/TokenMeter-v*-windows-x64.exe" not in workflow
 
 
+def test_manual_hotfix_validates_installer_before_replacing_the_existing_release():
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in workflow and "replace_existing:" in workflow
+    assert "Confirm replacement of the existing release" in workflow
+    assert "Release notes are missing" in workflow
+    assert "Installation receipt does not match the installed package" in workflow
+    assert "Selected branch changed during the build" in workflow
+    assert "Release tag changed during the build" in workflow
+    assert workflow.index("- name: Generate SHA256SUMS") < workflow.index(
+        "- name: Move existing hotfix tag after validation"
+    ) < workflow.index("- name: Publish GitHub Release")
+    assert "tag_name: ${{ steps.target.outputs.tag }}" in workflow
+
+
 def test_pet_release_builds_only_extension_and_cannot_replace_main_latest():
     workflow = (ROOT / ".github/workflows/pet-release.yml").read_text(encoding="utf-8")
     assert '"pet-v*"' in workflow

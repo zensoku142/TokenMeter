@@ -4,9 +4,20 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      replace_existing:
+        description: "替换当前版本的已发布 Release（更新标签和附件）"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: tokenmeter-main-release
+  cancel-in-progress: false
 
 jobs:
   build-release:
@@ -21,6 +32,34 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+
+      - name: Resolve release target
+        id: target
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = python -c "from core.identity import APP_VERSION; print(APP_VERSION)"
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw "Cannot read application version" }
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$') {
+            throw "Application version is invalid"
+          }
+          $tag = "v$version"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            if ("${{ inputs.replace_existing }}" -ne "true") { throw "Confirm replacement of the existing release" }
+            if ($env:GITHUB_REF_TYPE -ne "branch") { throw "Select a branch for the hotfix build" }
+            $notes = "release-notes/$tag.md"
+            if (-not (Test-Path -LiteralPath $notes -PathType Leaf) -or
+                -not (Get-Content -LiteralPath $notes -Raw).Trim()) { throw "Release notes are missing" }
+            $draft = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft
+            if ($LASTEXITCODE -ne 0 -or $draft -ne "false") { throw "Published release $tag not found" }
+            $previous = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha
+            if ($LASTEXITCODE -ne 0 -or -not $previous) { throw "Cannot read existing tag $tag" }
+            "previous_tag=$previous" >> $env:GITHUB_OUTPUT
+          } elseif ($env:GITHUB_REF_NAME -ne $tag) {
+            throw "Tag does not match application version $version"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Install dependencies
         run: |
@@ -64,17 +103,52 @@ jobs:
           if (-not (Test-Path (Join-Path $installDir "data/preserve-marker.txt"))) {
             throw "Overwrite install removed user data"
           }
+          # 同版本热补丁依赖安装记录；真实覆盖安装后核对安装包和主程序摘要。
+          $receiptPath = Join-Path $installDir ".tokenmeter-install-receipt"
+          if (-not (Test-Path -LiteralPath $receiptPath)) { throw "Installation receipt missing" }
+          $receipt = @(Get-Content -LiteralPath $receiptPath)
+          $setupSha = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+          $appSha = (Get-FileHash -LiteralPath (Join-Path $installDir "TokenMeter.exe") -Algorithm SHA256).Hash
+          $version = "${{ steps.target.outputs.tag }}" -replace '^v', ''
+          if ($receipt.Count -ne 3 -or $receipt[0] -ne $version -or
+              $receipt[1] -ne $setupSha -or $receipt[2] -ne $appSha) {
+            throw "Installation receipt does not match the installed package"
+          }
           # 安装后的真实 Qt 自检必须成功退出，避免把仍停留在错误弹窗的进程误判为启动成功。
           python -c "import sys; from pathlib import Path; from scripts.build_release import _smoke_test_main; _smoke_test_main(Path(sys.argv[1]))" (Join-Path $installDir "TokenMeter.exe")
 
       - name: Generate SHA256SUMS
         run: python scripts/build_release.py --stage checksums --require-installer
 
+      - name: Move existing hotfix tag after validation
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.target.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.target.outputs.previous_tag }}
+        run: |
+          # 构建期间分支或标签发生变化时停止，避免覆盖其他发布。
+          $branch = [Uri]::EscapeDataString($env:GITHUB_REF_NAME)
+          $head = gh api "repos/$env:GITHUB_REPOSITORY/commits/$branch" --jq .sha
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw "Selected branch changed during the build" }
+          $current = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$env:RELEASE_TAG" --jq .object.sha
+          if ($LASTEXITCODE -ne 0 -or $current -ne $env:PREVIOUS_TAG) { throw "Release tag changed during the build" }
+          $tagObject = gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/tags" `
+            -f "tag=$env:RELEASE_TAG" -f "message=Release $env:RELEASE_TAG hotfix" `
+            -f "object=$env:GITHUB_SHA" -f "type=commit" `
+            -f "tagger[name]=github-actions[bot]" `
+            -f "tagger[email]=41898282+github-actions[bot]@users.noreply.github.com" --jq .sha
+          if ($LASTEXITCODE -ne 0 -or -not $tagObject) { throw "Cannot create annotated hotfix tag" }
+          gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$env:RELEASE_TAG" `
+            -f "sha=$tagObject" -F force=true
+          if ($LASTEXITCODE -ne 0) { throw "Cannot update hotfix tag" }
+
       - name: Determine release channel
         id: channel
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.target.outputs.tag }}"
           if ($tag -match "-") {
             "is_prerelease=true" >> $env:GITHUB_OUTPUT
             "make_latest=false" >> $env:GITHUB_OUTPUT
@@ -87,7 +161,7 @@ jobs:
         id: notes
         shell: pwsh
         run: |
-          $path = "release-notes/${{ github.ref_name }}.md"
+          $path = "release-notes/${{ steps.target.outputs.tag }}.md"
           # Release 正文需要保持仓库里原有的人写风格；有对应文件时优先使用，
           # 避免 action 只上传附件却生成空白正文。
           if (Test-Path $path) {
@@ -101,8 +175,8 @@ jobs:
         if: steps.notes.outputs.has_body == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ github.ref_name }}
-          name: TokenMeter ${{ github.ref_name }}
+          tag_name: ${{ steps.target.outputs.tag }}
+          name: TokenMeter ${{ steps.target.outputs.tag }}
           draft: false
           prerelease: ${{ steps.channel.outputs.is_prerelease }}
           make_latest: ${{ steps.channel.outputs.make_latest }}
@@ -115,8 +189,8 @@ jobs:
         if: steps.notes.outputs.has_body != 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ github.ref_name }}
-          name: TokenMeter ${{ github.ref_name }}
+          tag_name: ${{ steps.target.outputs.tag }}
+          name: TokenMeter ${{ steps.target.outputs.tag }}
           draft: false
           prerelease: ${{ steps.channel.outputs.is_prerelease }}
           make_latest: ${{ steps.channel.outputs.make_latest }}

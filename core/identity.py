@@ -11,6 +11,7 @@ APP_VERSION = "1.16.7"
 SINGLE_INSTANCE_MUTEX = "Local\\TokenSpider.SingleInstance"
 
 MAIN_EXECUTABLE_NAME = "TokenMeter.exe"
+INSTALLED_RECEIPT_NAME = ".tokenmeter-install-receipt"
 UPDATER_EXECUTABLE_NAME = "TokenMeterUpdater.exe"
 SETUP_RELEASE_ASSET_TEMPLATE = "TokenMeter-Setup-v{version}-x64.exe"
 SHA256_RELEASE_ASSET_NAME = "SHA256SUMS.txt"

@@ -24,6 +24,7 @@ from core.identity import (
     GITHUB_LATEST_RELEASE_API_URL,
     GITHUB_RELEASES_API_URL,
     GITHUB_REPOSITORY,
+    INSTALLED_RECEIPT_NAME,
     MAIN_EXECUTABLE_NAME,
     PET_CHARACTER_ASSET_TEMPLATE,
     PET_HOST_RELEASE_ASSET_TEMPLATE,
@@ -54,6 +55,7 @@ _SETUP_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 _SHA256_LINE_RE = re.compile(r"^(?P<sha>[A-Fa-f0-9]{64})\s+\*?(?P<name>.+)$")
+_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 _ALLOWED_API_HOSTS = {"api.github.com"}
 _ALLOWED_DOWNLOAD_HOSTS = {
     "github.com",
@@ -152,6 +154,8 @@ class ReleaseAsset:
     name: str
     download_url: str
     size: int
+    sha256: str = ""
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -167,6 +171,7 @@ class ReleaseInfo:
     # 保留最新 Release 的原始正文；汇总说明只用于展示，不改变下载目标或原有调用方。
     update_notes: str = ""
     notes_incomplete: bool = False
+    is_hotfix: bool = False
 
 
 @dataclass(frozen=True)
@@ -278,6 +283,50 @@ def is_packaged_windows_executable() -> bool:
     return sys.platform == "win32" and getattr(sys, "frozen", False)
 
 
+def _sha256_value(value: object) -> str:
+    digest = str(value or "").strip().lower()
+    return digest if _SHA256_RE.fullmatch(digest) else ""
+
+
+def installed_setup_sha256(current_version: str, *, executable: Path | None = None) -> str:
+    if executable is None:
+        if not is_packaged_windows_executable():
+            return ""
+        executable = Path(sys.executable)
+    try:
+        with (executable.parent / INSTALLED_RECEIPT_NAME).open(encoding="utf-8") as handle:
+            content = handle.read(1025)
+        if len(content) > 1024:
+            return ""
+        lines = content.splitlines()
+        if len(lines) != 3 or normalize_version(lines[0]) != normalize_version(current_version):
+            return ""
+        installer_sha, executable_sha = (_sha256_value(value) for value in lines[1:])
+        if not installer_sha or not executable_sha:
+            return ""
+        # 覆盖安装旧包可能留下旧记录；先核对当前可执行文件，避免误判已安装的补丁。
+        digest = hashlib.sha256()
+        with executable.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return installer_sha if digest.hexdigest() == executable_sha else ""
+    except (OSError, UnicodeError, ValueError):
+        return ""
+
+
+def _update_availability(
+    current_version: str, installed_sha256: str, release: ReleaseInfo | None,
+) -> tuple[bool, bool]:
+    if release is None:
+        return False, False
+    version_order = compare_versions(current_version, release.version)
+    hotfix = bool(
+        version_order == 0 and installed_sha256 and release.setup_asset.sha256
+        and installed_sha256 != release.setup_asset.sha256
+    )
+    return version_order < 0 or hotfix, hotfix
+
+
 def stable_target_path(current_executable: Path | None = None) -> Path:
     current = (current_executable or Path(sys.executable)).resolve()
     # Overwrite a legacy stable executable in place so existing shortcuts keep
@@ -373,16 +422,21 @@ class GitHubReleaseClient:
         channel = (channel or RELEASE_CHANNEL_STABLE).strip().lower()
         cached_state = config_manager.load_update_state()
         now = datetime.now(timezone.utc)
+        installed_sha256 = installed_setup_sha256(current_version)
         # 汇总范围随已安装版本变化；旧缓存或升级前的缓存必须重新生成说明。
         if (use_cache and _cache_is_fresh(cached_state, now, channel)
-                and cached_state.get("notes_current_version") == normalize_version(current_version)):
+                and cached_state.get("notes_current_version") == normalize_version(current_version)
+                and str(cached_state.get("notes_installed_setup_sha256") or "") == installed_sha256):
             cached_release = _release_from_state(cached_state)
+            update_available, is_hotfix = _update_availability(
+                current_version, installed_sha256, cached_release,
+            )
+            if cached_release is not None:
+                cached_release = replace(cached_release, is_hotfix=is_hotfix)
             return CheckResult(
                 current_version=current_version,
                 latest_release=cached_release,
-                update_available=bool(
-                    cached_release and compare_versions(current_version, cached_release.version) < 0
-                ),
+                update_available=update_available,
                 message=str(cached_state.get("last_message") or "已使用缓存的更新结果"),
                 cached=True,
             )
@@ -391,15 +445,32 @@ class GitHubReleaseClient:
             release = self._load_latest_from_list()
         else:
             release = self._load_latest_stable()
-        update_available = compare_versions(current_version, release.version) < 0
-        if update_available:
+        if (compare_versions(current_version, release.version) == 0
+                and installed_sha256 and not release.setup_asset.sha256):
+            # GitHub 的附件摘要可能暂缺；使用同一 Release 的校验文件，不猜测安装包是否变化。
+            checksums = self._load_checksums(release)
+            digest = _sha256_value(checksums.get(release.setup_asset.name.lower()))
+            if not digest:
+                raise UpdateError("SHA256SUMS.txt 缺少安装包的校验值")
+            release = replace(release, setup_asset=replace(release.setup_asset, sha256=digest))
+        update_available, is_hotfix = _update_availability(current_version, installed_sha256, release)
+        if is_hotfix:
+            release = replace(
+                release, is_hotfix=True,
+                update_notes=f"## v{release.version}\n\n{release.body}" if release.body else "",
+                notes_incomplete=not bool(release.body.strip()),
+            )
+        elif update_available:
             release = self._with_update_notes(current_version, release, channel)
         message = (
-            f"发现新版本 v{release.version}"
-            if update_available
-            else f"当前已是最新版本 v{current_version}"
+            f"发现同版本更新 v{release.version}" if is_hotfix else
+            f"发现新版本 v{release.version}" if update_available else
+            f"当前已是最新版本 v{current_version}"
         )
-        self._save_check_state(channel, release, now, message, current_version=current_version)
+        self._save_check_state(
+            channel, release, now, message,
+            current_version=current_version, installed_sha256=installed_sha256,
+        )
         return CheckResult(
             current_version=current_version,
             latest_release=release,
@@ -420,6 +491,9 @@ class GitHubReleaseClient:
         expected = checksum_map.get(release.setup_asset.name.lower())
         if not expected:
             raise UpdateError("SHA256SUMS.txt 缺少安装包的校验值")
+        if release.setup_asset.sha256 and release.setup_asset.sha256 != _sha256_value(expected):
+            # 同版本附件可能在检查后被替换；旧元数据不能搭配新校验文件下载。
+            raise UpdateError("安装包已更新，请重新检查更新后重试")
 
         asset = release.setup_asset
         final_path = cache_dir / asset.name
@@ -825,6 +899,7 @@ class GitHubReleaseClient:
         message: str,
         *,
         current_version: str = APP_VERSION,
+        installed_sha256: str = "",
     ) -> None:
         config_manager.save_update_state(
             {
@@ -837,11 +912,15 @@ class GitHubReleaseClient:
                 "latest_body": release.body,
                 "latest_update_notes": release.update_notes,
                 "notes_incomplete": release.notes_incomplete,
+                "latest_is_hotfix": release.is_hotfix,
                 "notes_current_version": normalize_version(current_version),
+                "notes_installed_setup_sha256": installed_sha256,
                 "latest_is_prerelease": release.is_prerelease,
                 "latest_setup_asset_name": release.setup_asset.name,
                 "latest_setup_asset_url": release.setup_asset.download_url,
                 "latest_setup_asset_size": release.setup_asset.size,
+                "latest_setup_asset_sha256": release.setup_asset.sha256,
+                "latest_setup_asset_updated_at": release.setup_asset.updated_at,
                 "latest_checksum_asset_name": release.checksum_asset.name,
                 "latest_checksum_asset_url": release.checksum_asset.download_url,
                 "latest_checksum_asset_size": release.checksum_asset.size,
@@ -894,8 +973,11 @@ def skipped_version() -> str:
     return str(config_manager.get("UPDATE_SKIPPED_VERSION", "")).strip()
 
 
-def mark_skipped_version(version: str) -> None:
-    config_manager.save_config({"UPDATE_SKIPPED_VERSION": normalize_version(version)})
+def mark_skipped_version(version: str, setup_sha256: str = "") -> None:
+    config_manager.save_config({
+        "UPDATE_SKIPPED_VERSION": normalize_version(version),
+        "UPDATE_SKIPPED_ASSET_SHA256": _sha256_value(setup_sha256),
+    })
 
 
 def remember_prompted_version(version: str) -> None:
@@ -943,6 +1025,8 @@ def _release_from_state(state: dict[str, object]) -> ReleaseInfo | None:
             name=str(state["latest_setup_asset_name"]),
             download_url=str(state["latest_setup_asset_url"]),
             size=int(str(state.get("latest_setup_asset_size", 0))),
+            sha256=_sha256_value(state.get("latest_setup_asset_sha256")),
+            updated_at=str(state.get("latest_setup_asset_updated_at") or ""),
         )
         checksum_asset = ReleaseAsset(
             name=str(state["latest_checksum_asset_name"]),
@@ -959,6 +1043,7 @@ def _release_from_state(state: dict[str, object]) -> ReleaseInfo | None:
         body=str(state.get("latest_body") or ""),
         update_notes=str(state.get("latest_update_notes") or ""),
         notes_incomplete=bool(state.get("notes_incomplete")),
+        is_hotfix=bool(state.get("latest_is_hotfix")),
         is_prerelease=bool(state.get("latest_is_prerelease")),
         setup_asset=setup_asset,
         checksum_asset=checksum_asset,
@@ -1036,7 +1121,12 @@ def _asset_from_payload(payload: object) -> ReleaseAsset | None:
         return None
     if not _is_allowed_download_url(url, require_release_path=True):
         return None
-    return ReleaseAsset(name=name, download_url=url, size=int(payload.get("size") or 0))
+    raw_digest = str(payload.get("digest") or "").strip()
+    digest = _sha256_value(raw_digest[7:]) if raw_digest.lower().startswith("sha256:") else ""
+    return ReleaseAsset(
+        name=name, download_url=url, size=int(payload.get("size") or 0), sha256=digest,
+        updated_at=str(payload.get("updated_at") or ""),
+    )
 
 
 def _is_allowed_download_url(url: str, *, require_release_path: bool = False) -> bool:

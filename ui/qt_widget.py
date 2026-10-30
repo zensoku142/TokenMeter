@@ -1506,6 +1506,11 @@ class FloatingWidget(QWidget):
         self._compact_overview.set_sources(configured_provider_ids())
         self._compact_overview.show()
         self._compact_overview.raise_()
+        modal = QApplication.activeModalWidget()
+        if modal is not None:
+            # 看板可能在模态提示显示期间被异步唤出；重新置前提示，避免遮住无法操作的窗口。
+            modal.raise_()
+            modal.activateWindow()
         self._update_provider_overview()
 
     def _compact_sources_changed(self) -> None:

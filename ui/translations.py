@@ -483,6 +483,7 @@ MESSAGES = {
     ),
     "更新通道": ("Channel", "更新通道", "チャンネル", "업데이트 채널"),
     "升级范围": ("Upgrade range", "升級範圍", "更新範囲", "업데이트 범위"),
+    "同版本更新": ("Same-version update", "同版本更新", "同一バージョンの更新", "동일 버전 업데이트"),
     "查看完整更新记录": (
         "View full release history", "查看完整更新記錄", "すべての更新履歴を見る", "전체 업데이트 기록 보기",
     ),
@@ -517,6 +518,12 @@ MESSAGES = {
         "新バージョン v{version}",
         "새 버전 v{version}",
     ),
+    "发现同版本更新 v{version}": (
+        "Update available for v{version}",
+        "發現同版本更新 v{version}",
+        "v{version} の更新があります",
+        "v{version}의 업데이트가 있습니다",
+    ),
     "该版本未提供更新说明。": (
         "No release notes provided.",
         "此版本未提供更新說明。",
@@ -525,6 +532,7 @@ MESSAGES = {
     ),
     "稍后提醒": ("Remind me later", "稍後提醒", "後で通知", "나중에 알림"),
     "跳过此版本": ("Skip version", "略過此版本", "スキップ", "이 버전 건너뛰기"),
+    "跳过本次更新": ("Skip this update", "略過本次更新", "今回の更新をスキップ", "이번 업데이트 건너뛰기"),
     "下载并更新": (
         "Download and update",
         "下載並更新",
@@ -1671,6 +1679,18 @@ MESSAGES = {
         "已略過 v{version}，後續自動檢查不再重複提示。",
         "v{version} をスキップしました。自動確認で再通知しません。",
         "v{version}을 건너뛰었습니다. 자동 확인 시 다시 알리지 않습니다.",
+    ),
+    "已跳过本次更新 v{version}，后续自动检查不再重复提示。": (
+        "Skipped this v{version} update. Automatic checks will not prompt for it again.",
+        "已略過本次更新 v{version}，後續自動檢查不再重複提示。",
+        "今回の v{version} の更新をスキップしました。自動確認で再通知しません。",
+        "이번 v{version} 업데이트를 건너뛰었습니다. 자동 확인 시 다시 알리지 않습니다.",
+    ),
+    "安装包已更新，请重新检查更新后重试": (
+        "The installer changed. Check for updates again and retry.",
+        "安裝檔已更新，請重新檢查更新後重試",
+        "インストーラーが更新されました。更新を再確認してから再試行してください",
+        "설치 파일이 변경되었습니다. 업데이트를 다시 확인한 후 재시도하세요",
     ),
     "正在检查更新，请稍候。": (
         "Checking for updates. Please wait.",
