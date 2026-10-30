@@ -1,0 +1,547 @@
+{
+  "version": 1,
+  "character": "白龙娘",
+  "idle": {
+    "id": "idle",
+    "file": "透明WebM/idle.webm",
+    "durationMs": 4000,
+    "loop": true,
+    "renderScale": 1.0,
+    "renderOffset": [
+      0.0,
+      0.0
+    ],
+    "renderAnchor": "bottom-center",
+    "playbackFile": "透明WebM/idle.webm"
+  },
+  "additionalIdleAnimations": [
+    {
+      "id": "idle2",
+      "name": "待机动作2",
+      "file": "透明WebM/idle2.webm",
+      "durationMs": 4000,
+      "loop": true,
+      "renderScale": 1.0049342105263157,
+      "renderOffset": [
+        0.0013923154239766373,
+        0.004523026315789499
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/idle2.webm"
+    },
+    {
+      "id": "idle03",
+      "name": "待机动作03 · 翻绘本",
+      "file": "透明WebM/idle03.webm",
+      "durationMs": 6042,
+      "loop": false,
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        -1.2731481481509377e-05,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/idle03.webm"
+    },
+    {
+      "id": "idle04",
+      "name": "待机动作04 · 贴贴枕头",
+      "file": "透明WebM/idle04.webm",
+      "durationMs": 6042,
+      "loop": false,
+      "renderScale": 1.0149501661129567,
+      "renderOffset": [
+        0.0013992709486895238,
+        0.01368355481727579
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/idle04.webm"
+    },
+    {
+      "id": "idle05",
+      "name": "待机动作05 · 玩掌机",
+      "file": "透明WebM/idle05.webm",
+      "durationMs": 7042,
+      "loop": false,
+      "renderScale": 1.0149501661129567,
+      "renderOffset": [
+        0.0013992709486895238,
+        0.01368355481727579
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/idle05.webm"
+    },
+    {
+      "id": "idle06",
+      "name": "待机动作06 · 贴尾巴",
+      "file": "透明WebM/idle06.webm",
+      "durationMs": 7042,
+      "loop": false,
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.001396937086092731,
+        0.010607523914643036
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/idle06.webm"
+    }
+  ],
+  "variants": [
+    {
+      "id": "01",
+      "name": "招手/打招呼",
+      "file": "透明WebM/01.webm",
+      "durationMs": 4000,
+      "line": "主人来啦！今天也一起把小事做好吧。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.00139693708609272,
+        0.01343359087564377
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/01.webm"
+    },
+    {
+      "id": "04",
+      "name": "灵感",
+      "file": "透明WebM/04.webm",
+      "durationMs": 4000,
+      "line": "叮！主人，我抓到一只好点子！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        0.0027949669966996597,
+        0.007563256325632513
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/04.webm"
+    },
+    {
+      "id": "05",
+      "name": "得意",
+      "file": "透明WebM/05.webm",
+      "durationMs": 4000,
+      "line": "哼哼，主人，这题被我拿下啦。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 0.9791666666666666,
+      "renderOffset": [
+        0.0034143518518518256,
+        -0.019097222222222224
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/05.webm"
+    },
+    {
+      "id": "08",
+      "name": "贴贴",
+      "file": "透明WebM/08.webm",
+      "durationMs": 4000,
+      "line": "给主人一个小小的龙龙抱抱。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        -0.0007199074074073843,
+        0.011148148148148114
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/08.webm"
+    },
+    {
+      "id": "09",
+      "name": "傲娇",
+      "file": "透明WebM/09.webm",
+      "durationMs": 4000,
+      "line": "才没有一直等主人……就一小会儿。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0049342105263157,
+      "renderOffset": [
+        -3.426535087748385e-06,
+        0.010105994152046726
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/09.webm"
+    },
+    {
+      "id": "13",
+      "name": "小生气",
+      "file": "透明WebM/13.webm",
+      "durationMs": 4000,
+      "line": "主人别急！这个坏问题，我要拆成小块解掉！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.00139693708609272,
+        0.010623620309050825
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/13.webm"
+    },
+    {
+      "id": "14",
+      "name": "困倦",
+      "file": "透明WebM/14.webm",
+      "durationMs": 4000,
+      "line": "哈啊……借主人的桌角打个小盹。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.00139693708609272,
+        0.010623620309050825
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/14.webm"
+    },
+    {
+      "id": "17",
+      "name": "偷吃",
+      "file": "透明WebM/17.webm",
+      "durationMs": 5042,
+      "line": "主人，这块饼干……是思考用的燃料！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        -0.0014130334805003697,
+        0.010607523914643036
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/17.webm"
+    },
+    {
+      "id": "18",
+      "name": "庆祝",
+      "file": "透明WebM/18.webm",
+      "durationMs": 4000,
+      "line": "完成啦！给主人和我各贴一颗小星星！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        -5.729739640653659e-06,
+        0.010363953061972906
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/18.webm"
+    },
+    {
+      "id": "20",
+      "name": "比心",
+      "file": "透明WebM/20.webm",
+      "durationMs": 4000,
+      "line": "今日份喜欢，已经送到主人的桌面啦。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        0.002815972222222185,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/20.webm"
+    },
+    {
+      "id": "21",
+      "name": "龙族契约",
+      "file": "透明WebM/21.webm",
+      "durationMs": 4042,
+      "line": "以龙角为誓，以龙翼为约……主人，请允许我成为你的白龙眷属。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 0.9760383386581469,
+      "renderOffset": [
+        0.002727857649982235,
+        -0.011086705715299905
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/21.webm"
+    },
+    {
+      "id": "22",
+      "name": "眷属印记",
+      "file": "透明WebM/22.webm",
+      "durationMs": 4000,
+      "line": "印记亮起来啦！从今天起，我就是主人的白龙眷属了。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        -5.729739640653659e-06,
+        0.010363953061972906
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/22.webm"
+    },
+    {
+      "id": "24",
+      "name": "宝藏收藏",
+      "file": "透明WebM/24.webm",
+      "durationMs": 6042,
+      "line": "金币、宝石，还有主人……都是我的宝贝！",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 0.9823151125401929,
+      "renderOffset": [
+        -0.0068093515541264305,
+        -0.0025433190425151464
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/24.webm"
+    },
+    {
+      "id": "25",
+      "name": "幼龙吐息",
+      "file": "透明WebM/25.webm",
+      "durationMs": 4000,
+      "line": "呼——这是小龙吐息！只烤棉花糖，不烤主人。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.001639344262295,
+      "renderOffset": [
+        -1.138433515516605e-06,
+        0.0015027322404370757
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/25.webm"
+    },
+    {
+      "id": "26",
+      "name": "逆鳞信任",
+      "file": "透明WebM/26.webm",
+      "durationMs": 4042,
+      "line": "这片逆鳞，只有你可以碰。要轻轻的哦，主人。",
+      "bubble": "由桌宠程序独立显示",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        0.002794966996699677,
+        0.010352493582691524
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/26.webm"
+    }
+  ],
+  "dragAnimation": {
+    "id": "drag",
+    "name": "拖拽",
+    "file": "透明WebM/drag.webm",
+    "durationMs": 4000,
+    "renderScale": 1.0049342105263157,
+    "renderOffset": [
+      -0.003492781432748555,
+      0.007314510233918112
+    ],
+    "renderAnchor": "bottom-center",
+    "playbackFile": "透明WebM/drag.webm"
+  },
+  "landingAnimation": {
+    "id": "landing",
+    "name": "落地",
+    "file": "透明WebM/landing.webm",
+    "durationMs": 2000,
+    "renderScale": 1.0049342105263157,
+    "renderOffset": [
+      -0.003492781432748555,
+      0.007314510233918112
+    ],
+    "renderAnchor": "bottom-center",
+    "playbackFile": "透明WebM/landing.webm"
+  },
+  "quotaAnimation": {
+    "id": "quota",
+    "name": "查阅额度",
+    "file": "透明WebM/quota.webm",
+    "durationMs": 4000,
+    "renderScale": 0.9622047244094488,
+    "renderAnchor": "bottom-center",
+    "renderOffset": [
+      2.624671916006744e-05,
+      0.0014370078740157054
+    ],
+    "playbackFile": "透明WebM/quota.webm"
+  },
+  "workAnimations": [
+    {
+      "id": "work01",
+      "name": "收到任务",
+      "renderScale": 1.0082508250825082,
+      "renderOffset": [
+        -5.729739640636389e-06,
+        0.010352493582691524
+      ],
+      "renderAnchor": "bottom-center",
+      "file": "透明WebM/work01.webm",
+      "durationMs": 4042,
+      "line": "收到啦，主人！让我先把你的叮嘱认真记下来。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "透明WebM/work01.webm"
+    },
+    {
+      "id": "work02",
+      "name": "处理任务",
+      "renderScale": 1.0,
+      "renderOffset": [
+        0,
+        0
+      ],
+      "renderAnchor": "bottom-center",
+      "file": "透明WebM/work02.webm",
+      "durationMs": 6042,
+      "line": "主人，代码正在小爪爪下面乖乖排队呢。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "透明WebM/work02.webm"
+    },
+    {
+      "id": "work03",
+      "name": "整理归档文件",
+      "file": "透明WebM/work03.webm",
+      "durationMs": 5042,
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        -1.2731481481509377e-05,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "line": "主人，小文件都归好位啦，找起来就方便多了。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "透明WebM/work03.webm"
+    },
+    {
+      "id": "work04",
+      "name": "翻阅工作资料",
+      "file": "透明WebM/work04.webm",
+      "durationMs": 5042,
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        -0.0014130334805003697,
+        0.013417494481236303
+      ],
+      "renderAnchor": "bottom-center",
+      "line": "主人，让我翻翻资料，好答案就藏在这些书页里。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "透明WebM/work04.webm"
+    },
+    {
+      "id": "work05",
+      "name": "放大镜查看细节",
+      "file": "透明WebM/work05.webm",
+      "durationMs": 4042,
+      "renderScale": 1.0115894039735098,
+      "renderOffset": [
+        0.001396937086092731,
+        0.010607523914643036
+      ],
+      "renderAnchor": "bottom-center",
+      "line": "主人，让我仔细瞧瞧，小细节也逃不过龙娘的眼睛。",
+      "bubble": "仅手动互动触发，自动工作播放不显示台词",
+      "playbackFile": "透明WebM/work05.webm"
+    },
+    null
+  ],
+  "movementAnimations": [
+    {
+      "id": "move02",
+      "number": "02",
+      "name": "跑步（向右）",
+      "file": "透明WebM/move02.webm",
+      "durationMs": 11000,
+      "moveStartMs": 4750,
+      "moveStopMs": 7500,
+      "sourceFacing": "right",
+      "renderScale": 1.0149501661129567,
+      "renderOffset": [
+        0.0013992709486895238,
+        0.01086424880029524
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/move02.webm"
+    },
+    {
+      "id": "move02left",
+      "number": "02",
+      "name": "跑步（向左）",
+      "file": "透明WebM/move02left.webm",
+      "durationMs": 9042,
+      "moveStartMs": 1917,
+      "moveStopMs": 5250,
+      "sourceFacing": "left",
+      "renderScale": 0.9983660130718954,
+      "renderOffset": [
+        -0.009705201525054385,
+        0.009597403776325342
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/move02left.webm"
+    },
+    {
+      "id": "move01left",
+      "number": "01",
+      "name": "走路（向左）",
+      "file": "透明WebM/move01left.webm",
+      "durationMs": 5042,
+      "moveStartMs": 1000,
+      "moveStopMs": 3250,
+      "sourceFacing": "left",
+      "renderScale": 1.0149501661129567,
+      "renderOffset": [
+        -1.0382059800639887e-05,
+        0.01368355481727579
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/move01left.webm"
+    },
+    {
+      "id": "move01right",
+      "number": "01",
+      "name": "走路（向右）",
+      "file": "透明WebM/move01right.webm",
+      "durationMs": 5042,
+      "moveStartMs": 750,
+      "moveStopMs": 3250,
+      "sourceFacing": "right",
+      "renderScale": 1.0149501661129567,
+      "renderOffset": [
+        0.0013992709486895238,
+        0.01368355481727579
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/move01right.webm"
+    },
+    {
+      "id": "move03left",
+      "number": "03",
+      "name": "飞行（向左）",
+      "file": "透明WebM/move03left.webm",
+      "durationMs": 9100,
+      "moveStartMs": 3125,
+      "moveStopMs": 7750,
+      "sourceFacing": "left",
+      "movementAngleRange": [
+        45,
+        80
+      ],
+      "movementSpeed": 0.65,
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        -1.2731481481509377e-05,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/move03left.webm"
+    },
+    {
+      "id": "move03right",
+      "number": "03",
+      "name": "飞行（向右）",
+      "file": "透明WebM/move03right.webm",
+      "durationMs": 9100,
+      "moveStartMs": 3300,
+      "moveStopMs": 7750,
+      "sourceFacing": "right",
+      "movementAngleRange": [
+        45,
+        80
+      ],
+      "movementSpeed": 0.65,
+      "renderScale": 1.0183333333333333,
+      "renderOffset": [
+        0.0014016203703703378,
+        0.013951388888888916
+      ],
+      "renderAnchor": "bottom-center",
+      "playbackFile": "透明WebM/move03right.webm"
+    }
+  ]
+}

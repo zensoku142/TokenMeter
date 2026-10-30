@@ -1,6 +1,6 @@
 # Provider brand assets
 
-The SVG marks in this directory are vendored from [Lobe Icons](https://github.com/lobehub/lobe-icons),
+Except for WorkBuddy and the generic mark described below, the SVG marks in this directory are vendored from [Lobe Icons](https://github.com/lobehub/lobe-icons),
 an MIT-licensed AI brand icon collection. They are identification marks for the named services,
 not TokenMeter logos or an assertion of affiliation. Brand names and trademarks belong to their
 respective owners; the upstream software license does not grant trademark rights.
@@ -28,12 +28,19 @@ directory. The complete upstream copyright and license notice is retained in
 | `elevenlabs.svg` | ElevenLabs |
 | `bailian-color.svg` | Alibaba Cloud Bailian (asset prepared for future support) |
 | `openai.svg` | GPT / OpenAI mark used for Codex at the user's request; also prepared for OpenAI API |
+| `workbuddy.svg` | WorkBuddy; official website icon, with its own source noted below |
 
 The renderer preserves the SVG viewBox proportions and literal brand colors/gradients.
 Upstream monochrome `currentColor` marks use the application's light/dark foreground color.
 For Kimi, the upstream monochrome variant is used because its colored variant contains a white
 letter intended for a dark background. Icons are rendered at multiple pixel densities and loaded
 only from local bundled files; no provider website is contacted to display them.
+
+`workbuddy.svg` comes from the icon directly referenced by [WorkBuddy's official website](https://www.workbuddy.cn/):
+[`assets/logo.svg`](https://assets.workbuddy.cn/web/workbuddy/ef3f61071769c4eb251eaf348beccaa512218f3d/assets/logo.svg).
+The original geometry, viewBox, gradients and fallback colors are retained. Redundant `style`
+attributes are removed because Qt SVG does not support the `display-p3` CSS values and otherwise
+drops the green background. This official brand asset is separate from the Lobe Icons collection.
 
 `generic.svg` is an original, neutral connection symbol created for TokenMeter under the project's
 license. It is deliberately **not a NayutoAI brand logo**. A verifiable redistributable NayutoAI mark

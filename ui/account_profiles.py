@@ -155,9 +155,10 @@ class AccountProfilesPage(ProviderOverview):
     quota_observed = Signal(str, str, str, object)
     profiles_changed = Signal()
 
-    def __init__(self, parent=None, *, embedded_settings=False):
+    def __init__(self, parent=None, *, embedded_settings=False, monitor=None):
         super().__init__(parent)
         self._embedded_settings = embedded_settings
+        self._monitor = monitor
         self.profiles = []
         self.results = {}
         self._queue = []
@@ -179,6 +180,8 @@ class AccountProfilesPage(ProviderOverview):
 
     def reload_profiles(self):
         try:
+            # CC 已配置账号自动加入采集列表；重复刷新不新增重复档案或改变默认连接。
+            store.import_cc_switch_profiles()
             profiles = store.load_profiles()
         except (OSError, ValueError):
             bind_text(self.hint, "账户档案无法读取，请检查数据文件。")
@@ -197,6 +200,15 @@ class AccountProfilesPage(ProviderOverview):
                 if self._detail_profile == profile_id and self._details is not None:
                     self._details.reject()
         self.profiles = profiles
+        if self._monitor is not None:
+            for profile in profiles:
+                if profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
+                    cached = self._monitor._vpet_profile_results.get(profile["id"])
+                    if (cached is not None and cached[0] == profile["revision"]
+                            and cached[1].account_key == TokenData.account_key_for_config(store.profile_config(profile))):
+                        self.results[profile["id"]] = cached[1]
+                    else:
+                        self.results.pop(profile["id"], None)
         self._render()
         if previous != current:
             self.profiles_changed.emit()
@@ -206,14 +218,28 @@ class AccountProfilesPage(ProviderOverview):
         self.set_data({profile["id"]: self.results.get(profile["id"]) for profile in self.profiles},
                       providers={profile["id"]: profile["provider"] for profile in self.profiles},
                       labels={profile["id"]: profile["name"] for profile in self.profiles})
-        self.set_refreshing(bool(self._active or self._queue))
+        in_flight = self._monitor._vpet_profile_in_flight if self._monitor is not None else {}
+        for profile in self.profiles:
+            if profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
+                button = self.cards[profile["id"]].findChild(QPushButton, "overviewConnection")
+                bind_text(button, "刷新")
+                button.setEnabled((profile["id"], profile["revision"]) != self._active
+                                  and profile["id"] not in self._queue and profile["id"] not in in_flight)
+        self.set_refreshing(bool(self._active or self._queue or any(
+            profile["id"] in in_flight for profile in self.profiles)))
 
     def refresh_profiles(self):
+        if self._monitor is not None:
+            self._monitor._update_vpet_source_options()
         if not self.reload_profiles():
             return
+        if self._monitor is not None:
+            self._monitor._refresh_vpet_bound_sources()
         now = time.monotonic()
         self._queue = [profile["id"] for profile in self.profiles
-                       if (profile["id"], profile["revision"]) != self._active and now >= self._due.get(profile["id"], 0)]
+                       if (profile["id"], profile["revision"]) != self._active and now >= self._due.get(profile["id"], 0)
+                       and not (self._monitor is not None and profile["provider"] == "codex"
+                                and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"))]
         if self._active is None:
             self._advance()
 
@@ -262,6 +288,19 @@ class AccountProfilesPage(ProviderOverview):
 
     def edit_profile(self, profile_id=""):
         profile = next((item for item in self.profiles if item["id"] == profile_id), None)
+        if profile and profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
+            # CC 是账号配置的唯一来源；卡片操作只刷新该账号，不再打开本地凭据编辑器。
+            if self._monitor is not None:
+                if profile_id not in self._monitor._vpet_profile_in_flight:
+                    self._monitor._vpet_profile_due.pop(profile_id, None)
+                    self._monitor._refresh_vpet_bound_sources()
+                self._render()
+                return
+            if (profile_id, profile["revision"]) != self._active and profile_id not in self._queue:
+                self._queue.append(profile_id)
+                self._advance()
+                self._render()
+            return
         editor = ProfileEditor(self, profile)
         if editor.exec() == QDialog.DialogCode.Accepted:
             self.refresh_profiles()

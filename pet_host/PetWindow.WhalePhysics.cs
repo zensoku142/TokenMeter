@@ -22,7 +22,22 @@ internal sealed partial class PetWindow
     private long whaleLastPhysicsTick;
     private double whaleSpringX, whaleSpringY, whaleTargetX, whaleTargetY, whaleSpringVx, whaleSpringVy;
     private double whaleThrowX, whaleThrowY, whaleThrowVx, whaleThrowVy;
+    private int whaleMotionGeneration;
+    private long whaleLastImpact;
     private bool WhaleMotionActive => whaleSpringTimer.IsEnabled || whaleThrowTimer.IsEnabled;
+    private bool UsesThrowPhysics => character is "whale" or "bailong";
+    // 白龙娘复用现有物理参数，但独立安装时不依赖鲸鱼娘的素材或动作清单。
+    private (double Gravity, double Restitution, double Friction, bool CeilingBounce, double Power) ThrowPhysicsSettings
+    {
+        get
+        {
+            if (character != "whale") return (1400, 0.78, 2.5, true, 1);
+            var physics = WhaleCatalog.GetProperty("physics");
+            return (physics.GetProperty("gravity").GetDouble(), physics.GetProperty("restitution").GetDouble(),
+                physics.GetProperty("groundFriction").GetDouble(), physics.GetProperty("ceilingBounce").GetBoolean(),
+                physics.GetProperty("throwPower").GetDouble());
+        }
+    }
 
     private void InitializeWhalePhysics()
     {
@@ -51,7 +66,7 @@ internal sealed partial class PetWindow
 
     private void UpdateWhaleGesture(Point pointer, Vector delta)
     {
-        if (whaleTrail.Count > 0 && Math.Abs(pointer.X - whaleTrail[^1].Position.X) > 4)
+        if (character == "whale" && whaleTrail.Count > 0 && Math.Abs(pointer.X - whaleTrail[^1].Position.X) > 4)
             SetWhaleFacing(pointer.X > whaleTrail[^1].Position.X);
         AddWhaleSample(pointer);
         whaleTargetX = petWindowScreen.X + delta.X;
@@ -74,11 +89,16 @@ internal sealed partial class PetWindow
     private void AdvanceWhaleSpring()
     {
         double dt = WhaleFrameSeconds();
-        // 与参考项目相同的过阻尼弹簧常数；角色跟手但不瞬移到指针。
-        whaleSpringVx += ((whaleTargetX - whaleSpringX) * 200 - whaleSpringVx * 30) * dt;
-        whaleSpringVy += ((whaleTargetY - whaleSpringY) * 200 - whaleSpringVy * 30) * dt;
-        whaleSpringX += whaleSpringVx * dt;
-        whaleSpringY += whaleSpringVy * dt;
+        int steps = Math.Max(1, (int)Math.Ceiling(dt * 120));
+        // 小步积分保持弹簧跟手稳定，避免低帧率时一次大步更新产生抖动。
+        for (int i = 0; i < steps; i++)
+        {
+            double step = dt / steps;
+            whaleSpringVx += ((whaleTargetX - whaleSpringX) * 200 - whaleSpringVx * 30) * step;
+            whaleSpringVy += ((whaleTargetY - whaleSpringY) * 200 - whaleSpringVy * 30) * step;
+            whaleSpringX += whaleSpringVx * step;
+            whaleSpringY += whaleSpringVy * step;
+        }
         SetWindowPos(new WindowInteropHelper(this).Handle, IntPtr.Zero,
             (int)Math.Round(whaleSpringX), (int)Math.Round(whaleSpringY), 0, 0, DragPositionFlags);
     }
@@ -105,7 +125,7 @@ internal sealed partial class PetWindow
             double ms = recent[i].Time - recent[i - 1].Time;
             if (ms >= 8) peak = Math.Max(peak, (recent[i].Position - recent[i - 1].Position).Length / ms * 1000);
         }
-        double power = WhaleCatalog.GetProperty("physics").GetProperty("throwPower").GetDouble();
+        double power = ThrowPhysicsSettings.Power;
         double candidate = (baseSpeed + peak) / 2;
         double speed = 3600 * (1 - Math.Exp(-candidate / 3600)) * power;
         if (speed < 500 * power) return null;
@@ -116,7 +136,9 @@ internal sealed partial class PetWindow
     {
         whaleSpringTimer.Stop();
         whaleGestureClock.Stop();
-        bool snapped = !cancel && TrySnapPetToEdge();
+        var release = cancel ? null : WhaleReleaseVelocity();
+        // 快速甩向屏幕外缘应进入碰撞反弹，普通慢拖放下才沿用贴边吸附。
+        bool snapped = !cancel && release == null && TrySnapPetToEdge();
         if (snapped) return;
         if (cancel)
         {
@@ -124,15 +146,16 @@ internal sealed partial class PetWindow
             pet!.Display(GraphType.Raised_Static, AnimatType.C_End, pet.DisplayToNomal);
             return;
         }
-        if (WhaleReleaseVelocity() is { } release)
+        if (release is { } velocity)
         {
             var handle = new WindowInteropHelper(this).Handle;
             if (GetWindowRect(handle, out var rect))
             {
                 whaleThrowX = rect.Left;
                 whaleThrowY = rect.Top;
-                whaleThrowVx = release.X;
-                whaleThrowVy = release.Y;
+                whaleThrowVx = velocity.X;
+                whaleThrowVy = velocity.Y;
+                ++whaleMotionGeneration;
                 whaleLastPhysicsTick = Stopwatch.GetTimestamp();
                 whaleThrowTimer.Start();
                 return;
@@ -145,10 +168,19 @@ internal sealed partial class PetWindow
     private void AdvanceWhaleThrow()
     {
         double dt = WhaleFrameSeconds();
-        var physics = WhaleCatalog.GetProperty("physics");
-        double gravity = physics.GetProperty("gravity").GetDouble();
-        double restitution = physics.GetProperty("restitution").GetDouble();
-        double friction = physics.GetProperty("groundFriction").GetDouble();
+        int steps = Math.Max(1, (int)Math.Ceiling(dt * 120));
+        for (int i = 0; i < steps && whaleThrowTimer.IsEnabled; i++) AdvanceWhaleThrowStep(dt / steps);
+        // 子步只计算重力和屏幕边界，每帧只提交一次窗口位置，避免透明窗重复重绘及气泡布局。
+        SetWindowPos(new WindowInteropHelper(this).Handle, IntPtr.Zero,
+            (int)Math.Round(whaleThrowX), (int)Math.Round(whaleThrowY), 0, 0, DragPositionFlags);
+    }
+
+    private void AdvanceWhaleThrowStep(double dt)
+    {
+        var physics = ThrowPhysicsSettings;
+        double gravity = physics.Gravity;
+        double restitution = physics.Restitution;
+        double friction = physics.Friction;
         whaleThrowVy += gravity * dt;
         whaleThrowX += whaleThrowVx * dt;
         whaleThrowY += whaleThrowVy * dt;
@@ -159,7 +191,7 @@ internal sealed partial class PetWindow
             (int)Math.Round(whaleThrowX + windowWidth / 2.0),
             (int)Math.Round(whaleThrowY + windowHeight / 2.0)));
         var work = screen.WorkingArea;
-        var pixels = WhaleVisiblePixels();
+        var pixels = PetVisiblePixels(character);
         double minX = work.Left - pixels.Left * windowWidth;
         double maxX = work.Right - pixels.Right * windowWidth;
         double minY = work.Top - pixels.Top * windowHeight;
@@ -170,53 +202,78 @@ internal sealed partial class PetWindow
         int centerY = (int)Math.Round(whaleThrowY + windowHeight / 2.0);
         // 屏幕接缝有邻屏就允许角色自然跨越；真正外缘才反弹，避免多屏外接矩形里的空洞。
         if (whaleThrowX < minX && !Neighbor(screen.Bounds.Left - 1, centerY))
-        { whaleThrowX = minX; whaleThrowVx = Math.Abs(whaleThrowVx) * restitution; }
+        {
+            whaleThrowX = minX;
+            if (whaleThrowVx < 0) { PulseWhaleImpact(new Vector(-1, 0), -whaleThrowVx); whaleThrowVx *= -restitution; }
+        }
         else if (whaleThrowX > maxX && !Neighbor(screen.Bounds.Right + 1, centerY))
-        { whaleThrowX = maxX; whaleThrowVx = -Math.Abs(whaleThrowVx) * restitution; }
-        if (whaleThrowY < minY && physics.GetProperty("ceilingBounce").GetBoolean() &&
+        {
+            whaleThrowX = maxX;
+            if (whaleThrowVx > 0) { PulseWhaleImpact(new Vector(1, 0), whaleThrowVx); whaleThrowVx *= -restitution; }
+        }
+        if (whaleThrowY < minY && physics.CeilingBounce &&
             !Neighbor(centerX, screen.Bounds.Top - 1))
         {
             whaleThrowY = minY;
-            whaleThrowVy = Math.Abs(whaleThrowVy) * restitution;
+            if (whaleThrowVy < 0) { PulseWhaleImpact(new Vector(0, -1), -whaleThrowVy); whaleThrowVy *= -restitution; }
         }
         else if (whaleThrowY >= maxY && !Neighbor(centerX, screen.Bounds.Bottom + 1))
         {
             whaleThrowY = maxY;
             double impact = whaleThrowVy;
             whaleThrowVx *= Math.Max(0, 1 - friction * dt);
-            whaleThrowVy = Math.Abs(whaleThrowVy) < 40 ? 0 : -Math.Abs(whaleThrowVy) * restitution;
-            if (impact > 300) PulseWhale(Math.Max(0.55, 0.8 - (impact - 300) / 1200 * 0.25));
+            if (impact > 0) whaleThrowVy = impact < 40 ? 0 : -impact * restitution;
+            PulseWhaleImpact(new Vector(0, 1), impact);
         }
-        SetWindowPos(handle, IntPtr.Zero, (int)Math.Round(whaleThrowX), (int)Math.Round(whaleThrowY),
-            0, 0, DragPositionFlags);
         if (whaleThrowY >= maxY - 1 && Math.Abs(whaleThrowVy) < 1 && Math.Abs(whaleThrowVx) < 15 &&
             !Neighbor(centerX, screen.Bounds.Bottom + 1))
         {
             whaleThrowTimer.Stop();
+            int generation = whaleMotionGeneration;
             pet!.Display(GraphType.Raised_Static, AnimatType.C_End, () => {
-                pet.DisplayToNomal();
-                SaveState();
-                SyncAutonomy();
+                // 落地动画尚未结束时可能再次被抓起，旧回调不能覆盖新动作。
+                if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(() => {
+                    if (generation != whaleMotionGeneration || closing || !UsesThrowPhysics || !visible) return;
+                    pet.DisplayToNomal();
+                    SaveState();
+                    SyncAutonomy();
+                });
             });
         }
     }
 
     private void StopWhaleMotion()
     {
+        ++whaleMotionGeneration;
         whaleSpringTimer.Stop();
         whaleThrowTimer.Stop();
         whaleGestureClock.Stop();
+        if (pet != null) pet.RenderTransform = Transform.Identity;
     }
 
-    private void PulseWhale(double minimumHeight = 0.55)
+    private void PulseWhaleImpact(Vector normal, double speed)
     {
-        pet!.RenderTransformOrigin = new Point(0.5, 1);
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double dipSpeed = speed / (Math.Abs(normal.X) > Math.Abs(normal.Y) ? dpi.DpiScaleX : dpi.DpiScaleY);
+        long now = Environment.TickCount64;
+        // 微小落地回弹不重复播放形变，连续接触也给上一段反馈留下恢复时间。
+        if (dipSpeed < 120 || now - whaleLastImpact < 100) return;
+        whaleLastImpact = now;
+        PulseWhale(Math.Clamp(0.85 - dipSpeed / 5000, 0.55, 0.82), normal);
+    }
+
+    private void PulseWhale(double minimumHeight = 0.55, Vector? normal = null)
+    {
+        bool horizontal = normal is { } direction && Math.Abs(direction.X) > Math.Abs(direction.Y);
+        pet!.RenderTransformOrigin = horizontal ? new Point(normal!.Value.X > 0 ? 1 : 0, 0.5) :
+            new Point(0.5, normal?.Y < 0 ? 0 : 1);
         var squash = new ScaleTransform(1, 1);
         pet.RenderTransform = squash;
         var ease = new BackEase { Amplitude = 0.45, EasingMode = EasingMode.EaseOut };
-        squash.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1 + (1 - minimumHeight) * 0.35, 1,
+        double stretch = 1 + (1 - minimumHeight) * 0.35;
+        squash.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(horizontal ? minimumHeight : stretch, 1,
             TimeSpan.FromMilliseconds(260)) { EasingFunction = ease });
-        squash.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(minimumHeight, 1,
+        squash.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(horizontal ? stretch : minimumHeight, 1,
             TimeSpan.FromMilliseconds(260)) { EasingFunction = ease });
     }
 

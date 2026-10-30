@@ -61,6 +61,7 @@ from PySide6.QtWidgets import (
 from api.deepseek_pricing import normalize_offpeak_dates
 from api.providers import PROVIDERS, list_providers
 from api.providers.base import FetchError
+from config import account_profiles as profile_store
 from config import runtime as config_manager
 from core import pet_extension
 from core.autostart import AutostartError, sync_autostart
@@ -88,7 +89,7 @@ _PET_THUMBNAIL_DIR = Path(__file__).resolve().parents[1] / "assets" / "pet"
 
 
 def _pet_character_icon(character: str) -> QIcon:
-    name = "whale-portrait.png" if character == "whale" else "vpet-preview.png"
+    name = {"whale": "whale-portrait.png", "bailong": "bailong-portrait.png"}.get(character, "vpet-preview.png")
     image = QPixmap(str(_PET_THUMBNAIL_DIR / name))
     if image.isNull():
         return QIcon()
@@ -402,6 +403,7 @@ class SettingsWindow(QDialog):
         on_saved: Callable[[], None] | None = None,
         update_controller: AppUpdateController | None = None,
         embedded: bool = False,
+        profile_monitor=None,
     ):
         super().__init__(parent)
         self.setObjectName("settingsPage")
@@ -415,6 +417,7 @@ class SettingsWindow(QDialog):
             self.setMinimumWidth(560)
             self.setMaximumWidth(720)
         self.on_saved = on_saved
+        self.profile_monitor = profile_monitor
         self.update_controller = update_controller
         self._pet_worker: PetExtensionWorker | None = None
         self._pet_release: PetReleaseInfo | None = None
@@ -710,10 +713,41 @@ class SettingsWindow(QDialog):
         behavior_layout = self._add_settings_page(
             "悬浮与启动", "控制悬浮球的显示行为以及随系统启动的自动运行选项。"
         )
+        floating_form = QFormLayout()
+        self.floating_style_combo = _SettingsComboBox()
+        add_item(self.floating_style_combo, "悬浮球", "ball")
+        add_item(self.floating_style_combo, "轻底细环", "light_ring")
+        floating_form.addRow(bind_text(QLabel(), "悬浮样式"), self.floating_style_combo)
+        behavior_layout.addLayout(floating_form)
+        self.ring_sources_widget = QWidget()
+        ring_sources_layout = QVBoxLayout(self.ring_sources_widget)
+        ring_sources_layout.setContentsMargins(0, 0, 0, 0)
+        self.ring_follow_theme_check = bind_text(_SettingsCheckBox(), "圆环颜色跟随主题")
+        ring_sources_layout.addWidget(self.ring_follow_theme_check)
+        self.ring_color_row = QWidget()
+        ring_color_layout = QHBoxLayout(self.ring_color_row)
+        ring_color_layout.setContentsMargins(0, 0, 0, 0)
+        ring_color_layout.addWidget(bind_text(QLabel(), "圆环自定义颜色"))
+        self.ring_color_edit = QLineEdit()
+        self.ring_color_edit.setMaxLength(7)
+        bind_text(self.ring_color_edit, "#RRGGBB", method="setPlaceholderText")
+        self.ring_color_button = bind_text(QPushButton(), "选择颜色")
+        ring_color_layout.addWidget(self.ring_color_edit, 1)
+        ring_color_layout.addWidget(self.ring_color_button)
+        ring_sources_layout.addWidget(self.ring_color_row)
+        self.ring_follow_theme_check.toggled.connect(lambda checked: self.ring_color_row.setEnabled(not checked))
+        self.ring_color_edit.textEdited.connect(self._schedule_save)
+        self.ring_color_button.clicked.connect(self._choose_ring_color)
+        behavior_layout.addWidget(self.ring_sources_widget)
+        self.floating_style_combo.currentIndexChanged.connect(self._sync_floating_style_controls)
         self.edge_hide_check = _SettingsSwitch("贴边自动隐藏")
         self._add_switch_row(
             behavior_layout, "贴边自动隐藏", "靠近屏幕边缘时隐藏悬浮球", self.edge_hide_check
         )
+        self.codex_reset_alert_check = _SettingsSwitch("Codex 公开重置提醒")
+        self._add_switch_row(behavior_layout, "Codex 公开重置提醒",
+                             "显示 TIBO 社区重置动态并提醒新消息，不代表个人额度到账。",
+                             self.codex_reset_alert_check)
         self.quota_ring_counterclockwise_check = _SettingsSwitch("周额度环逆时针")
         self._add_switch_row(
             behavior_layout,
@@ -737,9 +771,9 @@ class SettingsWindow(QDialog):
             "桌宠", "下载安装桌宠扩展包后可启用；扩展独立更新，不影响主程序。"
         )
         self._pet_tab_index = self.tabs.count() - 1
-        self.vpet_check = _SettingsSwitch("启用 VPet 精简桌宠")
+        self.vpet_check = _SettingsSwitch("启用桌宠")
         self._add_switch_row(
-            pet_layout, "启用 VPet 精简桌宠",
+            pet_layout, "启用桌宠",
             "启用后显示桌宠，可选择同时显示悬浮球。", self.vpet_check
         )
         self.vpet_show_ball_check = _SettingsSwitch("同时显示悬浮球")
@@ -754,6 +788,10 @@ class SettingsWindow(QDialog):
         self.pet_whale_button = bind_text(QPushButton(), "下载鲸鱼娘")
         self.pet_vpet_default_button = bind_text(QPushButton(), "设为默认")
         self.pet_whale_default_button = bind_text(QPushButton(), "设为默认")
+        self.pet_bailong_button = bind_text(QPushButton(), "安装")
+        self.pet_bailong_default_button = bind_text(QPushButton(), "设为默认")
+        self.pet_bailong_button.clicked.connect(lambda: self._manage_pet_character("bailong"))
+        self.pet_bailong_default_button.clicked.connect(lambda: self._select_pet_default("bailong"))
         self.pet_vpet_button.clicked.connect(lambda: self._manage_pet_character("vpet"))
         self.pet_whale_button.clicked.connect(lambda: self._manage_pet_character("whale"))
         self.pet_vpet_default_button.clicked.connect(lambda: self._select_pet_default("vpet"))
@@ -763,6 +801,7 @@ class SettingsWindow(QDialog):
         for label, character, button, default_button in (
             ("萝莉斯", "vpet", self.pet_vpet_button, self.pet_vpet_default_button),
             ("鲸鱼娘", "whale", self.pet_whale_button, self.pet_whale_default_button),
+            ("小龙娘", "bailong", self.pet_bailong_button, self.pet_bailong_default_button),
         ):
             row = QHBoxLayout()
             row.setSpacing(10)
@@ -827,6 +866,12 @@ class SettingsWindow(QDialog):
         self.pet_source_label.setWordWrap(True)
         self.pet_source_label.setOpenExternalLinks(True)
         pet_layout.addWidget(self.pet_source_label)
+        self.bailong_source_label = bind_text(QLabel(),
+            '小龙娘角色素材来源：<a href="https://github.com/jingh12312-rgb/bailong-desktop-pet">'
+            'jingh12312-rgb/bailong-desktop-pet</a>（v0.5.1，35 段透明动画）')
+        self.bailong_source_label.setWordWrap(True)
+        self.bailong_source_label.setOpenExternalLinks(True)
+        pet_layout.addWidget(self.bailong_source_label)
         pet_layout.addStretch(1)
 
         runtime_layout = self._add_settings_page(
@@ -855,7 +900,20 @@ class SettingsWindow(QDialog):
             bind_text(check, "勾选后，即使不是当前数据来源也会在后台定时获取", method='setToolTip')
             self.background_provider_checks[provider_id] = check
             background_provider_layout.addWidget(check, index // 3, index % 3)
-        runtime_form.addRow(bind_text(QLabel(), "同时获取"), background_provider_widget)
+        source_widget = QWidget()
+        source_layout = QVBoxLayout(source_widget)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        hint = bind_text(QLabel(), "选择平台或账户；未勾选时跟随当前平台。")
+        hint.setWordWrap(True)
+        source_layout.addWidget(hint)
+        source_layout.addWidget(background_provider_widget)
+        self.ring_profile_choices = QVBoxLayout()
+        self.ring_profile_choices.setContentsMargins(0, 0, 0, 0)
+        self.ring_profile_checks = {}
+        source_layout.addLayout(self.ring_profile_choices)
+        self._refresh_ring_profile_choices()
+        self.profile_list_changed.connect(self._refresh_ring_profile_choices)
+        runtime_form.addRow(bind_text(QLabel(), "同时获取"), source_widget)
         alert_row = QWidget()
         alert_layout = QHBoxLayout(alert_row)
         alert_layout.setContentsMargins(0, 0, 0, 0)
@@ -1021,7 +1079,8 @@ class SettingsWindow(QDialog):
         # 档案管理属于账户设置；仅切换到此页时加载，避免打开外观设置也启动账号采集。
         from ui.account_profiles import AccountProfilesPage
 
-        self.account_profiles_page = AccountProfilesPage(self, embedded_settings=True)
+        self.account_profiles_page = AccountProfilesPage(
+            self, embedded_settings=True, monitor=self.profile_monitor)
         self.account_profiles_page.quota_observed.connect(self.profile_quota_observed)
         self.account_profiles_page.profiles_changed.connect(self.profile_list_changed)
         self.account_profiles_page.layout().setContentsMargins(0, 0, 0, 0)
@@ -1041,6 +1100,7 @@ class SettingsWindow(QDialog):
         characters = pet_extension.installed_characters()
         supports_characters = isinstance(manifest.get("character_resources"), dict) if manifest else False
         removable = any(path.exists() for path in pet_extension.removable_directories())
+        selected = pet_extension.selected_character()
         # 只有校验完整的已安装扩展包才允许启用，不能把开发构建或旧安装目录当成下载完成。
         available = manifest is not None
         self.vpet_check.setEnabled(available and not busy)
@@ -1048,11 +1108,11 @@ class SettingsWindow(QDialog):
             # 状态刷新只纠正显示，不触发自动保存去改写其他设置。
             with QSignalBlocker(self.vpet_check):
                 self.vpet_check.setChecked(False)
-        selected = pet_extension.selected_character()
         self.pet_uninstall_button.setEnabled(not busy and removable)
         for character, button, default_button in (
             ("vpet", self.pet_vpet_button, self.pet_vpet_default_button),
             ("whale", self.pet_whale_button, self.pet_whale_default_button),
+            ("bailong", self.pet_bailong_button, self.pet_bailong_default_button),
         ):
             bind_text(button, "卸载" if character in characters else "安装")
             button.setEnabled(not busy and (not removable or supports_characters))
@@ -1075,11 +1135,11 @@ class SettingsWindow(QDialog):
         self.pet_update_button.setEnabled(not busy and removable and update_available)
         # 更新替换下载、取消替换检查，避免任务状态变化后把同一行挤成四五个按钮。
         self.pet_uninstall_button.setVisible(removable)
-        role_names = "、".join(name for role, name in (("vpet", "萝莉斯"), ("whale", "鲸鱼娘"))
+        role_names = "、".join(name for role, name in (("vpet", "萝莉斯"), ("whale", "鲸鱼娘"), ("bailong", "小龙娘"))
                               if role in characters)
         bind_text(self.pet_version_label, (f"v{version}（已安装：{role_names}）"
                                            if role_names else f"v{version}") if version else (
-            "旧版（无版本号）" if available else
+            "旧版（无版本号）" if manifest is not None else
             "不可用" if removable else "未安装"
         ))
         if not message:
@@ -1157,7 +1217,7 @@ class SettingsWindow(QDialog):
                 self._start_pet_task("install", character)
             return
         adding = character not in installed
-        name = "鲸鱼娘" if character == "whale" else "萝莉斯"
+        name = {"whale": "鲸鱼娘", "bailong": "小龙娘"}.get(character, "萝莉斯")
         action = "下载" if adding else "删除"
         answer = QMessageBox.question(
             self, tr("管理桌宠角色"),
@@ -1338,6 +1398,39 @@ class SettingsWindow(QDialog):
                 lambda _value, target=control: self._schedule_save() if target.hasFocus() else None
             )
             control.editingFinished.connect(self._schedule_save)
+
+    def _sync_floating_style_controls(self, *_args) -> None:
+        rings = self.floating_style_combo.currentData() == "light_ring"
+        self.ring_sources_widget.setVisible(rings)
+        # 细环贴边始终保留数字，原来的自动隐藏选项只控制悬浮球。
+        self.edge_hide_check.setEnabled(not rings)
+
+    def _choose_ring_color(self) -> None:
+        selected = QColorDialog.getColor(QColor(self.ring_color_edit.text()), self, tr("圆环自定义颜色"))
+        if selected.isValid():
+            self.ring_color_edit.setText(selected.name().upper())
+            self._schedule_save()
+
+    def _refresh_ring_profile_choices(self) -> None:
+        selected = [key for key, check in self.ring_profile_checks.items() if check.isChecked()]
+        if not self.ring_profile_checks:
+            selected = config_manager.get("BACKGROUND_PROFILE_IDS", [])
+        while self.ring_profile_choices.count():
+            item = self.ring_profile_choices.takeAt(0)
+            item.widget().deleteLater()
+        self.ring_profile_checks = {}
+        try:
+            profiles = profile_store.load_profiles()
+        except (OSError, ValueError):
+            profiles = []
+        for profile in profiles:
+            check = _SettingsCheckBox()
+            bind_text(check, lambda p=profile: tr(PROVIDERS[p["provider"]].name) + " · " + p["name"])
+            check.setChecked(profile["id"] in selected)
+            self.ring_profile_checks[profile["id"]] = check
+            self.ring_profile_choices.addWidget(check)
+            if getattr(self, "_autosave_ready", False):
+                check.clicked.connect(self._schedule_save)
 
     def _schedule_save(self, *_args) -> None:
         if not self._autosave_ready:
@@ -1740,6 +1833,10 @@ class SettingsWindow(QDialog):
         label.style().unpolish(label)
         label.style().polish(label)
         label.update()
+        if label is self.connection_feedback and message:
+            # 测试按钮常在视口底部；等结果文案完成布局后滚动显示，避免即时失败看起来没有反应。
+            # 以控件作为回调上下文，设置页关闭后不再访问已销毁的滚动区域。
+            QTimer.singleShot(0, label, lambda: self.scroll_area.ensureWidgetVisible(label, 0, 12))
         if label is self.save_feedback:
             self.save_state_changed.emit(message, tone)
 
@@ -2213,6 +2310,15 @@ class SettingsWindow(QDialog):
         )
         self.sync_accent_check.setChecked(bool(values.get("UI_SYNC_ACCENT_COLOR", True)))
         self.edge_hide_check.setChecked(bool(values.get("EDGE_HIDE_ENABLED", True)))
+        self.codex_reset_alert_check.setChecked(bool(values.get("CODEX_RESET_ALERT_ENABLED", False)))
+        self.ring_follow_theme_check.setChecked(bool(values.get("FLOATING_RING_FOLLOW_THEME", True)))
+        self.ring_color_edit.setText(str(values.get("FLOATING_RING_COLOR", "#2F72E8")))
+        self.ring_color_row.setEnabled(not self.ring_follow_theme_check.isChecked())
+        self.floating_style_combo.setCurrentIndex(max(
+            0, self.floating_style_combo.findData(values.get("FLOATING_STYLE", "ball"))))
+        self._sync_floating_style_controls()
+        for profile_id, check in self.ring_profile_checks.items():
+            check.setChecked(profile_id in values.get("BACKGROUND_PROFILE_IDS", []))
         self.quota_ring_counterclockwise_check.setChecked(
             bool(values.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
         )
@@ -2317,6 +2423,11 @@ class SettingsWindow(QDialog):
             ],
             "UI_THEME": str(self.theme_combo.currentData() or "dark"),
             "EDGE_HIDE_ENABLED": self.edge_hide_check.isChecked(),
+            "FLOATING_STYLE": str(self.floating_style_combo.currentData() or "ball"),
+            "BACKGROUND_PROFILE_IDS": [pid for pid, check in self.ring_profile_checks.items() if check.isChecked()],
+            "CODEX_RESET_ALERT_ENABLED": self.codex_reset_alert_check.isChecked(),
+            "FLOATING_RING_FOLLOW_THEME": self.ring_follow_theme_check.isChecked(),
+            "FLOATING_RING_COLOR": self.ring_color_edit.text().strip(),
             "QUOTA_WEEKLY_RING_COUNTERCLOCKWISE": (
                 self.quota_ring_counterclockwise_check.isChecked()
             ),

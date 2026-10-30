@@ -2391,7 +2391,8 @@ def test_vpet_installed_launch_ignores_developer_build_pointer(tmp_path):
         assert vpet_host.host_executable() == tmp_path / "pet/TokenMeter.Pet.exe"
 
 
-def test_vpet_usage_protocol_preserves_quota_and_never_serializes_credentials():
+def test_vpet_usage_protocol_preserves_quota_and_never_serializes_credentials(monkeypatch):
+    monkeypatch.setitem(config_manager._config, "QUOTA_ALERT_ENABLED", True)
     data = TokenData(status="ok", last_success_at=datetime.now())
     data.per_provider = [PerProviderData("codex", "Codex")]
     data.quota_windows = [QuotaWindow("weekly", "周额度", 95)]

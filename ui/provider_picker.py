@@ -147,7 +147,7 @@ class ProviderPicker(QComboBox):
         self.search = QLineEdit()
         self.search.setObjectName("providerPickerSearch")
         self.search.setClearButtonEnabled(True)
-        bind_text(self.search, "搜索平台名称，如 Claude、Kimi、智谱", method="setPlaceholderText")
+        bind_text(self.search, "搜索平台名称，如 Claude、Cursor", method="setPlaceholderText")
         bind_text(self.search, "搜索 AI 平台", method="setAccessibleName")
         self.search.textChanged.connect(self._populate)
         layout.addWidget(self.search)

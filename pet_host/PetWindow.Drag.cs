@@ -75,7 +75,7 @@ internal sealed partial class PetWindow
         petPressScreen = screenPoint;
         petPressLocal = localPoint;
         petWindowScreen = new Point(window.Left, window.Top);
-        if (character == "whale") StartWhaleGesture(screenPoint);
+        if (UsesThrowPhysics) StartWhaleGesture(screenPoint);
         var dpi = VisualTreeHelper.GetDpi(this);
         petDragThreshold = new Size(SystemParameters.MinimumHorizontalDragDistance * dpi.DpiScaleX,
             SystemParameters.MinimumVerticalDragDistance * dpi.DpiScaleY);
@@ -125,7 +125,7 @@ internal sealed partial class PetWindow
                             Math.Abs(delta.Y) >= petDragThreshold.Height)) BeginPetDrag();
         if (petDragging)
         {
-            if (character == "whale") UpdateWhaleGesture(screenPoint, delta);
+            if (UsesThrowPhysics) UpdateWhaleGesture(screenPoint, delta);
             else SetWindowPos(new WindowInteropHelper(this).Handle, IntPtr.Zero,
                 (int)Math.Round(petWindowScreen.X + delta.X), (int)Math.Round(petWindowScreen.Y + delta.Y),
                 0, 0, DragPositionFlags);
@@ -141,7 +141,7 @@ internal sealed partial class PetWindow
         // 先清状态再释放捕获，避免 LostMouseCapture 重入触发第二次点击或结束动画。
         if (Mouse.Captured == this) Mouse.Capture(null);
         pet!.isPress = false;
-        if (character == "whale")
+        if (UsesThrowPhysics && (dragged || character == "whale"))
         {
             if (closing || !visible) { StopWhaleMotion(); return; }
             if (dragged) { FinishWhaleGesture(cancel); SaveState(); }

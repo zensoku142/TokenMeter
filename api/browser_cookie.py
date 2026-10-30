@@ -170,8 +170,12 @@ class ChromeSession:
         *,
         allowed_domains: tuple[str, ...],
         cookie_names: tuple[str, ...] | None = None,
+        url: str | None = None,
     ) -> str:
-        result = self._connection.call("Network.getAllCookies")
+        if self._connection is None:
+            raise RuntimeError("CDP_CONN_CLOSED")
+        # 指定查询地址时由 Chromium 按域名和路径筛选，避免把登录页专用 Cookie 发给额度接口。
+        result = self._connection.call("Network.getCookies", {"urls": [url]}) if url else self._connection.call("Network.getAllCookies")
         cookies = result.get("cookies")
         if not isinstance(cookies, list):
             raise RuntimeError("CDP_UNEXPECTED_RESPONSE")
@@ -182,6 +186,15 @@ class ChromeSession:
                 cookie_names=cookie_names,
             )
         )
+
+    def user_agent(self) -> str:
+        # 部分平台将登录会话绑定到 User-Agent，直连请求必须沿用登录浏览器的真实标识。
+        if self._connection is None:
+            raise RuntimeError("CDP_CONN_CLOSED")
+        value = self._connection.call("Browser.getVersion").get("userAgent")
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError("CDP_UNEXPECTED_RESPONSE")
+        return value
 
     def capture_request_headers(
         self,

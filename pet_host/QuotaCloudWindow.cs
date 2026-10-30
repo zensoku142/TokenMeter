@@ -305,18 +305,17 @@ internal sealed class QuotaCloudWindow : Window
         NotifyActivity();
     }
 
-    internal void ShowNextTo(Rect pet, Rect work, bool? left, double scale, DpiScale dpi, Rect? visibleCharacter = null)
+    internal void ShowNextTo(Rect pet, Rect work, bool? left, DpiScale dpi, Rect? visibleCharacter = null)
     {
         if ((artwork.RenderTransform as ScaleTransform)?.ScaleX != (left == true ? -1 : 1))
         {
             artwork.RenderTransform = new ScaleTransform(left == true ? -1 : 1, 1, 88, 70);
             DrawWater();
         }
-        // 云朵只轻微跟随角色大小，放大桌宠不能把信息提示也变成一张大卡片。
-        scale = Math.Clamp(scale, 0.95, 1.0);
+        // 气泡与文字保持固定逻辑尺寸；只适配屏幕 DPI，角色缩放仅影响跟随位置。
         var bounds = whaleStyle && visibleCharacter is { } character
             ? BoundsForWhale(character, work, dpi)
-            : BoundsFor(pet, work, new Size(BaseWidth * scale * dpi.DpiScaleX, BaseHeight * scale * dpi.DpiScaleY), left);
+            : BoundsFor(pet, work, new Size(BaseWidth * dpi.DpiScaleX, BaseHeight * dpi.DpiScaleY), left);
         bool moved = lastBounds != bounds;
         lastBounds = bounds;
         var handle = new WindowInteropHelper(this).EnsureHandle();
@@ -423,8 +422,8 @@ internal sealed class QuotaCloudWindow : Window
 
     internal static Rect BoundsForWhale(Rect character, Rect work, DpiScale dpi)
     {
-        // 鲸鱼娘只占透明动画画布中央；气泡按可见像素宽度缩放并贴近头顶，而非按整个窗口定位。
-        double width = Math.Clamp(character.Width * 0.7, 54 * dpi.DpiScaleX, 108 * dpi.DpiScaleX);
+        // 透明画布中的可见轮廓只用于头顶定位，不能再让角色宽度缩放气泡与文字。
+        double width = BaseWidth * dpi.DpiScaleX;
         double height = width * 0.56;
         double gap = Math.Max(4 * dpi.DpiScaleY, character.Height * 0.03);
         double x = character.Left + (character.Width - width) / 2;

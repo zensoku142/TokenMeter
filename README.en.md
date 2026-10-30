@@ -23,31 +23,37 @@
 
 <p align="center">
   <strong>AI Token Usage, Cost & Balance Monitor for Windows</strong><br>
-  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
+  <sub>Codex · Claude · Cursor · DeepSeek · MiMo · NayutoAI</sub>
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter: Codex quotas, DeepSeek intraday usage and balance, floating widgets, VPet and Whale Girl (demo data)" width="960"></a>
+  <a href="site/assets/panel-light.png"><img src="site/assets/panel-light.png" alt="TokenMeter Codex panel (demo data)" width="960"></a><br>
+  <a href="site/assets/panel-token-speed.png"><img src="site/assets/panel-token-speed.png" alt="Token speed candlestick chart (Chinese UI, demo data)" width="960"></a><br>
+  <img src="site/assets/light-ring.png" alt="Light ring displaying three providers (demo data)" width="58">
+  <img src="site/assets/pet-bailong.png" alt="Xiaolong desktop pet" width="220">
 </p>
 
 Actual component screenshots in Chinese, using demo data. [Original images and sources](docs/images/readme/README.md).
 
-TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 15 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
+TokenMeter is a lightweight AI usage monitor for Windows 10/11 with 6 separate provider connections. It displays subscription quotas, reset times, API costs, balances and history according to each provider's capabilities.
 
-Current version：**v1.16.7** · Pet **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.17.0** · Pet **v0.3.0** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+
+
 
 ## Features
 
+- **CC Switch Codex accounts**: discover and refresh Codex OAuth accounts managed by CC Switch in Settings → Multi-account. CC Switch handles renewal and queries; cached quotas remain visible during a disconnect. The local bridge relies on CC Switch internals and may need updates when CC Switch changes. If CC Switch is already running without the bridge, exit it fully from the tray once before refreshing.
+- **Light ring and Codex reset news**: the optional light ring displays multiple providers and accounts, supports drag ordering and customizable ring color. Its hover details can show community reset announcements and optional notifications; these do not confirm an individual account reset.
 - **Codex intraday usage**: view cached input, uncached input and output tokens grouped by local session log timestamps, with model tooltips, retained dates and incremental refresh. Counts cover the selected local directory only; account attribution is unknown and they are not subscription quota or actual billing.
 - **Token speed**: view output speed by model and time in the Codex and NayutoAI panels. Speed is estimated from eligible requests' output tokens and duration, including the first-token wait; unavailable data remains unknown.
-- **Quotas and balances**: Codex, Claude Code, Cursor, GitHub Copilot, GLM / Z.ai, Kimi Coding, MiniMax Token Plan, Gemini CLI and ElevenLabs quotas; DeepSeek, MiMo and NayutoAI usage; OpenRouter key budgets and costs; Moonshot / Kimi API balances. Antigravity CLI reads an explicitly configured statusline snapshot. Missing fields remain unavailable; currencies and budget scopes stay separate.
+- **Quotas and balances**: Codex, Claude Code and Cursor quotas; DeepSeek, MiMo and NayutoAI usage and balances. Missing fields remain unavailable; credits, currencies and tokens stay separate.
 - **Overview and accounts**: automatically refresh configured providers while the overview is visible. Settings → Multi-account stores independent connections, credentials and monitoring state without replacing default connections or CLI logins. Two configured providers can also stay visible in a compact, always-on-top dashboard.
 - **Local analytics and Excel**: read local Codex (including archived sessions) and Claude logs, show cached results, then update in the background. Filter by date, project and model, compare daily usage, zoom charts and export `.xlsx` summaries, details and methodology. Local logs have unknown account attribution and do not represent subscription quotas or actual bills; accessible WSL directories can be selected without starting WSL.
 - **Provider management**: offline brand icons, search, favorites and removal of app-managed connections. Removing a provider preserves CLI logins and history.
 - **Refresh and alerts**: retry backoff, offline cache, optional low-quota and recovery alerts, forecasts and quiet hours. Forecasts require at least 10 minutes of valid samples from the same quota cycle; recovery alerts require low-quota alerts and a confirmed refresh. Alert state survives restarts.
-- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and an optional multi-character pet. Pet quota windows follow the app theme with pet v0.2.2 and app v1.16.2.
+- **Desktop display**: draggable floating widget, wheel resizing, edge hiding, tray, light/dark/system themes, colors and opacity, five languages, automatic updates and an optional multi-character pet. Pet quota windows follow the app theme with pet v0.3.0 and app v1.17.0.
 
-[Provider setup and limitations (Chinese)](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity statusline](docs/antigravity-statusline-2026-09-07.md)
 
 ## Installation and setup
 
@@ -64,7 +70,7 @@ Requires Windows 10 / 11 and at least one supported account.
 The main installer does not include the pet. Download it in Settings → Pet, then enable it after installation completes; no separate .NET installation is needed. The pet replaces the floating widget by default. Enable “Also show the floating ball” to display both; the setting saves automatically and takes effect immediately. Disabling or uninstalling it restores the widget without affecting accounts or the panel.
 
 - Touch interactions, dragging, resizing, autonomous activity, and an edge quota bubble. Double-click the bubble to open the usage panel.
-- Choose the default VPet character or [Whale Girl](https://github.com/PC2005-cloud/dsh-pet) before starting the pet. The settings page shows character thumbnails and compatible versions available for installation or update.
+- Choose VPet, [Whale Girl](https://github.com/PC2005-cloud/dsh-pet), or [Xiaolong](pet_host/bailong/README.md). Xiaolong includes all 35 animations in the same pet host, without AI chat or conversation history. The settings page shows character thumbnails and compatible versions available for installation or update.
 - The context menu controls bubble visibility and optional water / break reminders, which are off by default. The pet's menu is currently in Chinese.
 - The lite extension omits feeding, work, progression, Steam, and online features. It updates independently and exits with the main app.
 
@@ -120,7 +126,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.16.7`; optional pet extension: `0.2.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.17.0`; optional pet extension: `0.3.0`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

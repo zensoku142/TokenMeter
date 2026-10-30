@@ -16,8 +16,11 @@ internal sealed partial class PetWindow
     private int autonomousGeneration;
 
     private List<(GraphType Type, string Name, Mode Mode)> AutonomousChoices() => graph!.GraphsALL
-        .Where(x => x.GraphInfo.Type is GraphType.Idel or GraphType.StateONE &&
-            x.GraphInfo.Animat is AnimatType.A_Start or AnimatType.B_Loop or AnimatType.Single)
+        .Where(x => character == "bailong"
+            // 小龙娘只按 35 个原始动作轮询，避免待机别名重复入池而挤占其它动作的机会。
+            ? x.GraphInfo.Type == GraphType.Common && x.GraphInfo.Name.StartsWith("bailong.action.")
+            : x.GraphInfo.Type is GraphType.Idel or GraphType.StateONE &&
+              x.GraphInfo.Animat is AnimatType.A_Start or AnimatType.B_Loop or AnimatType.Single)
         .Select(x => (x.GraphInfo.Type, x.GraphInfo.Name, x.GraphInfo.ModeType)).Distinct().ToList();
 
     private (GraphType Type, string Name, Mode Mode)? NextAutonomousChoice()
@@ -71,6 +74,11 @@ internal sealed partial class PetWindow
             for (int i = 0; i < loops; i++) Add(choice.Type, AnimatType.B_Loop);
             Add(choice.Type, AnimatType.C_End);
         }
+        if (character == "bailong" && (choice.Name == "bailong.action.drag" ||
+            choice.Name.StartsWith("bailong.action.move")) &&
+            graph!.FindGraph("bailong.action.landing", AnimatType.Single, choice.Mode) is { } landing)
+            // 拖拽姿态和移动结束后接原素材的落地段，再交还常规待机。
+            sequence.Add(landing);
         return sequence;
     }
 
@@ -91,6 +99,7 @@ internal sealed partial class PetWindow
             CancelAutonomousSequence();
             return;
         }
+        StopBailongMovement();
         if (index >= autonomousSequence.Count)
         {
             autonomousSequence = null;
@@ -104,10 +113,13 @@ internal sealed partial class PetWindow
             if (!Dispatcher.HasShutdownStarted)
                 Dispatcher.BeginInvoke(() => PlayAutonomousFrame(generation, index + 1));
         });
+        if (character == "bailong") StartBailongMovement(autonomousFrame.GraphInfo.Name, autonomous: true);
     }
 
     private void CancelAutonomousSequence(bool returnToNormal = true)
     {
+        // 手动动作与自主动作共用同一画布；拖动、隐藏或提醒接管时，废弃小龙娘旧回调。
+        CancelBailongAction(returnToNormal);
         ++autonomousGeneration;
         if (autonomousSequence == null) return;
         autonomousSequence = null;
@@ -120,6 +132,12 @@ internal sealed partial class PetWindow
     {
         if (!CanMoveAutonomously || autonomousSequence != null || warningSpeechPending ||
             pet!.MsgBar.Visibility == Visibility.Visible || !pet.IsIdel) return;
+        if (character == "bailong")
+        {
+            if (NextAutonomousChoice() is { } action)
+                StartAutonomousSequence(BuildAutonomousSequence(action));
+            return;
+        }
         int choice = selectedChoice ?? Random.Shared.Next(5);
         if (choice == 4) return;
         if (choice == 0)

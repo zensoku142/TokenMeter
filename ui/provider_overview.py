@@ -157,6 +157,7 @@ class ProviderOverview(QWidget):
                 details.clicked.connect(lambda _checked=False, pid=entry_id: self.provider_selected.emit(pid))
                 heading.addWidget(details)
                 connection = bind_text(QPushButton(), "账户连接")
+                connection.setObjectName("overviewConnection")
                 connection.clicked.connect(lambda _checked=False, pid=entry_id: self.connection_requested.emit(pid))
                 heading.addWidget(connection)
                 card_layout.addLayout(heading)

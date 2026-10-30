@@ -1,11 +1,114 @@
 """Provider messages: English, Traditional Chinese, Japanese, Korean."""
 
 PROVIDER_MESSAGES = {
+    "浏览器标识 (User-Agent)": ("Browser identity (User-Agent)", "瀏覽器識別 (User-Agent)", "ブラウザー識別情報 (User-Agent)", "브라우저 식별 정보 (User-Agent)"),
+    "随 Cookie 自动采集；必须与登录 WorkBuddy 的浏览器一致": (
+        "Collected with the Cookie; must match the browser used to sign in to WorkBuddy",
+        "隨 Cookie 自動採集；必須與登入 WorkBuddy 的瀏覽器一致",
+        "Cookie と一緒に取得します。WorkBuddy にログインしたブラウザーと一致する必要があります",
+        "Cookie와 함께 수집합니다. WorkBuddy 로그인에 사용한 브라우저와 일치해야 합니다",
+    ),
+    "请重新采集 WorkBuddy 登录凭据，补全浏览器标识": (
+        "Collect WorkBuddy sign-in credentials again to include the browser identity",
+        "請重新採集 WorkBuddy 登入憑據，補全瀏覽器識別",
+        "ブラウザー識別情報を含めるため WorkBuddy のログイン情報を再取得してください",
+        "브라우저 식별 정보를 포함하도록 WorkBuddy 로그인 자격 증명을 다시 수집하세요",
+    ),
+    "WorkBuddy 登录未完成或已失效，请在浏览器登录成功后再点击“完成采集”": (
+        "WorkBuddy sign-in is incomplete or expired. Sign in successfully in the browser, then click Finish collection",
+        "WorkBuddy 登入未完成或已失效，請在瀏覽器登入成功後再點擊「完成採集」",
+        "WorkBuddy のログインが未完了または期限切れです。ブラウザーでログインしてから取得を完了してください",
+        "WorkBuddy 로그인이 완료되지 않았거나 만료되었습니다. 브라우저에서 로그인한 후 수집 완료를 클릭하세요",
+    ),
+    "读取 WorkBuddy 国内个人账户的剩余积分和积分分组额度；积分不折算为金额或 Token。": (
+        "Reads remaining credits and credit-group quotas for WorkBuddy China personal accounts. Credits are not converted to money or tokens.",
+        "讀取 WorkBuddy 中國個人帳戶的剩餘積分和積分分組額度；積分不折算為金額或 Token。",
+        "WorkBuddy 中国版の個人アカウントの残りクレジットとグループ別利用枠を取得します。金額やトークンには換算しません。",
+        "WorkBuddy 중국 개인 계정의 남은 크레딧과 그룹별 한도를 조회합니다. 크레딧을 금액이나 토큰으로 환산하지 않습니다.",
+    ),
+    "使用下方隔离浏览器登录 WorkBuddy 后获取，也可手动粘贴官网 Cookie": (
+        "Sign in to WorkBuddy using the isolated browser below, or paste cookies from the official website",
+        "使用下方隔離瀏覽器登入 WorkBuddy 後取得，也可手動貼上官網 Cookie",
+        "下の専用ブラウザーで WorkBuddy にログインするか、公式サイトの Cookie を貼り付けてください",
+        "아래 격리 브라우저로 WorkBuddy에 로그인하거나 공식 사이트의 Cookie를 붙여 넣으세요",
+    ),
+    "WorkBuddy 积分": ("WorkBuddy credits", "WorkBuddy 積分", "WorkBuddy クレジット", "WorkBuddy 크레딧"),
+    "剩余积分": ("Remaining credits", "剩餘積分", "残りクレジット", "남은 크레딧"),
+    "套餐基础积分": ("Plan base credits", "套餐基礎積分", "プラン基本クレジット", "요금제 기본 크레딧"),
+    "套餐赠送积分": ("Plan bonus credits", "套餐贈送積分", "プラン特典クレジット", "요금제 보너스 크레딧"),
+    "购买积分": ("Purchased credits", "購買積分", "購入クレジット", "구매 크레딧"),
+    "平台奖励积分": ("Reward credits", "平台獎勵積分", "報酬クレジット", "보상 크레딧"),
+    "积分额度": ("Credit quota", "積分額度", "クレジット利用枠", "크레딧 한도"),
+    "尚未连接 WorkBuddy，请在账户连接中登录": (
+        "WorkBuddy is not connected. Sign in under Account connections",
+        "尚未連線 WorkBuddy，請在帳戶連線中登入",
+        "WorkBuddy が未接続です。アカウント接続でログインしてください",
+        "WorkBuddy가 연결되지 않았습니다. 계정 연결에서 로그인하세요",
+    ),
+    "WorkBuddy 登录已失效，请重新连接": (
+        "WorkBuddy sign-in has expired. Connect again", "WorkBuddy 登入已失效，請重新連線",
+        "WorkBuddy のログインが期限切れです。再接続してください", "WorkBuddy 로그인이 만료되었습니다. 다시 연결하세요",
+    ),
+    "WorkBuddy 登录或积分读取失败，请重新登录后完成采集": (
+        "WorkBuddy sign-in or credit lookup failed. Sign in again and finish collection",
+        "WorkBuddy 登入或積分讀取失敗，請重新登入後完成採集",
+        "WorkBuddy のログインまたはクレジット取得に失敗しました。再ログインして取得を完了してください",
+        "WorkBuddy 로그인 또는 크레딧 조회에 실패했습니다. 다시 로그인한 후 수집을 완료하세요",
+    ),
+    "WorkBuddy 积分接口返回错误，请检查登录状态": (
+        "The WorkBuddy credit API returned an error. Check your sign-in status",
+        "WorkBuddy 積分介面回傳錯誤，請檢查登入狀態",
+        "WorkBuddy クレジット API がエラーを返しました。ログイン状態を確認してください",
+        "WorkBuddy 크레딧 API에서 오류를 반환했습니다. 로그인 상태를 확인하세요",
+    ),
+    "请检查 Cookie 格式": (
+        "Check the Cookie format", "請檢查 Cookie 格式", "Cookie の形式を確認してください", "Cookie 형식을 확인하세요",
+    ),
+    "未检测到 Chrome 或 Edge，请先安装浏览器，或手动粘贴 Cookie": (
+        "Chrome or Edge was not found. Install a browser or paste a Cookie manually",
+        "未偵測到 Chrome 或 Edge，請先安裝瀏覽器，或手動貼上 Cookie",
+        "Chrome または Edge が見つかりません。インストールするか Cookie を貼り付けてください",
+        "Chrome 또는 Edge를 찾을 수 없습니다. 브라우저를 설치하거나 Cookie를 붙여 넣으세요",
+    ),
     "选择要监控的平台": ("Select providers to monitor", "選擇要監控的平台", "監視するプロバイダーを選択", "모니터링할 공급자를 선택하세요"),
     "双平台看板": ("Two-provider monitor", "雙平台看板", "2プロバイダーモニター", "두 공급자 모니터"),
     "选择平台": ("Select provider", "選擇平台", "プロバイダーを選択", "공급자 선택"),
     "只监控所选平台的默认连接": ("Monitors the selected providers' default connections", "只監控所選平台的預設連線", "選択したプロバイダーの既定の接続を監視します", "선택한 공급자의 기본 연결을 모니터링합니다"),
     "多账户": ("Profiles", "多帳戶", "複数アカウント", "다중 계정"),
+    "请从托盘退出 CC Switch 后刷新，程序将自动重新连接": (
+        "Quit CC Switch from the tray, then refresh to reconnect automatically",
+        "請從托盤退出 CC Switch 後重新整理，程式將自動重新連線",
+        "トレイから CC Switch を終了し、更新すると自動的に再接続します",
+        "트레이에서 CC Switch를 종료한 후 새로 고침하면 자동으로 다시 연결됩니다",
+    ),
+    "CC Switch 额度查询超时，请稍后重试": (
+        "CC Switch quota query timed out. Try again later", "CC Switch 額度查詢逾時，請稍後重試",
+        "CC Switch の利用枠取得がタイムアウトしました。後で再試行してください", "CC Switch 한도 조회 시간이 초과되었습니다. 나중에 다시 시도하세요",
+    ),
+    "CC Switch 账号未配置，请检查 CC Switch 中的账号设置": (
+        "CC Switch account is not configured. Check the account settings in CC Switch",
+        "CC Switch 帳號未設定，請檢查 CC Switch 中的帳號設定",
+        "CC Switch のアカウントが未設定です。CC Switch のアカウント設定を確認してください",
+        "CC Switch 계정이 설정되지 않았습니다. CC Switch에서 계정 설정을 확인하세요",
+    ),
+    "CC Switch 额度查询失败，请在 CC Switch 中检查登录和网络": (
+        "CC Switch quota query failed. Check sign-in and network access in CC Switch",
+        "CC Switch 額度查詢失敗，請在 CC Switch 中檢查登入和網路",
+        "CC Switch の利用枠取得に失敗しました。CC Switch のログインとネットワークを確認してください",
+        "CC Switch 한도 조회에 실패했습니다. CC Switch에서 로그인과 네트워크를 확인하세요",
+    ),
+    "请在 CC Switch 中重新登录该账号": (
+        "Sign in to this account again in CC Switch", "請在 CC Switch 中重新登入該帳號",
+        "CC Switch でこのアカウントに再ログインしてください", "CC Switch에서 이 계정에 다시 로그인하세요",
+    ),
+    "CC Switch 未返回可用额度，请检查账号状态": (
+        "CC Switch returned no available quota. Check the account status", "CC Switch 未傳回可用額度，請檢查帳號狀態",
+        "CC Switch から利用枠が取得できませんでした。アカウントの状態を確認してください", "CC Switch가 사용 가능한 한도를 반환하지 않았습니다. 계정 상태를 확인하세요",
+    ),
+    "CC Switch 额度数据结构已变化": (
+        "The CC Switch quota data format has changed", "CC Switch 額度資料結構已變更",
+        "CC Switch の利用枠データ形式が変更されています", "CC Switch 한도 데이터 형식이 변경되었습니다",
+    ),
     "管理多账户": ("Manage profiles", "管理多帳戶", "アカウント管理", "계정 관리"),
     "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。": ("Manage multiple connections per provider without changing the default connection or CLI logins.", "獨立管理同一平台的多個連線，不修改預設連線或 CLI 登入。", "既定の接続や CLI ログインを変更せず、同じプロバイダーの複数の接続を管理します。", "기본 연결이나 CLI 로그인을 변경하지 않고 공급자별 여러 연결을 관리합니다."),
     "账户档案": ("Account profiles", "帳戶檔案", "アカウントプロファイル", "계정 프로필"),
@@ -214,9 +317,9 @@ PROVIDER_MESSAGES = {
         "즐겨찾기를 저장하지 못했습니다. 데이터 디렉터리를 확인하세요",
     ),
     "切换 AI 平台": ("Switch AI provider", "切換 AI 平台", "AI プロバイダーを切り替え", "AI 공급업체 전환"),
-    "搜索平台名称，如 Claude、Kimi、智谱": (
-        "Search providers, e.g. Claude, Kimi, Z.ai", "搜尋平台名稱，如 Claude、Kimi、智譜",
-        "プロバイダーを検索（Claude、Kimi、Z.ai など）", "공급업체 검색: Claude, Kimi, Z.ai 등",
+    "搜索平台名称，如 Claude、Cursor": (
+        "Search providers, e.g. Claude, Cursor", "搜尋平台名稱，如 Claude、Cursor",
+        "プロバイダーを検索（Claude、Cursor など）", "공급업체 검색: Claude, Cursor 등",
     ),
     "搜索 AI 平台": ("Search AI providers", "搜尋 AI 平台", "AI プロバイダーを検索", "AI 공급업체 검색"),
     "全部平台": ("All providers", "全部平台", "すべて", "모든 공급업체"),

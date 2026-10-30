@@ -27,7 +27,7 @@ REQUIRED_FILES = (
     PET_EXECUTABLE, "TokenMeter.Pet.dll", "TokenMeter.Pet.deps.json",
     "TokenMeter.Pet.runtimeconfig.json", "VPet-Simulator.Core.dll",
 )
-CHARACTER_PATHS = {"vpet": "vup", "whale": "whale"}
+CHARACTER_PATHS = {"vpet": "vup", "whale": "whale", "bailong": "bailong"}
 
 
 def extension_directory() -> Path:
@@ -38,7 +38,9 @@ def selected_character() -> str:
     layout = config_manager.CONFIG_DIR / "vpet" / "layout.json"
     try:
         value = json.loads(layout.read_text(encoding="utf-8"))
-        selected = "whale" if isinstance(value, dict) and value.get("character") == "whale" else "vpet"
+        selected = value.get("character", "vpet") if isinstance(value, dict) else "vpet"
+        if selected not in ("vpet", "whale", "bailong"):
+            selected = "vpet"
     except (OSError, ValueError):
         selected = "vpet"
     available = installed_characters()
@@ -54,7 +56,7 @@ def installed_characters() -> set[str]:
 
 
 def save_selected_character(character: str) -> None:
-    if character not in {"vpet", "whale"}:
+    if character not in {"vpet", "whale", "bailong"}:
         raise ValueError("未知桌宠角色")
     available = installed_characters()
     if available and character not in available:
@@ -90,7 +92,7 @@ def validate_payload(directory: Path) -> None:
         raise ValueError("桌宠角色清单无效")
     characters = manifest.get("installed_characters", ["vup"])
     if (not isinstance(characters, list) or not characters
-            or any(not isinstance(role, str) or role not in {"vup", "whale"} for role in characters)
+            or any(not isinstance(role, str) or role not in CHARACTER_PATHS.values() for role in characters)
             or len(set(characters)) != len(characters)):
         raise ValueError("桌宠角色清单无效")
     for role in characters:
@@ -157,6 +159,26 @@ def installed_executable() -> Path | None:
 def _check_cancel(cancel_requested: Callable[[], bool]) -> None:
     if cancel_requested():
         raise DownloadCancelled("已取消下载")
+
+
+def resource_identity(resources: Path, revision: str, role: str | None = None) -> dict:
+    files = []
+    for path in resources.rglob("*"):
+        if path.is_symlink() or path.is_junction():
+            raise ValueError("桌宠资源包含链接")
+        relative = path.relative_to(resources)
+        if path.is_file() and (role is None or relative.parts[:2] == ("pet", role)
+                               or relative.as_posix() == f"pet/{role}.lps"):
+            files.append(path)
+    digest = hashlib.sha256()
+    for path in sorted(files, key=lambda item: item.relative_to(resources).as_posix()):
+        digest.update(path.relative_to(resources).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return {"revision": revision, "files": len(files),
+            "bytes": sum(path.stat().st_size for path in files), "sha256": digest.hexdigest()}
 
 
 def reusable_resources(directory: Path, manifest: dict) -> bool:
@@ -226,6 +248,7 @@ def install_pack(
     *, replace_existing: bool = False, expected_manifest: dict | None = None,
     reuse_resources_from: Path | None = None,
     merge_resources_from: Path | None = None, merged_manifest: dict | None = None,
+    keep_characters: set[str] | None = None,
 ) -> None:
     destination = _checked_directory(destination)
     _recover_interrupted_update(destination)
@@ -281,22 +304,29 @@ def install_pack(
         if merge_resources_from is not None:
             old_manifest = json.loads((merge_resources_from / PACK_MANIFEST).read_text(encoding="utf-8"))
             roles = old_manifest.get("installed_characters")
-            if (not isinstance(roles, list) or len(roles) != 1 or merged_manifest is None
+            if (not isinstance(roles, list) or not roles or merged_manifest is None
                     or old_manifest.get("version") != manifest["version"]
                     or not reusable_resources(merge_resources_from, old_manifest)):
                 raise ValueError("已有角色资源与新角色包不兼容")
-            role = roles[0]
-            if role not in {"vup", "whale"} or role in manifest.get("installed_characters", []):
+            if any(role not in CHARACTER_PATHS.values() or role in manifest.get("installed_characters", [])
+                   for role in roles):
                 raise ValueError("已有角色资源与新角色包不兼容")
-            # 只从已校验的旧包复制另一角色；完整资源摘要在提交前再次核对。
+            # 三角色可逐个安装；只复制已校验的已有角色，避免添加第三只时丢掉前两只。
             def copy_other_resource(source: str, target: str) -> str:
                 _check_cancel(cancel_requested)
                 return shutil.copy2(source, target)
-            shutil.copytree(merge_resources_from / "resources/pet" / role,
-                            stage / "resources/pet" / role, copy_function=copy_other_resource)
-            shutil.copy2(merge_resources_from / f"resources/pet/{role}.lps",
-                         stage / f"resources/pet/{role}.lps")
-            manifest = dict(merged_manifest, installed_characters=["vup", "whale"])
+            for role in roles:
+                shutil.copytree(merge_resources_from / "resources/pet" / role,
+                                stage / "resources/pet" / role, copy_function=copy_other_resource)
+                shutil.copy2(merge_resources_from / f"resources/pet/{role}.lps",
+                             stage / f"resources/pet/{role}.lps")
+            combined = sorted(set(roles) | set(manifest.get("installed_characters", [])))
+            revision = merged_manifest["resources"]["revision"]
+            for role in combined:
+                if resource_identity(stage / "resources", revision, role) != merged_manifest["character_resources"][role]:
+                    raise ValueError("合并后的桌宠角色资源校验失败")
+            manifest = dict(merged_manifest, installed_characters=combined,
+                            resources=resource_identity(stage / "resources", revision))
             (stage / PACK_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
             identity = manifest["resources"]
             (stage / RESOURCES_MANIFEST).write_text(json.dumps({
@@ -305,6 +335,19 @@ def install_pack(
             }), encoding="utf-8")
             if not reusable_resources(stage, manifest):
                 raise ValueError("合并后的桌宠资源校验失败")
+        if keep_characters is not None:
+            # 更新完整包时仅保留原来选择的角色，第三个新模型不能被更新流程自动安装。
+            for role in CHARACTER_PATHS.values():
+                if role not in keep_characters and (stage / f"resources/pet/{role}.lps").exists():
+                    shutil.rmtree(_checked_directory(stage / "resources/pet" / role))
+                    (stage / f"resources/pet/{role}.lps").unlink()
+            identity = resource_identity(stage / "resources", manifest["resources"]["revision"])
+            manifest = dict(manifest, installed_characters=sorted(keep_characters), resources=identity)
+            (stage / PACK_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            (stage / RESOURCES_MANIFEST).write_text(json.dumps({
+                "revision": identity["revision"], "resource_files": identity["files"],
+                "resource_bytes": identity["bytes"],
+            }), encoding="utf-8")
         validate_payload(stage)
         _replace_payload(stage, destination, manifest, cancel_requested)
 
@@ -330,8 +373,10 @@ def download_and_install(
                 **({"channel": channel} if channel is not None else {}),
             )
             role = CHARACTER_PATHS[character] if character else None
+            if role == "bailong" and role not in release.manifest.get("character_resources", {}):
+                raise ValueError("所选桌宠版本尚不支持小龙娘，请先更新桌宠扩展")
             installed = installed_manifest()
-            installed_roles = set(installed.get("installed_characters", [])) if installed else set()
+            installed_roles = {CHARACTER_PATHS[item] for item in installed_characters()} if installed else set()
             if add_character and (not installed or not role or role in installed_roles
                                   or installed.get("version") != release.version):
                 raise ValueError("请先安装或更新桌宠扩展，再添加另一角色")
@@ -354,7 +399,9 @@ def download_and_install(
                          expected_manifest=expected,
                          reuse_resources_from=destination if reuse_resources else None,
                          merge_resources_from=destination if add_character and use_role_pack else None,
-                         merged_manifest=release.manifest if add_character and use_role_pack else None)
+                         merged_manifest=release.manifest if add_character and use_role_pack else None,
+                         keep_characters=installed_roles if replace_existing and not use_role_pack
+                         and not reuse_resources and installed_roles else None)
         finally:
             client._session.close()
 
@@ -374,7 +421,7 @@ def remove_character(character: str) -> None:
         return
     destination = _checked_directory(extension_directory())
     role = CHARACTER_PATHS[character]
-    remaining = CHARACTER_PATHS[next(iter(available - {character}))]
+    remaining = sorted(available - {character})
     with tempfile.TemporaryDirectory(prefix=".vpet-remove-", dir=destination.parent) as temporary:
         stage = Path(temporary) / "payload"
         shutil.copytree(destination, stage)
@@ -382,18 +429,8 @@ def remove_character(character: str) -> None:
         (stage / f"resources/pet/{role}.lps").unlink()
         resources = stage / "resources"
         revision = (installed.get("resources") or {}).get("revision") or "0" * 40
-        digest = hashlib.sha256()
-        files = sorted((path for path in resources.rglob("*") if path.is_file()),
-                       key=lambda path: path.relative_to(resources).as_posix())
-        for path in files:
-            digest.update(path.relative_to(resources).as_posix().encode("utf-8"))
-            digest.update(b"\0")
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-        identity = {"revision": revision, "files": len(files),
-                    "bytes": sum(path.stat().st_size for path in files), "sha256": digest.hexdigest()}
-        manifest = dict(installed, installed_characters=[remaining], resources=identity)
+        identity = resource_identity(resources, revision)
+        manifest = dict(installed, installed_characters=sorted(CHARACTER_PATHS[item] for item in remaining), resources=identity)
         (stage / PACK_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         (stage / RESOURCES_MANIFEST).write_text(json.dumps({
             "revision": revision, "resource_files": identity["files"],
@@ -404,7 +441,7 @@ def remove_character(character: str) -> None:
         validate_payload(stage)
         _replace_payload(stage, destination, manifest, lambda: False)
     try:
-        save_selected_character("vpet" if remaining == "vup" else "whale")
+        save_selected_character(selected_character() if selected_character() in remaining else remaining[0])
     except (OSError, ValueError) as exc:
         config_manager.logger().warning("Pet character removed; preference cleanup deferred: %s", exc)
     try:

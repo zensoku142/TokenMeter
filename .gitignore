@@ -1,6 +1,8 @@
 .venv/
 pet_host/bin/
 pet_host/obj/
+tests/whale_physics/bin/
+tests/whale_physics/obj/
 third_party/VPet/**/bin/
 third_party/VPet/**/obj/
 .venv-build/
@@ -46,8 +48,12 @@ docs/*
 !docs/codexbar-provider-coverage-2026-09-05.md
 !docs/gemini-quota-2026-09-05.md
 !docs/antigravity-statusline-2026-09-07.md
+!docs/workbuddy.md
 !docs/images/
 docs/images/*
 !docs/images/readme-hero-v1.12.0.webp
 !docs/images/readme-hero.webp
 !docs/images/readme/
+
+# 小龙娘原动画由固定上游版本提供，不纳入 Git 历史。
+pet_host/bailong/webm/

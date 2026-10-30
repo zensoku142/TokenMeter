@@ -1,0 +1,8 @@
+pet#bailong:|intor#小龙娘:|path#bailong:|petname#小龙娘:|
+touchhead:|px#100:|py#30:|sw#300:|sh#200:|
+touchbody:|px#90:|py#230:|sw#320:|sh#250:|
+touchraised:|happy_px#0:|happy_py#0:|happy_sw#500:|happy_sh#500:|nomal_px#0:|nomal_py#0:|nomal_sw#500:|nomal_sh#500:|poorcondition_px#0:|poorcondition_py#0:|poorcondition_sw#500:|poorcondition_sh#500:|ill_px#0:|ill_py#0:|ill_sw#500:|ill_sh#500:|
+raisepoint:|happy_x#250:|happy_y#100:|nomal_x#250:|nomal_y#100:|poorcondition_x#250:|poorcondition_y#100:|ill_x#250:|ill_y#100:|
+move:|graph#bailong.move.left:|TriggerLeft#200:|TriggerType#16:|CheckLeft#100:|CheckType#16:|SpeedX#-14:|Distance#7:|ModeType#14:|
+move:|graph#bailong.move.right:|TriggerRight#200:|TriggerType#32:|CheckRight#100:|CheckType#32:|SpeedX#14:|Distance#7:|ModeType#14:|
+side:|left#70:|right#430:|

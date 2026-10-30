@@ -89,6 +89,65 @@ def copy_animation_frame(source: str, destination: str) -> str:
     return destination
 
 
+def stage_bailong_resources(pet: Path, converter: str) -> None:
+    source = ROOT / "pet_host/bailong"
+    target = pet / "bailong"
+    target.mkdir()
+    shutil.copy2(ROOT / "pet_host/bailong.lps", pet / "bailong.lps")
+    for name in ("actions.json", "ASSETS.md", "UPSTREAM-README.md", "portrait.png"):
+        shutil.copy2(source / name, target / name)
+    catalog = json.loads((source / "actions.json").read_text(encoding="utf-8"))
+    items = [catalog["idle"], *catalog["additionalIdleAnimations"], *catalog["variants"],
+             catalog["dragAnimation"], catalog["landingAnimation"], catalog["quotaAnimation"],
+             *filter(None, catalog["workAnimations"]), *catalog["movementAnimations"]]
+    animations = target / "animations"
+    animations.mkdir()
+    for item in items:
+        identifier = item["id"]
+        file = source / "webm" / Path(item["playbackFile"]).name
+        scale = item.get("renderScale", 1)
+        offset = item.get("renderOffset", [0, 0])
+        pixels = round(250 * scale)
+        x = (250 - pixels) / 2 + 250 * offset[0]
+        y = 250 - pixels + 250 * offset[1]
+        # 使用上游清单的底部居中、缩放和位移；固定画布取景，避免动作切换时人物跳动。
+        filters = (f"fps=15,scale={pixels}:{pixels}:flags=lanczos,format=rgba,"
+                   f"pad=750:750:250:250:color=black@0,crop=250:250:{round(250-x)}:{round(250-y)}")
+        run(converter, "-y", "-loglevel", "error", "-c:v", "libvpx-vp9", "-i", str(file),
+            "-vf", filters, "-plays", "0", "-f", "apng", str(animations / (identifier + ".png")))
+    with Image.open(source / "portrait.png") as image:
+        image.resize((250, 250), Image.Resampling.LANCZOS).save(target / "idle-first.png")
+    lines = []
+
+    def slot(name: str, file: str, graph: str, part: str = "Single") -> None:
+        # LinePutScript 用正斜杠表示转义（如 /id），资源子目录必须使用 Windows 分隔符。
+        file = file.replace("/", "\\")
+        lines.append(f"apnganimation#bailong.{name}:|path#{file}:|graph#{graph}:|animat#{part}:|")
+
+    for item in items:
+        slot("action." + item["id"], "animations/" + item["id"] + ".png", "Common")
+    slot("idle", "animations/idle.png", "Default")
+    slot("startup", "animations/01.png", "StartUP")
+    for item in catalog["additionalIdleAnimations"]:
+        slot("idle." + item["id"], "animations/" + item["id"] + ".png", "Idel")
+    for name, graph, loop, end in (
+        ("head", "Touch_Head", "08", None), ("body", "Touch_Body", "26", None),
+        ("drag", "Raised_Static", "drag", "landing"),
+        ("say", "Say", "idle", None),
+        ("move.left", "Move", "move01left", "landing"),
+        ("move.right", "Move", "move01right", "landing"),
+        ("side.left", "SideHide_Left_Main", "idle", None),
+        ("side.right", "SideHide_Right_Main", "idle", None),
+        ("rise.left", "SideHide_Left_Rise", "idle", None),
+        ("rise.right", "SideHide_Right_Rise", "idle", None),
+    ):
+        # 复用原宿主的起始/循环/结束协议，静止过渡帧仅用于进入动作和恢复站姿，不新增对话系统。
+        slot(name, "idle-first.png", graph, "A_Start")
+        slot(name, f"animations/{loop}.png", graph, "B_Loop")
+        slot(name, f"animations/{end}.png" if end else "idle-first.png", graph, "C_End")
+    (target / "info.lps").write_text("\n".join(lines), encoding="utf-8")
+
+
 def stage_resources() -> dict:
     target = OUTPUT / "resources"
     if target.exists():
@@ -123,6 +182,7 @@ def stage_resources() -> dict:
         # 动作播放使用已转换的 APNG；仅保留一个 WebM 供自定义动画路径的冒烟检查。
         if source.name != CUSTOM_WEBM_SAMPLE:
             source.unlink()
+    stage_bailong_resources(pet, converter)
     shutil.copy2(VENDORED_SOURCE / "LICENSE", OUTPUT / "VPet-LICENSE.txt")
     shutil.copy2(VENDORED_SOURCE / "README.md", OUTPUT / "VPet-README.md")
     shutil.copy2(ROOT / "pet_host/THIRD_PARTY_NOTICES.md", OUTPUT / "THIRD_PARTY_NOTICES.md")

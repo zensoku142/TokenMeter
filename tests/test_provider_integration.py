@@ -9,6 +9,7 @@ import requests
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QPushButton
 
 from api.providers import PROVIDERS, get_provider
+from api.providers.api_balance import MoonshotProvider, OpenRouterProvider
 from api.providers.base import Provider, ProviderSummary, _decimal, safe_int
 from config import runtime as config_manager
 from config.defaults import DEFAULT_CONFIG, FIELD_META, PROVIDER_IDS, SECRET_KEYS
@@ -90,7 +91,7 @@ def test_shared_numbers_reject_nonfinite_values(value):
 
 
 def test_openrouter_refresh_keeps_key_scope_and_unknown_token_totals(isolated):
-    provider = get_provider("openrouter", {"OPENROUTER_API_KEY": "synthetic-key"})
+    provider = OpenRouterProvider({"OPENROUTER_API_KEY": "synthetic-key"})
     provider._session.get = Mock(return_value=Mock(status_code=200))
     provider._session.get.return_value.json.return_value = {"data": {
         "limit_remaining": 6.25, "usage_daily": 0.1, "usage_monthly": 1.2, "usage": 3.75,
@@ -104,14 +105,6 @@ def test_openrouter_refresh_keeps_key_scope_and_unknown_token_totals(isolated):
         assert data.today_tokens is None
         assert data.total_cost_cny == 3.75
         assert provider._session.get.call_count == 1
-        panel = MainPanel()
-        panel.update_data(data)
-        assert panel.balance_card.title_label.text() == "密钥剩余额度"
-        assert panel.today_card.title_label.text() == "今日使用金额 (UTC)"
-        assert panel.month_card.title_label.text() == "本月累计 (UTC)"
-        assert panel.month_card.detail.text() == "--"
-        assert panel.trend.empty_label.text() == "平台未提供历史明细"
-        assert not panel.trend.empty_label.isHidden()
         provider._session.get.return_value.json.return_value = {"data": {"limit_remaining": None}}
         provider.reset_refresh_cache()
         TokenData._provider_snapshots.clear()
@@ -128,7 +121,7 @@ def test_new_provider_settings_keep_secrets_masked_and_explain_support(isolated,
     window = SettingsWindow()
     window._autosave_ready = False
     window._save_timer.stop()
-    for provider_id in ("openrouter", "moonshot", "copilot", "claude", "zai"):
+    for provider_id in ("claude",):
         index = window.provider_combo.findData(provider_id)
         assert index >= 0
         window.provider_combo.setCurrentIndex(index)
@@ -149,7 +142,7 @@ def test_new_provider_settings_keep_secrets_masked_and_explain_support(isolated,
 
 @pytest.mark.parametrize("value", ["1e1000", "-1e1000"])
 def test_out_of_range_balance_cannot_enter_float_cache(value):
-    provider = get_provider("openrouter", {"OPENROUTER_API_KEY": "synthetic-key"})
+    provider = OpenRouterProvider({"OPENROUTER_API_KEY": "synthetic-key"})
     provider._session.get = Mock(return_value=Mock(status_code=200))
     provider._session.get.return_value.json.return_value = {"data": {"limit_remaining": value}}
     try:
@@ -161,7 +154,7 @@ def test_out_of_range_balance_cannot_enter_float_cache(value):
 
 
 def test_moonshot_international_cached_amount_keeps_currency_offline(isolated):
-    provider = get_provider("moonshot", {
+    provider = MoonshotProvider({
         "MOONSHOT_API_KEY": "synthetic-key", "MOONSHOT_BASE": "https://api.moonshot.ai/v1",
     })
     provider._session.get = Mock(return_value=Mock(status_code=200))

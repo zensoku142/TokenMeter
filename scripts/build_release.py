@@ -148,7 +148,7 @@ def _pet_manifest(source: Path) -> dict:
             or report.get("resource_files") != expected["files"]
             or report.get("resource_bytes") != expected["bytes"]):
         raise ValueError("Pet resources manifest does not match the packaged resources")
-    roles = {role: identity for role in ("vup", "whale")
+    roles = {role: identity for role in ("vup", "whale", "bailong")
              if (identity := _resource_identity(source / "resources", revision, role))["files"] > 0}
     return {**manifest, "resources": expected, "character_resources": roles}
 

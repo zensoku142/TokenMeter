@@ -46,7 +46,6 @@ namespace VPet_Simulator.Core
         }
 
         private const int DefaultFrameDuration = 100;
-        private const int FrameCacheAheadCount = 2;
         private static readonly byte[] PngSignature = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
         private static readonly uint[] CrcTable = BuildCrcTable();
 
@@ -55,7 +54,7 @@ namespace VPet_Simulator.Core
         private Int32Rect[]? FrameRects;
         private readonly object SpriteSheetLock = new object();
         private readonly object FrameCacheLock = new object();
-        private readonly Dictionary<int, BitmapSource> FrameCache = new Dictionary<int, BitmapSource>();
+        private byte[]? FramePixels;
         private readonly List<int> FrameDurations = new List<int>();
         private string SpriteSheetPath = string.Empty;
         private int FrameWidth;
@@ -107,6 +106,8 @@ namespace VPet_Simulator.Core
                 await Task.Delay(100);
             }
 
+            // APNG 解析也会持有全部压缩帧；与 PNG 共用限流，避免首次加载几十段动作时内存暴涨。
+            await PNGAnimation.BuildSlots.WaitAsync();
             try
             {
                 if (!File.Exists(Path))
@@ -116,7 +117,8 @@ namespace VPet_Simulator.Core
                 IsFail = false;
                 FailMessage = "";
 
-                var parsed = ParseApng(Path);
+                // 已有精灵图时只读取尺寸、帧数和时长；不再把整份 APNG 压缩数据重新读进内存。
+                var parsed = ParseApng(Path, false);
                 if (parsed.Frames.Count == 0)
                     throw new InvalidDataException("No APNG frames found.");
 
@@ -136,7 +138,6 @@ namespace VPet_Simulator.Core
                 FrameRects = new Int32Rect[parsed.Frames.Count];
                 lock (FrameCacheLock)
                 {
-                    FrameCache.Clear();
                     FrameDurations.Clear();
                     for (int i = 0; i < parsed.Frames.Count; i++)
                     {
@@ -154,7 +155,7 @@ namespace VPet_Simulator.Core
                 {
                     if (!File.Exists(SpriteSheetPath))
                     {
-                        BuildSpriteSheet(parsed);
+                        BuildSpriteSheet(ParseApng(Path));
                     }
                 }
                 finally
@@ -168,6 +169,10 @@ namespace VPet_Simulator.Core
             {
                 IsFail = true;
                 FailMessage = $"--APNGAnimation--{GraphInfo}--\nPath: {Path}\n{e.Message}";
+            }
+            finally
+            {
+                PNGAnimation.BuildSlots.Release();
             }
         }
 
@@ -240,7 +245,7 @@ namespace VPet_Simulator.Core
             data.SaveTo(stream);
         }
 
-        private static ParsedApng ParseApng(string path)
+        private static ParsedApng ParseApng(string path, bool includeImageData = true)
         {
             using var stream = File.OpenRead(path);
             using var reader = new BinaryReader(stream);
@@ -256,7 +261,12 @@ namespace VPet_Simulator.Core
             {
                 uint length = ReadUInt32BigEndian(reader);
                 string type = Encoding.ASCII.GetString(reader.ReadBytes(4));
-                byte[] data = reader.ReadBytes((int)length);
+                // 跳过像素块前先验证长度，避免损坏文件被快速读取路径误认为有效缓存来源。
+                if (length > int.MaxValue || stream.Length - stream.Position < (long)length + 4)
+                    throw new InvalidDataException("Invalid PNG chunk length.");
+                bool readData = includeImageData || type is "IHDR" or "fcTL";
+                byte[] data = readData ? reader.ReadBytes((int)length) : Array.Empty<byte>();
+                if (!readData) stream.Seek(length, SeekOrigin.Current);
                 ReadUInt32BigEndian(reader);
 
                 switch (type)
@@ -301,22 +311,25 @@ namespace VPet_Simulator.Core
                             };
                             result.Frames.Add(currentFrame);
                         }
-                        currentFrame.ImageDataChunks.Add(data);
+                        if (includeImageData) currentFrame.ImageDataChunks.Add(data);
                         break;
                     case "fdAT":
                         imageDataStarted = true;
                         if (currentFrame == null)
                             throw new InvalidDataException("fdAT found before fcTL.");
-                        if (data.Length < 4)
+                        if (length < 4)
                             throw new InvalidDataException("Invalid fdAT chunk.");
-                        byte[] idatData = new byte[data.Length - 4];
-                        Buffer.BlockCopy(data, 4, idatData, 0, idatData.Length);
-                        currentFrame.ImageDataChunks.Add(idatData);
+                        if (includeImageData)
+                        {
+                            byte[] idatData = new byte[data.Length - 4];
+                            Buffer.BlockCopy(data, 4, idatData, 0, idatData.Length);
+                            currentFrame.ImageDataChunks.Add(idatData);
+                        }
                         break;
                     case "IEND":
                         return result;
                     default:
-                        if (!imageDataStarted)
+                        if (includeImageData && !imageDataStarted)
                         {
                             result.SharedChunks.Add(new PngChunk { Type = type, Data = data });
                         }
@@ -351,53 +364,31 @@ namespace VPet_Simulator.Core
             return SKBitmap.Decode(memory.ToArray());
         }
 
-        private BitmapSource? GetFrameSource(int frameIndex)
+        // 可写位图属于画布的 UI 线程；Run/Play 通过 Dispatcher 调用，避免跨线程更新像素。
+        private void DrawFrame(System.Windows.Controls.Image image, int frameIndex)
         {
             Touch();
-            EnsureSpriteSheetLoaded();
-            if (FrameRects == null || frameIndex < 0 || frameIndex >= FrameRects.Length || SpriteSheetSource == null)
-                return null;
             lock (FrameCacheLock)
             {
-                if (FrameCache.TryGetValue(frameIndex, out var cacheFrame))
-                    return cacheFrame;
+                if (FrameRects == null || frameIndex < 0 || frameIndex >= FrameRects.Length)
+                    return;
 
-                var frame = new CroppedBitmap(SpriteSheetSource, FrameRects[frameIndex]);
-                frame.Freeze();
-                FrameCache[frameIndex] = frame;
-
-                var keepKeys = GetForwardKeepKeys(frameIndex);
-                var removeKeys = new List<int>();
-                foreach (var key in FrameCache.Keys)
+                EnsureSpriteSheetLoaded();
+                var source = SpriteSheetSource!;
+                int stride = (FrameWidth * source.Format.BitsPerPixel + 7) / 8;
+                FramePixels ??= new byte[stride * FrameHeight];
+                // 复用画布的小位图，只更新当前帧像素，避免每帧创建裁剪对象或缓存整段动画的纹理。
+                if (image.Source is not WriteableBitmap frame || frame.PixelWidth != FrameWidth ||
+                    frame.PixelHeight != FrameHeight || frame.Format != source.Format ||
+                    frame.DpiX != source.DpiX || frame.DpiY != source.DpiY)
                 {
-                    if (!keepKeys.Contains(key))
-                        removeKeys.Add(key);
+                    frame = new WriteableBitmap(FrameWidth, FrameHeight, source.DpiX, source.DpiY,
+                        source.Format, source.Palette);
+                    image.Source = frame;
                 }
-                foreach (var key in removeKeys)
-                {
-                    FrameCache.Remove(key);
-                }
-
-                return frame;
+                source.CopyPixels(FrameRects[frameIndex], FramePixels, stride, 0);
+                frame.WritePixels(new Int32Rect(0, 0, FrameWidth, FrameHeight), FramePixels, stride, 0);
             }
-        }
-
-        private HashSet<int> GetForwardKeepKeys(int frameIndex)
-        {
-            var keep = new HashSet<int> { frameIndex };
-            int cursor = frameIndex;
-            for (int i = 0; i < FrameCacheAheadCount; i++)
-            {
-                cursor++;
-                if (FrameRects == null || cursor >= FrameRects.Length)
-                {
-                    if (!IsLoop)
-                        break;
-                    cursor = 0;
-                }
-                keep.Add(cursor);
-            }
-            return keep;
         }
 
         private void EnsureSpriteSheetLoaded()
@@ -410,8 +401,8 @@ namespace VPet_Simulator.Core
                     return;
                 BitmapImage spriteSheet = new BitmapImage();
                 spriteSheet.BeginInit();
-                spriteSheet.CacheOption = BitmapCacheOption.OnDemand;
-                spriteSheet.CreateOptions = BitmapCreateOptions.DelayCreation;
+                // 播放前解码一次，避免长精灵图在切换裁剪区域时反复走按需解码路径。
+                spriteSheet.CacheOption = BitmapCacheOption.OnLoad;
                 spriteSheet.UriSource = new Uri(SpriteSheetPath);
                 spriteSheet.EndInit();
                 spriteSheet.Freeze();
@@ -520,7 +511,6 @@ namespace VPet_Simulator.Core
             {
                 int frameIndex;
                 int duration;
-                BitmapSource? frameSource;
                 lock (FrameCacheLock)
                 {
                     if (FrameDurations.Count == 0)
@@ -532,13 +522,11 @@ namespace VPet_Simulator.Core
                     frameIndex = nowid;
                     duration = FrameDurations[frameIndex];
                 }
-                frameSource = GetFrameSource(frameIndex);
-
                 element.Dispatcher.Invoke(() =>
                 {
                     if (element is System.Windows.Controls.Image image)
                     {
-                        image.Source = frameSource;
+                        DrawFrame(image, frameIndex);
                     }
                     element.Margin = new Thickness(0, 0, 0, 0);
                 });
@@ -601,7 +589,7 @@ namespace VPet_Simulator.Core
                     return new Task(() => Play(img, Control));
                 }
                 img.Tag = this;
-                img.Source = GetFrameSource(0);
+                DrawFrame(img, 0);
                 img.Width = 500;
                 return new Task(() => Play(img, Control));
             });
@@ -661,7 +649,7 @@ namespace VPet_Simulator.Core
                 }
 
                 parant.Tag = this;
-                img.Source = GetFrameSource(0);
+                DrawFrame(img, 0);
                 img.Width = 500;
                 Task.Run(() => Play((System.Windows.Controls.Image)parant.Child, newControl));
             });
@@ -673,32 +661,24 @@ namespace VPet_Simulator.Core
         {
             if (Control?.PlayState == true)
                 return;
-            if (SpriteSheetSource == null)
-                return;
             long lastUse = Interlocked.Read(ref LastUseTimeTicks);
             if (cleanTicks < lastUse)
                 return;
 
-            lock (SpriteSheetLock)
-            {
-                SpriteSheetSource = null;
-            }
             lock (FrameCacheLock)
             {
-                FrameCache.Clear();
+                lock (SpriteSheetLock) SpriteSheetSource = null;
+                FramePixels = null;
             }
         }
 
         public void Dispose()
         {
             FrameRects = [];
-            lock (SpriteSheetLock)
-            {
-                SpriteSheetSource = null;
-            }
             lock (FrameCacheLock)
             {
-                FrameCache.Clear();
+                lock (SpriteSheetLock) SpriteSheetSource = null;
+                FramePixels = null;
                 FrameDurations.Clear();
             }
             //GraphCore = null;

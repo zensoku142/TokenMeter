@@ -51,12 +51,10 @@ namespace VPet_Simulator.Core
         private Int32Rect[]? FrameRects;
         private readonly object SpriteSheetLock = new object();
         private readonly object FrameCacheLock = new object();
-        private readonly Dictionary<int, BitmapSource> FrameCache = new Dictionary<int, BitmapSource>();
+        private byte[]? FramePixels;
         private int FrameWidth;
         private int FrameHeight;
         public long LastUseTimeTicks = DateTime.UtcNow.Ticks;
-
-        private const int FrameCacheAheadCount = 2;
 
         public bool IsFail { get; set; } = false;
 
@@ -115,7 +113,7 @@ namespace VPet_Simulator.Core
         /// </summary>
         public static int MaxLoadMemory = 2000;
         // 每路径锁只防止同一张图重复构建；还需限制不同动画同时解码时的原生内存峰值。
-        private static readonly SemaphoreSlim BuildSlots = new SemaphoreSlim(2, 2);
+        internal static readonly SemaphoreSlim BuildSlots = new SemaphoreSlim(2, 2);
 
         private async void startup(string path, FileInfo[] paths)
         {
@@ -270,13 +268,12 @@ namespace VPet_Simulator.Core
             /// <param name="This">显示的图层</param>
             public void Run(FrameworkElement This, TaskControl Control)
             {
-                var frameSource = parent.GetFrameSource(FrameIndex);
                 //先显示该图层
                 This.Dispatcher.Invoke(() =>
                 {
                     if (This is System.Windows.Controls.Image image)
                     {
-                        image.Source = frameSource;
+                        parent.DrawFrame(image, FrameIndex);
                     }
                     This.Margin = new Thickness(0, 0, 0, 0);
                 });
@@ -372,7 +369,7 @@ namespace VPet_Simulator.Core
                     }
                 }
                 parant.Tag = this;
-                img.Source = GetFrameSource(0);
+                DrawFrame(img, 0);
                 img.Width = 500;
                 Task.Run(() => Animations[0].Run((System.Windows.Controls.Image)parant.Child, NEWControl));
             });
@@ -405,64 +402,37 @@ namespace VPet_Simulator.Core
                     return new Task(() => Animations[0].Run(img, Control));
                 }
                 img.Tag = this;
-                img.Source = GetFrameSource(0);
+                DrawFrame(img, 0);
                 img.Width = 500;
                 return new Task(() => Animations[0].Run(img, Control));
             });
         }
 
-        private BitmapSource? GetFrameSource(int frameIndex)
+        // 可写位图属于画布的 UI 线程；Run/Play 通过 Dispatcher 调用，避免跨线程更新像素。
+        private void DrawFrame(System.Windows.Controls.Image image, int frameIndex)
         {
             Touch();
-            EnsureSpriteSheetLoaded();
-            if (FrameRects == null || frameIndex < 0 || frameIndex >= FrameRects.Length || SpriteSheetSource == null)
-                return null;
             lock (FrameCacheLock)
             {
-                if (FrameCache.TryGetValue(frameIndex, out var cacheFrame))
-                {
-                    return cacheFrame;
-                }
+                if (FrameRects == null || frameIndex < 0 || frameIndex >= FrameRects.Length)
+                    return;
 
-                var frame = new CroppedBitmap(SpriteSheetSource, FrameRects[frameIndex]);
-                frame.Freeze();
-                FrameCache[frameIndex] = frame;
-
-                var keepKeys = GetForwardKeepKeys(frameIndex);
-                var removeKeys = new List<int>();
-                foreach (var key in FrameCache.Keys)
+                EnsureSpriteSheetLoaded();
+                var source = SpriteSheetSource!;
+                int stride = (FrameWidth * source.Format.BitsPerPixel + 7) / 8;
+                FramePixels ??= new byte[stride * FrameHeight];
+                // 复用画布的小位图，只更新当前帧像素，避免每帧创建裁剪对象或缓存整段动画的纹理。
+                if (image.Source is not WriteableBitmap frame || frame.PixelWidth != FrameWidth ||
+                    frame.PixelHeight != FrameHeight || frame.Format != source.Format ||
+                    frame.DpiX != source.DpiX || frame.DpiY != source.DpiY)
                 {
-                    if (!keepKeys.Contains(key))
-                    {
-                        removeKeys.Add(key);
-                    }
+                    frame = new WriteableBitmap(FrameWidth, FrameHeight, source.DpiX, source.DpiY,
+                        source.Format, source.Palette);
+                    image.Source = frame;
                 }
-                foreach (var key in removeKeys)
-                {
-                    FrameCache.Remove(key);
-                }
-
-                return frame;
+                source.CopyPixels(FrameRects[frameIndex], FramePixels, stride, 0);
+                frame.WritePixels(new Int32Rect(0, 0, FrameWidth, FrameHeight), FramePixels, stride, 0);
             }
-        }
-
-        private HashSet<int> GetForwardKeepKeys(int frameIndex)
-        {
-            var keep = new HashSet<int> { frameIndex };
-            int cursor = frameIndex;
-            if (FrameRects != null)
-                for (int i = 0; i < FrameCacheAheadCount; i++)
-                {
-                    cursor++;
-                    if (cursor >= FrameRects.Length)
-                    {
-                        if (!IsLoop)
-                            break;
-                        cursor = 0;
-                    }
-                    keep.Add(cursor);
-                }
-            return keep;
         }
 
         private void EnsureSpriteSheetLoaded()
@@ -475,8 +445,8 @@ namespace VPet_Simulator.Core
                     return;
                 BitmapImage spriteSheet = new BitmapImage();
                 spriteSheet.BeginInit();
-                spriteSheet.CacheOption = BitmapCacheOption.OnDemand;
-                spriteSheet.CreateOptions = BitmapCreateOptions.DelayCreation;
+                // 播放前解码一次，避免长精灵图在切换裁剪区域时反复走按需解码路径。
+                spriteSheet.CacheOption = BitmapCacheOption.OnLoad;
                 spriteSheet.UriSource = new Uri(Path);
                 spriteSheet.EndInit();
                 spriteSheet.Freeze();
@@ -493,19 +463,14 @@ namespace VPet_Simulator.Core
         {
             if (Control?.PlayState == true)
                 return;
-            if (SpriteSheetSource == null)
-                return;
             long lastUse = Interlocked.Read(ref LastUseTimeTicks);
             if (cleanTicks < lastUse)
                 return;
 
-            lock (SpriteSheetLock)
-            {
-                SpriteSheetSource = null;
-            }
             lock (FrameCacheLock)
             {
-                FrameCache.Clear();
+                lock (SpriteSheetLock) SpriteSheetSource = null;
+                FramePixels = null;
             }
         }
 
@@ -513,13 +478,10 @@ namespace VPet_Simulator.Core
         {
             Animations.Clear();
             FrameRects = [];
-            lock (SpriteSheetLock)
-            {
-                SpriteSheetSource = null;
-            }
             lock (FrameCacheLock)
             {
-                FrameCache.Clear();
+                lock (SpriteSheetLock) SpriteSheetSource = null;
+                FramePixels = null;
             }
             //GraphCore = null;
         }

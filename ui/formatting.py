@@ -53,6 +53,16 @@ def _currency_prefix(currency: str) -> str:
     )
 
 
+def format_credit_value(value) -> str:
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite():
+            return "--"
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+    except (ValueError, ArithmeticError):
+        return "--"
+
+
 def format_money(value: float | Decimal | None, currency: str = "CNY") -> str:
     if value is None:
         return "--"

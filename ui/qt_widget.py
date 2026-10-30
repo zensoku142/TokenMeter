@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QPalette, QRegion
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMenu, QSystemTrayIcon, QWidget
 
+from api import cc_switch
 from api.deepseek_pricing import BEIJING_TIMEZONE, PricingState, pricing_state
 from api.providers import PROVIDERS, configured_provider_ids
 from api.providers.base import FetchError
@@ -246,6 +248,7 @@ class FloatingWidget(QWidget):
         self._vpet_profiles: dict[str, dict] = {}
         self._vpet_profile_results: dict[str, tuple[str, TokenData]] = {}
         self._vpet_profile_due: dict[str, float] = {}
+        self._vpet_profile_failures: dict[str, int] = {}
         self._vpet_profile_in_flight: dict[str, str] = {}
         self._vpet_updating = False
         self._vpet.ready.connect(self._on_vpet_ready)
@@ -359,6 +362,13 @@ class FloatingWidget(QWidget):
 
         self._sync_vpet()
 
+        self._sync_codex_reset_news()
+
+        # CC 多账号是常驻采集来源；不能等设置页或桌宠创建后才开始请求。
+        if cc_switch.codex_accounts():
+            self._update_vpet_source_options()
+            self._refresh_vpet_bound_sources()
+
     def _pet_hosts(self) -> list[VPetHost]:
         # 部分刷新路径会在窗口尚未完整初始化时运行；主实例仍可独立接收用量。
         return [self._vpet, *getattr(self, "_vpet_extras", {}).values()]
@@ -366,6 +376,8 @@ class FloatingWidget(QWidget):
     def _update_vpet_source_options(self) -> None:
         previous = self._vpet_profiles
         try:
+            if cc_switch.codex_accounts():
+                profile_store.import_cc_switch_profiles()
             profiles = profile_store.load_profiles()
         except (OSError, ValueError):
             profiles = []
@@ -374,6 +386,14 @@ class FloatingWidget(QWidget):
             if previous.get(profile_id, {}).get("revision") != self._vpet_profiles.get(profile_id, {}).get("revision"):
                 self._vpet_profile_results.pop(profile_id, None)
                 self._vpet_profile_due.pop(profile_id, None)
+                self.__dict__.get("_vpet_profile_failures", {}).pop(profile_id, None)
+        for profile in profiles:
+            if (profile["provider"] == "codex" and profile.get("fields", {}).get("CC_SWITCH_ACCOUNT_ID")
+                    and profile["id"] not in self._vpet_profile_results):
+                # 重启先恢复同账号的最后成功快照，远程更新继续由后台任务完成。
+                cached = TokenData.persisted_snapshot(profile_store.profile_config(profile))
+                if cached is not None:
+                    self._vpet_profile_results[profile["id"]] = (profile["revision"], cached)
         disabled = set(config_manager.get("DISABLED_PROVIDER_IDS", []))
         sources = [{"id": "active", "name": "跟随主程序"}]
         sources.extend({"id": f"provider:{provider_id}", "name": f"{PROVIDERS[provider_id].name} · 默认账户"}
@@ -400,11 +420,24 @@ class FloatingWidget(QWidget):
         self._refresh_vpet_bound_sources()
 
     def _refresh_vpet_bound_sources(self) -> None:
-        if self._closed or self._vpet_updating or not config_manager.get("VPET_ENABLED", False):
+        if self._closed:
+            return
+        rail = self.__dict__.get("_light_ring")
+        pet_enabled = not self._vpet_updating and config_manager.get("VPET_ENABLED", False)
+        profile_ids = config_manager.all_config().get("BACKGROUND_PROFILE_IDS", [])
+        cc_ids = [profile["id"] for profile in self._vpet_profiles.values()
+                  if profile["provider"] == "codex" and profile.get("fields", {}).get("CC_SWITCH_ACCOUNT_ID")]
+        if not pet_enabled and not profile_ids and not cc_ids and (rail is None or not rail.isVisible()):
             return
         valid = {option["id"] for option in self._vpet_source_options}
-        selected = {host.display_source for host in self._pet_hosts()
-                    if host.data_directory is not None and host.display_source in valid}
+        selected = {"profile:" + profile_id for profile_id in cc_ids}
+        selected.update("profile:" + profile_id for profile_id in profile_ids if "profile:" + profile_id in valid)
+        if pet_enabled:
+            selected.update(host.display_source for host in self._pet_hosts()
+                            if host.data_directory is not None and host.display_source in valid)
+        if rail is not None and rail.isVisible():
+            # 细环与桌宠共享档案请求、版本和退避记录，不因增加展示面重复采集。
+            selected.update(key for key in rail.selected_sources() if key.startswith("profile:") and key in valid)
         now = time.monotonic()
         captured = config_manager.all_config()
         for source in selected:
@@ -427,16 +460,21 @@ class FloatingWidget(QWidget):
                 revision = profile["revision"]
                 self._vpet_profile_in_flight[profile_id] = revision
                 self._vpet_profile_due[profile_id] = now + 60
-                task = FetchTask(0, profile_config, lightweight=True)
-                task.signals.finished.connect(
-                    lambda _request, _provider, result, pid=profile_id, rev=revision:
-                    self._finish_vpet_profile(pid, rev, result))
+                from ui.account_profiles import _ProfileTask
+
+                # 使用含档案身份的现有任务直接回传到主线程槽，避免临时匿名回调丢失排队结果。
+                task = _ProfileTask(profile, profile_config)
+                task.signals.finished.connect(self._finish_vpet_profile)
                 self._thread_pool.start(task)
 
+    @Slot(str, str, object)
     def _finish_vpet_profile(self, profile_id: str, revision: str, result: TokenData) -> None:
         if self._vpet_profile_in_flight.get(profile_id) != revision or self._closed:
             return
         self._vpet_profile_in_flight.pop(profile_id, None)
+        self._accept_profile_result(profile_id, revision, result)
+
+    def _accept_profile_result(self, profile_id: str, revision: str, result: TokenData) -> None:
         try:
             profile = next((item for item in profile_store.load_profiles()
                             if item["id"] == profile_id and item["revision"] == revision), None)
@@ -445,10 +483,37 @@ class FloatingWidget(QWidget):
         except (OSError, ValueError):
             valid = False
         if valid:
+            previous = self._vpet_profile_results.get(profile_id)
+            if (previous is not None and previous[0] == revision
+                    and previous[1].account_key == result.account_key
+                    and previous[1].last_success_at is not None and result.last_success_at is not None
+                    and previous[1].last_success_at.timestamp() > result.last_success_at.timestamp()):
+                # 档案页和常驻窗口可能先后完成请求；迟到结果不能盖掉更新的额度。
+                result = previous[1]
+            if (previous is not None and previous[0] == revision and result.last_success_at is None
+                    and previous[1].account_key == result.account_key):
+                # 连接中断时保留此账号自己的上次读数，不能退回默认账号或显示成 0%。
+                result = replace(previous[1], status="error", is_stale=True,
+                                 errors=result.errors, refresh_error_codes=result.refresh_error_codes,
+                                 last_attempt_at=result.last_attempt_at)
             self._vpet_profile_results[profile_id] = (revision, result)
+            failures = self.__dict__.setdefault("_vpet_profile_failures", {})
+            if result.errors or result.refresh_error_codes:
+                count = min(6, failures.get(profile_id, 0) + 1)
+                failures[profile_id] = count
+                self._vpet_profile_due[profile_id] = time.monotonic() + min(900, 60 * 2 ** (count - 1))
+            else:
+                failures.pop(profile_id, None)
+                self._vpet_profile_due[profile_id] = time.monotonic() + 60
         else:
             self._vpet_profile_results.pop(profile_id, None)
         self._sync_vpet_usage()
+        if self.__dict__.get("_light_ring") is not None:
+            self._update_provider_overview()
+        settings = self.__dict__.get("_settings_window")
+        if settings is not None and settings.account_profiles_page is not None:
+            # 页面只展示常驻采集的结果；隐藏/再次打开都不需要另起同账号请求。
+            settings.account_profiles_page.reload_profiles()
 
     def _sync_vpet(self) -> None:
         if self._closed or self._vpet_updating:
@@ -484,7 +549,18 @@ class FloatingWidget(QWidget):
         self._sync_ball_visibility()
 
     def _sync_ball_visibility(self) -> None:
-        if self._closed or self._expanded:
+        if self._closed:
+            return
+        if config_manager.get("FLOATING_STYLE", "ball") == "light_ring":
+            if not self._expanded:
+                self._edge_unsnap()
+                self.hide()
+            self._sync_light_ring()
+            return
+        rail = self.__dict__.get("_light_ring")
+        if rail is not None:
+            rail.hide()
+        if self._expanded:
             return
         active_hosts = [host for host in self._pet_hosts() if host.active]
         if active_hosts:
@@ -492,6 +568,102 @@ class FloatingWidget(QWidget):
                 bool(config_manager.get("VPET_SHOW_BALL", False))
                 and any(host.visible for host in active_hosts)
             )
+        elif rail is not None:
+            self.show()
+
+    def _sync_light_ring(self) -> None:
+        rail = self.__dict__.get("_light_ring")
+        if self._closed or config_manager.get("FLOATING_STYLE", "ball") != "light_ring":
+            if rail is not None:
+                rail.hide()
+            return
+        if rail is None:
+            from ui.light_ring import LightRingWidget
+
+            rail = self._light_ring = LightRingWidget(self)
+            rail.provider_selected.connect(self._open_light_ring_provider)
+            rail.settings_requested.connect(self.open_settings)
+            rail.quit_requested.connect(self.close)
+            rail.refresh_requested.connect(lambda: self._refresh_light_ring(automatic=False))
+            rail.auto_refresh_requested.connect(self._refresh_light_ring)
+            rail.auto_refresh_stopped.connect(self._stop_overview_auto_refresh)
+        selected = config_manager.get("BACKGROUND_PROVIDER_IDS", [])
+        disabled = config_manager.get("DISABLED_PROVIDER_IDS", [])
+        ids = [pid for pid in selected if pid in PROVIDERS and pid not in disabled]
+        self._update_vpet_source_options()
+        entries, labels = {}, {}
+        for profile_id in config_manager.get("BACKGROUND_PROFILE_IDS", []):
+            profile = self._vpet_profiles.get(profile_id)
+            if profile is not None:
+                key = "profile:" + profile_id
+                ids.append(key)
+                entries[key] = profile["provider"]
+                labels[key] = profile["name"]
+        active = str(config_manager.get("ACTIVE_PROVIDER", ""))
+        if not ids and active in PROVIDERS and active not in config_manager.get("DISABLED_PROVIDER_IDS", []):
+            ids = [active]
+        rail.set_sources(ids, providers=entries, labels=labels)
+        active_hosts = [host for host in self._pet_hosts() if host.active]
+        visible = not active_hosts or (bool(config_manager.get("VPET_SHOW_BALL", False))
+                                       and any(host.visible for host in active_hosts))
+        rail.setVisible(bool(ids) and visible and not self.__dict__.get("_ring_hidden_by_tray", False))
+        monitor = self.__dict__.get("_codex_reset_news")
+        if monitor is not None:
+            self._update_reset_news(monitor.payload)
+        self._sync_codex_reset_news()
+        self._update_provider_overview()
+
+    def _sync_codex_reset_news(self) -> None:
+        rail = self.__dict__.get("_light_ring")
+        display = (config_manager.get("FLOATING_STYLE", "ball") == "light_ring" and rail is not None
+                   and "codex" in rail._entry_providers.values())
+        enabled = bool(config_manager.get("CODEX_RESET_ALERT_ENABLED", False)) or display
+        monitor = self.__dict__.get("_codex_reset_news")
+        if monitor is None and enabled:
+            from ui.codex_reset_news import CodexResetNews
+
+            monitor = self._codex_reset_news = CodexResetNews(self)
+            monitor.updated.connect(self._update_reset_news)
+            monitor.notification.connect(self._notify_reset_news)
+        if monitor is not None:
+            monitor.set_enabled(enabled)
+            self._update_reset_news(monitor.payload if enabled else None)
+
+    def _update_reset_news(self, payload) -> None:
+        rail = self.__dict__.get("_light_ring")
+        if rail is not None:
+            monitor = self.__dict__.get("_codex_reset_news")
+            rail.set_reset_news(payload, enabled=monitor is not None and monitor._enabled)
+
+    def _notify_reset_news(self, message) -> None:
+        if self._closed or self.tray is None or not config_manager.get("CODEX_RESET_ALERT_ENABLED", False):
+            return
+        # 公开消息不能继承之前的认证/账号通知点击目标。
+        self._auth_expired_provider_id = None
+        self._quota_notification_provider_id = None
+        self._quota_notification_profile = None
+        self.tray.showMessage(APP_DISPLAY_NAME, tr(message), QSystemTrayIcon.MessageIcon.Information, 6000)
+
+    def _refresh_light_ring(self, *, automatic=True) -> None:
+        rail = self.__dict__.get("_light_ring")
+        if rail is None or not rail.isVisible():
+            return
+        self._sync_light_ring()
+        self._refresh_vpet_bound_sources()
+        self._refresh_overview(automatic=automatic, provider_ids=rail.selected_providers())
+        self._update_provider_overview()
+
+    def _open_light_ring_provider(self, provider_id: str) -> None:
+        rail = self._light_ring
+        rail.popup.hide()
+        if provider_id.startswith("profile:"):
+            self.open_settings()
+            self._settings_window.open_account_profiles(provider_id.partition(":")[2])
+            return
+        if not self._expanded:
+            # 主面板从细环所在屏幕展开，避免多屏用户在另一个屏幕寻找详情。
+            self.move(rail.pos())
+        self._open_compact_provider(provider_id)
 
     def _add_vpet_instance(self, character: str) -> None:
         if (self._closed or self._vpet_updating or not config_manager.get("VPET_ENABLED", False)
@@ -557,8 +729,8 @@ class FloatingWidget(QWidget):
             self.activateWindow()
         elif action == "open_settings":
             self.open_settings()
-        elif action in {"add_pet_vpet", "add_pet_whale"}:
-            self._add_vpet_instance("whale" if action == "add_pet_whale" else "vpet")
+        elif action in {"add_pet_vpet", "add_pet_whale", "add_pet_bailong"}:
+            self._add_vpet_instance(action.removeprefix("add_pet_"))
         elif action == "close_pet":
             target = source or self._vpet
             if target is self._vpet:
@@ -1341,6 +1513,7 @@ class FloatingWidget(QWidget):
                 on_saved=self._on_config_saved,
                 update_controller=self._update_controller,
                 embedded=True,
+                profile_monitor=self,
             )
             self._settings_window.finished.connect(panel.show_overview)
             self._settings_window.profile_quota_observed.connect(self._notify_profile_quota)
@@ -1368,6 +1541,8 @@ class FloatingWidget(QWidget):
 
     def _on_config_saved(self) -> None:
         config_manager.load_config()
+        self._ring_hidden_by_tray = False
+        self._sync_codex_reset_news()
         self.ball.set_secondary_quota_counterclockwise(
             bool(config_manager.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
         )
@@ -1419,6 +1594,8 @@ class FloatingWidget(QWidget):
 
     def _on_vpet_profiles_changed(self) -> None:
         self._update_vpet_source_options()
+        if self.__dict__.get("_light_ring") is not None:
+            self._sync_light_ring()
         self._sync_vpet_usage()
         self._refresh_vpet_bound_sources()
 
@@ -1470,6 +1647,8 @@ class FloatingWidget(QWidget):
         self, data: TokenData, config_snapshot: dict[str, object]
     ) -> None:
         self._data = data
+        if self.__dict__.get("_light_ring") is not None:
+            self._sync_light_ring()
         # 旧 Provider 继续后台完成；回调按最新 ACTIVE_PROVIDER 决定是否更新界面。
         self.refresh(force=True, config_snapshot=config_snapshot)
 
@@ -1540,13 +1719,17 @@ class FloatingWidget(QWidget):
             overview = None
         compact = self.__dict__.get("_compact_overview")
         compact_visible = compact is not None and compact.isVisible()
-        if overview is None and not compact_visible:
+        rail = self.__dict__.get("_light_ring")
+        rail_visible = rail is not None and rail.isVisible()
+        if overview is None and not compact_visible and not rail_visible:
             return
         captured = dict(config_manager.all_config())
         snapshots = {}
         provider_ids = list(self._overview_ids) if overview is not None else []
         if compact_visible:
             provider_ids = list(dict.fromkeys([*provider_ids, *compact.selected_providers()]))
+        if rail_visible:
+            provider_ids = list(dict.fromkeys([*provider_ids, *rail.selected_providers()]))
         for provider_id in provider_ids:
             if provider_id in captured.get("DISABLED_PROVIDER_IDS", []):
                 continue
@@ -1558,12 +1741,38 @@ class FloatingWidget(QWidget):
             # 外部 CLI 可直接换号；总览也必须校验身份，不能仅凭平台 ID 复用历史。
             if data is not None and data.account_key != account_key:
                 data = None
+            if data is None:
+                # 首次打开总览或细环时先恢复同账号历史读数，避免等网络请求完成才有数据显示。
+                data = TokenData.cached_snapshot(provider_id, account_key)
+                if data is None:
+                    data = TokenData.persisted_snapshot(captured)
+                if data is not None and data.account_key == account_key:
+                    self._provider_results[provider_id] = data
+                else:
+                    data = None
             snapshots[provider_id] = data
         if overview is not None:
             overview.set_data({pid: data for pid, data in snapshots.items() if pid in self._overview_ids})
             overview.set_refreshing(bool(self._overview_refresh_queue or self._overview_refresh_active))
         if compact_visible:
             compact.board.set_data({pid: snapshots.get(pid) for pid in compact.selected_providers() if pid in snapshots})
+        if rail_visible:
+            ring_snapshots = {pid: snapshots.get(pid) for pid in rail.selected_providers() if pid in snapshots}
+            for key in rail.selected_sources():
+                if not key.startswith("profile:"):
+                    continue
+                profile_id = key.partition(":")[2]
+                profile = self._vpet_profiles.get(profile_id)
+                cached = self._vpet_profile_results.get(profile_id)
+                data = None
+                try:
+                    if (profile is not None and cached is not None and cached[0] == profile["revision"]
+                            and cached[1].account_key == TokenData.account_key_for_config(profile_store.profile_config(profile))):
+                        data = cached[1]
+                except (OSError, ValueError):
+                    pass
+                ring_snapshots[key] = data
+            rail.set_data(ring_snapshots)
 
     def _refresh_overview(self, *, automatic: bool = False, provider_ids: list[str] | None = None) -> None:
         if self._closed or self._overview_refresh_queue or self._overview_refresh_active:
@@ -1588,6 +1797,9 @@ class FloatingWidget(QWidget):
             compact = self.__dict__.get("_compact_overview")
             if compact is not None and compact.isVisible():
                 remaining.update(compact.selected_providers())
+            rail = self.__dict__.get("_light_ring")
+            if rail is not None and rail.isVisible():
+                remaining.update(rail.selected_providers())
             self._overview_refresh_queue[:] = [pid for pid in self._overview_refresh_queue if pid in remaining]
 
     def _advance_overview_refresh(self) -> None:
@@ -1913,6 +2125,12 @@ class FloatingWidget(QWidget):
                 config_manager.logger().warning("Quota notification history could not be saved")
 
     def _notify_profile_quota(self, profile_id: str, name: str, provider_id: str, result: TokenData) -> None:
+        if self.__dict__.get("_light_ring") is not None:
+            # 多账号页已获取的数据立即进入同一份账号缓存，细环无需再等下一轮请求。
+            self._update_vpet_source_options()
+            profile = self._vpet_profiles.get(profile_id)
+            if profile is not None and profile["provider"] == provider_id:
+                self._accept_profile_result(profile_id, profile["revision"], result)
         # 档案页已验证本次账号/版本；借用相同通知规则，并保留点击时应打开的档案上下文。
         self._quota_profile_context = (profile_id, name)
         try:
@@ -2309,9 +2527,11 @@ class FloatingWidget(QWidget):
         if self._closed:
             return
         captured_config = config_manager.all_config()
-        if config_manager.get("VPET_ENABLED", False) is True:
+        if (captured_config.get("BACKGROUND_PROFILE_IDS") or config_manager.get("VPET_ENABLED", False) is True
+                or cc_switch.codex_accounts()):
             self._update_vpet_source_options()
             self._refresh_vpet_bound_sources()
+        if config_manager.get("VPET_ENABLED", False) is True:
             self._sync_vpet_usage()
         active_provider = str(
             captured_config.get("ACTIVE_PROVIDER", "")
@@ -2417,6 +2637,18 @@ class FloatingWidget(QWidget):
                 self.raise_()
                 if self._expanded:
                     self.activateWindow()
+            self._sync_ball_visibility()
+            return
+        rail = self.__dict__.get("_light_ring")
+        if rail is not None and config_manager.get("FLOATING_STYLE", "ball") == "light_ring":
+            self._ring_hidden_by_tray = rail.isVisible()
+            rail.setVisible(not self._ring_hidden_by_tray)
+            if self._ring_hidden_by_tray:
+                self.hide()
+            elif self._expanded:
+                self.show()
+                self.raise_()
+                self.activateWindow()
             return
         # 托盘点击时：如果处于贴边隐藏状态，先完整恢复显示
         if self._edge_snapped and not self._expanded:
@@ -2462,6 +2694,12 @@ class FloatingWidget(QWidget):
             x, y = self.x(), self.y()
         config_manager.save_widget_position(x, y)
         self._closed = True
+        monitor = self.__dict__.get("_codex_reset_news")
+        if monitor is not None:
+            monitor.set_enabled(False)
+        rail = self.__dict__.get("_light_ring")
+        if rail is not None:
+            rail.close()
         compact = self.__dict__.get("_compact_overview")
         if compact is not None:
             compact.close()

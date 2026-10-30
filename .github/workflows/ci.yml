@@ -34,6 +34,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      - name: Fetch verified Bailong animations
+        run: python scripts/fetch_bailong_assets.py
+
       - name: Run tests
         run: python -m pytest -q --durations=20
 

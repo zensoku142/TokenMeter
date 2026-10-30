@@ -26,7 +26,7 @@ from ui.qt_update import AppUpdateController
 from ui.qt_widget import FloatingWidget
 
 
-def main() -> int:
+def main(*, preview_character: str | None = None) -> int:
     app = QApplication([])
     app.setApplicationName("TokenMeter VPet Preview")
     configure_theme(app, "dark")
@@ -74,7 +74,8 @@ def main() -> int:
                 event.accept()
 
         controls = Controls()
-        controls.setWindowTitle("VPet 精简版 · 独立试用（演示数据）")
+        controls.setWindowTitle("小龙娘 · 原框架预览（演示数据）" if preview_character == "bailong"
+                               else "VPet 精简版 · 独立试用（演示数据）")
         layout = QVBoxLayout(controls)
         layout.addWidget(
             QLabel(

@@ -23,31 +23,37 @@
 
 <p align="center">
   <strong>Windows 向け AI Token 使用量・コスト・残高モニター</strong><br>
-  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
+  <sub>Codex · Claude · Cursor · DeepSeek · MiMo · NayutoAI</sub>
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex の利用枠、DeepSeek の本日の時間帯別使用量と残高、フローティング表示、VPet と鯨の少女（デモデータ）" width="960"></a>
+  <a href="site/assets/panel-light.png"><img src="site/assets/panel-light.png" alt="TokenMeter Codex panel (demo data)" width="960"></a><br>
+  <a href="site/assets/panel-token-speed.png"><img src="site/assets/panel-token-speed.png" alt="Token speed candlestick chart (Chinese UI, demo data)" width="960"></a><br>
+  <img src="site/assets/light-ring.png" alt="Light ring displaying three providers (demo data)" width="58">
+  <img src="site/assets/pet-bailong.png" alt="Xiaolong desktop pet" width="220">
 </p>
 
 実際のコンポーネントを撮影した画面です。表示は中国語、数値はデモデータです。[元画像と出典](docs/images/readme/README.md)。
 
-TokenMeter は Windows 10/11 向けの軽量な AI 使用量モニターです。15 の独立した接続先を備え、各サービスの対応範囲に応じて契約の利用枠、リセット時刻、API コスト、残高と履歴を表示します。
+TokenMeter は Windows 10/11 向けの軽量な AI 使用量モニターです。6 の独立した接続先を備え、各サービスの対応範囲に応じて契約の利用枠、リセット時刻、API コスト、残高と履歴を表示します。
 
-現在のバージョン：**v1.16.7** · ペット **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+現在のバージョン：**v1.17.0** · ペット **v0.3.0** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+
+
 
 ## 機能
 
+- **CC Switch の Codex 複数アカウント**：「設定 → 複数アカウント」で CC Switch 管理の Codex OAuth アカウントを検出・更新します。更新と照会は CC Switch が行い、切断時はキャッシュした利用枠を表示します。ローカル連携は CC Switch の内部コマンドに依存します。連携なしで起動中の場合は一度トレイから完全終了してから更新してください。
+- **ライトリングと Codex リセット情報**：複数サービス・アカウントの常時表示、ドラッグによる並べ替えとリング色の変更に対応。ホバー詳細にはコミュニティの公開リセット情報を表示でき、通知も選択できます。公開情報は個人アカウントのリセットを保証しません。
 - **Codex の時間別使用量**：ローカルセッションログの記録時刻ごとにキャッシュ入力、新規入力、出力 Token を表示。モデルのツールチップ、保存済み日付と差分更新に対応します。選択したローカルディレクトリのみを集計し、アカウント帰属は不明です。契約の利用枠や実際の請求額ではありません。
 - **Token 速度**：Codex と NayutoAI のパネルで、モデルと時刻ごとの出力速度を確認できます。有効なリクエストの出力 Token と所要時間から推定し、最初の応答待ち時間も含みます。データが不足する場合は不明と表示します。
-- **利用枠と残高**：Codex、Claude Code、Cursor、GitHub Copilot、GLM / Z.ai、Kimi Coding、MiniMax Token Plan、Gemini CLI、ElevenLabs の利用枠、DeepSeek / MiMo / NayutoAI の使用量、OpenRouter のキー予算とコスト、Moonshot / Kimi API の残高に対応。Antigravity CLI は明示的に設定したステータスラインのスナップショットを読み取ります。未提供の値は利用不可とし、通貨や予算の範囲を混ぜません。
+- **利用枠と残高**：Codex、Claude Code、Cursor の利用枠、DeepSeek / MiMo / NayutoAI の使用量と残高に対応。未提供の値は利用不可とし、クレジット、通貨、トークンは分けて表示します。
 - **一覧と複数アカウント**：一覧の表示中は設定済みサービスを自動更新。「設定 → 複数アカウント」で接続・認証情報・監視状態を個別管理し、既定の接続や CLI ログインを上書きしません。設定済みの 2 サービスを最前面の小型ダッシュボードにも表示できます。
 - **ローカル統計と Excel**：Codex（アーカイブを含む）と Claude のローカルログを読み取り、キャッシュを先に表示してバックグラウンド更新。日付・プロジェクト・モデルの絞り込み、日別比較、グラフのズーム、集計・明細・集計基準の `.xlsx` 出力に対応。ログのアカウント帰属は不明で、契約の残量や実際の請求額ではありません。アクセス可能な WSL ディレクトリも選択できますが WSL は起動しません。
 - **接続先管理**：オフラインのブランドアイコン、検索、お気に入り、アプリが保存した接続の削除。CLI ログインと履歴は保持します。
 - **更新と通知**：失敗時の更新間隔延長、オフラインキャッシュ、任意の残量低下・回復通知、消費予測と通知休止時間。予測には同じ周期の有効なサンプルが 10 分以上必要です。回復通知は残量低下通知が有効で、取得結果で回復を確認した場合に送ります。通知状態は再起動後も保持します。
-- **デスクトップ表示**：ドラッグ、ホイールによるサイズ変更、画面端での非表示、トレイ、明暗・システムテーマ、色と透明度、5 言語、自動更新、任意の複数キャラクターペット。アプリ v1.16.2 とペット v0.2.2 の組み合わせで利用枠ウィンドウのテーマを同期します。
+- **デスクトップ表示**：ドラッグ、ホイールによるサイズ変更、画面端での非表示、トレイ、明暗・システムテーマ、色と透明度、5 言語、自動更新、任意の複数キャラクターペット。アプリ v1.17.0 とペット v0.3.0 の組み合わせで利用枠ウィンドウのテーマを同期します。
 
-[接続設定と制限（中国語）](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity](docs/antigravity-statusline-2026-09-07.md)
 
 ## インストールと設定
 
@@ -64,7 +70,7 @@ Windows 10 / 11 と、対応サービスのアカウントが 1 つ以上必要�
 本体のインストーラーにペットは含まれません。「設定 → ペット」で拡張をダウンロードし、インストール完了後に有効にします。.NET の別途インストールは不要です。ペットは既定でフローティングウィジェットを置き換えます。「フローティングボールも表示」を有効にすると両方を表示でき、設定は自動保存されてすぐに反映されます。ペットを無効化・削除すると元に戻り、アカウントやパネルには影響しません。
 
 - タッチ操作、ドラッグ、サイズ変更、自律動作、画面端の残量バブルに対応。バブルをダブルクリックすると使用量パネルが開きます。
-- 起動前に標準の VPet キャラクターまたは[鯨の少女](https://github.com/PC2005-cloud/dsh-pet)を選べます。設定画面にはキャラクターの縮小画像とインストール可能な互換バージョンを表示します。
+- 起動前に標準の VPet、[鯨の少女](https://github.com/PC2005-cloud/dsh-pet)、[小龍娘](pet_host/bailong/README.md)を選べます。小龍娘は 35 種のアニメーションに対応し、AI チャットや会話履歴は含みません。設定画面にはキャラクターの縮小画像とインストール可能な互換バージョンを表示します。
 - 右クリックメニューでバブルの表示方法や、水分補給・休憩のリマインダーを設定できます。リマインダーは既定でオフ、ペットのメニューは現在中国語のみです。
 - 軽量版には給餌、仕事、育成、Steam、オンライン機能はありません。拡張は単独で更新でき、本体と同時に終了します。
 
@@ -120,7 +126,7 @@ Qt テストには利用可能な Windows デスクトップセッション、�
 
 ## バージョン
 
-本体 `1.16.7`、任意のペット拡張 `0.2.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
+本体 `1.17.0`、任意のペット拡張 `0.3.0`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
 
 ## ライセンスと謝辞
 

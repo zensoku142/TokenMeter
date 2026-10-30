@@ -94,7 +94,7 @@ def test_ball_cache_flag_does_not_change_animation_or_tooltip(app, stale):
     ball.hide()
 
 
-@pytest.mark.parametrize("provider_id", ["codex", "cursor", "copilot", "claude"])
+@pytest.mark.parametrize("provider_id", ["codex", "cursor", "claude", "claude"])
 def test_subscription_errors_never_turn_into_pet_balance(provider_id):
     message = usage_message(provider_data(provider_id, status="error"), False, provider_id)
     assert message["primary"] == "--"
@@ -109,12 +109,12 @@ def test_pet_subscription_mode_uses_registry_capability(monkeypatch):
 
 
 @pytest.mark.parametrize("status,stale", [("ok", False), ("ok", True), ("error", True)])
-def test_unlimited_copilot_remains_text_on_pet_and_ball(app, status, stale):
+def test_unlimited_claude_remains_text_on_pet_and_ball(app, status, stale):
     data = provider_data(
-        "copilot", status=status, is_stale=stale, last_success_at=datetime.now(),
+        "claude", status=status, is_stale=stale, last_success_at=datetime.now(),
         quota_metrics=[QuotaMetric("聊天额度", "不限量", "以平台实际策略为准")],
     )
-    message = usage_message(data, False, "copilot")
+    message = usage_message(data, False, "claude")
     assert message["primary"] == "不限量"
     assert message["secondary"] == "以平台实际策略为准"
     ball = update_ball(data)
@@ -127,29 +127,29 @@ def test_unlimited_copilot_remains_text_on_pet_and_ball(app, status, stale):
 
 
 def test_loading_and_unrelated_metrics_are_not_unlimited(app):
-    data = provider_data("copilot", status="loading", quota_metrics=[QuotaMetric("聊天", "不限量")])
-    assert usage_message(data, True, "copilot")["primary"] == "--"
+    data = provider_data("claude", status="loading", quota_metrics=[QuotaMetric("聊天", "不限量")])
+    assert usage_message(data, True, "claude")["primary"] == "--"
     ball = update_ball(data, refreshing=True)
     assert ball._quota_remaining is None
     assert ball._quota_value_text == ""
     data.quota_metrics = [QuotaMetric("快照时间", "2026-09-05")]
-    assert usage_message(data, False, "copilot")["primary"] == "--"
+    assert usage_message(data, False, "claude")["primary"] == "--"
     ball = update_ball(data)
     assert ball._quota_value_text == ""
 
 
 def test_numeric_window_has_priority_over_unlimited_category(app):
     data = provider_data(
-        "copilot", status="ok", quota_windows=[QuotaWindow("premium", "高级额度", 25)],
+        "claude", status="ok", quota_windows=[QuotaWindow("premium", "高级额度", 25)],
         quota_metrics=[QuotaMetric("代码补全", "不限量")],
     )
-    assert usage_message(data, False, "copilot")["primary"] == "剩余 75%"
+    assert usage_message(data, False, "claude")["primary"] == "剩余 75%"
     ball = update_ball(data)
     assert ball._quota_remaining == 75
     assert ball._quota_value_text == ""
 
 
-@pytest.mark.parametrize("provider_id,label", [("openrouter", "密钥剩余额度"), ("deepseek", "余额")])
+@pytest.mark.parametrize("provider_id,label", [("nayuto", "余额"), ("deepseek", "余额")])
 def test_balance_labels_keep_key_limits_distinct_from_account_balance(app, provider_id, label):
     data = provider_data(provider_id, status="ok", balance_cny=12.5, currency="USD")
     assert usage_message(data, False, provider_id)["primary"] == f"{label} $12.50"

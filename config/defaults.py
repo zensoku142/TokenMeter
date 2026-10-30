@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 PROVIDER_IDS = (
-    "deepseek", "mimo", "codex", "cursor", "nayuto", "openrouter", "moonshot", "copilot", "claude",
-    "zai",
-    "kimi", "minimax", "elevenlabs", "gemini", "antigravity",
+    "deepseek", "mimo", "codex", "cursor", "nayuto", "claude",
+)
+REMOVED_PROVIDER_IDS = (
+    "openrouter", "moonshot", "copilot", "zai", "kimi", "minimax", "elevenlabs",
+    "gemini", "antigravity", "workbuddy",
 )
 
 SECRET_KEYS = (
@@ -27,6 +29,7 @@ SECRET_KEYS = (
     "ELEVENLABS_API_KEY",
     "GEMINI_ACCESS_TOKEN",
     "CLAUDE_ACCESS_TOKEN",
+    "WORKBUDDY_COOKIE",
 )
 OFFICIAL_HOSTS = {
     "platform.deepseek.com",
@@ -72,6 +75,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "NAYUTO_BASE": "https://nayutoai.xyz",
     "CODEX_HOME": "",
     "CURSOR_GLOBAL_STORAGE": "",
+    # WorkBuddy 已下线；旧字段继续兼容读取，避免清空用户已保存的凭据。
+    "WORKBUDDY_COOKIE": "",
+    "WORKBUDDY_USER_AGENT": "",
+    # 已下架平台的旧字段只保留作配置兼容；密钥继续走凭据管理器，避免写入公开 JSON。
     "OPENROUTER_API_KEY": "",
     "OPENROUTER_BASE": "https://openrouter.ai/api/v1",
     "MOONSHOT_API_KEY": "",
@@ -102,6 +109,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "TEXT_COLOR": "#edf4ff",
     "ACTIVE_PROVIDER": "deepseek",
     "BACKGROUND_PROVIDER_IDS": [],
+    "BACKGROUND_PROFILE_IDS": [],
     "QUOTA_FORECAST_ENABLED": False,
     "QUOTA_RECOVERY_ALERT_ENABLED": False,
     "QUOTA_QUIET_ENABLED": False,
@@ -109,6 +117,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "QUOTA_QUIET_END": "08:00",
     "DISABLED_PROVIDER_IDS": [],
     "EDGE_HIDE_ENABLED": True,
+    "FLOATING_STYLE": "ball",
+    "FLOATING_RING_FOLLOW_THEME": True,
+    "FLOATING_RING_COLOR": "#2F72E8",
+    "CODEX_RESET_ALERT_ENABLED": False,
     "QUOTA_WEEKLY_RING_COUNTERCLOCKWISE": False,
     "VPET_ENABLED": False,
     "VPET_SHOW_BALL": False,
@@ -156,6 +168,11 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "ACCENT_COLOR": {"kind": "color"},
     "TEXT_COLOR": {"kind": "color"},
     "EDGE_HIDE_ENABLED": {"kind": "bool"},
+    "FLOATING_STYLE": {"kind": "choice", "choices": ("ball", "light_ring")},
+    "BACKGROUND_PROFILE_IDS": {"kind": "profile_list"},
+    "FLOATING_RING_FOLLOW_THEME": {"kind": "bool"},
+    "FLOATING_RING_COLOR": {"kind": "color"},
+    "CODEX_RESET_ALERT_ENABLED": {"kind": "bool"},
     "QUOTA_WEEKLY_RING_COUNTERCLOCKWISE": {"kind": "bool"},
     "VPET_ENABLED": {"kind": "bool"},
     "VPET_SHOW_BALL": {"kind": "bool"},

@@ -371,6 +371,7 @@ def test_vpet_stages_cached_animations_and_vendored_notices(tmp_path, monkeypatc
     monkeypatch.setenv("TOKENMETER_BUILD_FFMPEG", "ffmpeg")
     monkeypatch.setattr(build_vpet, "run", lambda *args, **kwargs: Path(args[-1]).write_bytes(b"apng"))
 
+    monkeypatch.setattr(build_vpet, "stage_bailong_resources", lambda *_args: None)
     report = build_vpet.stage_resources()
 
     assert not stale.exists()

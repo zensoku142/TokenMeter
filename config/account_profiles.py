@@ -8,10 +8,11 @@ import tempfile
 from pathlib import Path
 from uuid import uuid4
 
+from api import cc_switch
 from api.providers import PROVIDERS
 from config import credentials
 from config import runtime as config_manager
-from config.defaults import DEFAULT_CONFIG
+from config.defaults import DEFAULT_CONFIG, REMOVED_PROVIDER_IDS
 from config.store import validate_value
 
 
@@ -37,6 +38,9 @@ def load_profiles() -> list[dict]:
     result = []
     seen = set()
     for profile in profiles:
+        # 已下架平台的历史档案不再监控，但不能阻止其他账户档案加载。
+        if isinstance(profile, dict) and profile.get("provider") in REMOVED_PROVIDER_IDS:
+            continue
         if (not isinstance(profile, dict) or not _valid_id(profile.get("id"))
                 or not _valid_id(profile.get("revision")) or profile.get("provider") not in PROVIDERS
                 or not isinstance(profile.get("fields"), dict) or not isinstance(profile.get("name"), str)
@@ -132,5 +136,26 @@ def profile_config(profile) -> dict:
         values[f"{provider.upper()}_{field}"] = value
     values["ACTIVE_PROVIDER"] = provider
     values["_ACCOUNT_PROFILE_ID"] = profile["id"]
+    if provider == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
+        values["CODEX_CC_SWITCH_ACCOUNT_ID"] = profile["fields"]["CC_SWITCH_ACCOUNT_ID"]
     values["QUOTA_FORECAST_ENABLED"] = config_manager.get("QUOTA_FORECAST_ENABLED", False)
     return values
+
+
+def import_cc_switch_profiles() -> int:
+    profiles = load_profiles()
+    existing = {profile["fields"].get("CC_SWITCH_ACCOUNT_ID") for profile in profiles
+                if profile["provider"] == "codex"}
+    added = 0
+    for account in cc_switch.codex_accounts():
+        if account["id"] in existing:
+            continue
+        profiles.append({"id": uuid4().hex, "revision": uuid4().hex, "provider": "codex",
+                         "name": account["name"][:80],
+                         "fields": {"CC_SWITCH_ACCOUNT_ID": account["id"]}})
+        existing.add(account["id"])
+        added += 1
+    if added:
+        # 整批原子保存，重复连接不会创建重复档案，也不改用户自己命名的档案。
+        _write_profiles(profiles)
+    return added

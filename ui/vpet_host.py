@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from api.providers import PROVIDERS
+from config import runtime as config_manager
 from core.pet_extension import installed_executable
 from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown, quota_used_percent
 
@@ -62,7 +63,9 @@ def usage_message(
             else format_reset_countdown(quota.resets_at)
         )
         label = f"{provider_name} · {quota.title}"
-        if not refreshing and remaining is not None and remaining <= 10:
+        # 桌宠会主动说出 warning，必须遵守低额度提醒开关，避免刷新时绕过用户设置。
+        if (config_manager.get("QUOTA_ALERT_ENABLED", False) is True
+                and not refreshing and remaining is not None and remaining <= 10):
             status = "剩余额度不足，请留意用量。"
             warning = True
     elif provider_cls and provider_cls.supports_subscription_quota:
@@ -152,7 +155,7 @@ class VPetHost(QObject):
     def start(self, data_directory: Path, *, character: str | None = None, slot: int = 0) -> None:
         if self.process.state() != QProcess.ProcessState.NotRunning:
             return
-        if character is not None and character not in {"vpet", "whale"}:
+        if character is not None and character not in {"vpet", "whale", "bailong"}:
             raise ValueError("未知桌宠角色")
         self._reported_failure = self._stopping = False
         self._buffer.clear()
@@ -279,7 +282,7 @@ class VPetHost(QObject):
                 if source is not None:
                     self.source_requested.emit(source)
             elif self.active and event in {"open_panel", "open_settings", "disable_pet", "quit",
-                                           "add_pet_vpet", "add_pet_whale", "close_pet"}:
+                                           "add_pet_vpet", "add_pet_whale", "add_pet_bailong", "close_pet"}:
                 # 只接受固定的本地 UI 动作，子进程不能要求主程序执行命令或访问任意地址。
                 self.action_requested.emit(event)
 

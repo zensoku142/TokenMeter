@@ -77,7 +77,7 @@ def test_provider_picker_text_and_numbered_count_are_localized(monkeypatch, lang
 
     monkeypatch.setattr("ui.i18n.current_language", lambda: language)
     sources = (
-        "切换 AI 平台", "搜索平台名称，如 Claude、Kimi、智谱", "搜索 AI 平台",
+        "切换 AI 平台", "搜索平台名称，如 Claude、Cursor", "搜索 AI 平台",
         "全部平台", "已配置", "常用平台", "未配置", "API 用量", "AI 平台列表", "删除", "已移除",
         "没有匹配的平台，试试其他名称或查看全部平台",
         "Enter 切换 · Ctrl+D 收藏 · Esc 关闭",

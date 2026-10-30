@@ -275,3 +275,8 @@ h1 { max-width: 620px; margin-top: 19px; font-size: clamp(48px, 5.1vw, 76px); li
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
   .hero-enter, .js [data-reveal] { opacity: 1 !important; transform: none !important; }
 }
+
+/* 实际组件截图保留原始比例，桌面展示中与已有角色并列。 */
+.floating-ring { position: absolute; z-index: 2; right: 12%; top: 7%; height: 80%; width: auto; filter: drop-shadow(0 16px 18px rgba(30, 71, 126, 0.2)); }
+.pet-bailong { position: absolute; z-index: 5; left: 43%; bottom: 8px; width: 160px; filter: drop-shadow(0 18px 20px rgba(41, 74, 119, 0.18)); }
+@media (max-width: 600px) { .pet-bailong { left: 38%; width: 125px; } }

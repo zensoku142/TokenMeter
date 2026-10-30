@@ -26,36 +26,36 @@ def isolated_profiles(monkeypatch, tmp_path):
 
 
 def test_profile_secrets_are_isolated_and_never_written_to_json(isolated_profiles, tmp_path):
-    first = store.save_profile("openrouter", "Personal", {"API_KEY": "secret-one"})
-    second = store.save_profile("openrouter", "Work", {"API_KEY": "secret-two"})
+    first = store.save_profile("deepseek", "Personal", {"API_KEY": "secret-one"})
+    second = store.save_profile("deepseek", "Work", {"API_KEY": "secret-two"})
     assert first["id"] != second["id"]
     raw = (tmp_path / "account-profiles.json").read_text(encoding="utf-8")
     assert "secret-one" not in raw and "secret-two" not in raw
-    assert store.profile_config(first)["OPENROUTER_API_KEY"] == "secret-one"
-    assert store.profile_config(second)["OPENROUTER_API_KEY"] == "secret-two"
-    assert store.profile_config(first)["OPENROUTER_BASE"] == DEFAULT_CONFIG["OPENROUTER_BASE"]
+    assert store.profile_config(first)["DEEPSEEK_API_KEY"] == "secret-one"
+    assert store.profile_config(second)["DEEPSEEK_API_KEY"] == "secret-two"
+    assert store.profile_config(first)["DEEPSEEK_BASE"] == DEFAULT_CONFIG["DEEPSEEK_BASE"]
     store.delete_profile(first["id"])
     assert len(store.load_profiles()) == 1
-    assert store.profile_config(second)["OPENROUTER_API_KEY"] == "secret-two"
+    assert store.profile_config(second)["DEEPSEEK_API_KEY"] == "secret-two"
 
 
 def test_failed_profile_update_preserves_original_credentials(monkeypatch):
-    original = store.save_profile("openrouter", "Original", {"API_KEY": "old-secret"})
+    original = store.save_profile("deepseek", "Original", {"API_KEY": "old-secret"})
     monkeypatch.setattr(store, "_write_profiles", Mock(side_effect=OSError("disk full")))
     with pytest.raises(OSError):
-        store.save_profile("openrouter", "Changed", {"API_KEY": "new-secret"}, original["id"])
+        store.save_profile("deepseek", "Changed", {"API_KEY": "new-secret"}, original["id"])
     assert store.load_profiles() == [original]
     assert store.profile_fields(original)["API_KEY"] == "old-secret"
 
 
 def test_profiles_never_fall_back_to_default_credentials(monkeypatch):
-    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "OPENROUTER_API_KEY": "default-secret"})
-    profile = store.save_profile("openrouter", "Separate", {"API_KEY": "profile-secret"})
-    assert store.profile_config(profile)["OPENROUTER_API_KEY"] == "profile-secret"
+    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "DEEPSEEK_API_KEY": "default-secret"})
+    profile = store.save_profile("deepseek", "Separate", {"API_KEY": "profile-secret"})
+    assert store.profile_config(profile)["DEEPSEEK_API_KEY"] == "profile-secret"
     with pytest.raises(ValueError):
         store.save_profile("codex", "Missing path", {})
     with pytest.raises(ValueError):
-        store.save_profile("gemini", "Project only", {"PROJECT_ID": "project"})
+        store.save_profile("workbuddy", "Missing login", {})
 
 
 def test_invalid_profile_file_is_not_silently_overwritten(tmp_path):
@@ -68,7 +68,7 @@ def test_invalid_profile_file_is_not_silently_overwritten(tmp_path):
 
 def test_profile_fetch_preserves_default_cache_and_legacy_history(monkeypatch):
     class TestProvider(Provider):
-        id = "openrouter"
+        id = "deepseek"
         name = "OpenRouter"
         def snapshot_identity(self):
             return "profile-account"
@@ -77,23 +77,23 @@ def test_profile_fetch_preserves_default_cache_and_legacy_history(monkeypatch):
         def fetch_balance(self):
             return ProviderBalance("USD", Decimal("4")), None
     original = TokenData(account_key="default-account", balance_cny=99)
-    monkeypatch.setattr(TokenData, "_provider_snapshots", {"openrouter": original})
+    monkeypatch.setattr(TokenData, "_provider_snapshots", {"deepseek": original})
     with history._connect() as connection:
         connection.execute("INSERT INTO daily_usage VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           ("2026-09-01", "legacy", "tokens", 1, "0", "2026-09-01", "openrouter"))
+                           ("2026-09-01", "legacy", "tokens", 1, "0", "2026-09-01", "deepseek"))
     result = TokenData._fetch_with_provider(TestProvider({"_ACCOUNT_PROFILE_ID": "test"}), lightweight=True, include_minute_history=False)
     assert result.balance_cny == 4
-    assert TokenData._provider_snapshots["openrouter"] is original
+    assert TokenData._provider_snapshots["deepseek"] is original
     with history._connect() as connection:
-        assert connection.execute("SELECT provider FROM daily_usage WHERE model='legacy'").fetchone()[0] == "openrouter"
+        assert connection.execute("SELECT provider FROM daily_usage WHERE model='legacy'").fetchone()[0] == "deepseek"
 
 
 def test_same_provider_cards_and_late_deleted_profile_result(monkeypatch):
     from ui import account_profiles
 
     app = QApplication.instance() or QApplication([])
-    first = store.save_profile("openrouter", "One", {"API_KEY": "one"})
-    second = store.save_profile("openrouter", "Two", {"API_KEY": "two"})
+    first = store.save_profile("deepseek", "One", {"API_KEY": "one"})
+    second = store.save_profile("deepseek", "Two", {"API_KEY": "two"})
     page = account_profiles.AccountProfilesPage()
     assert set(page.cards) == {first["id"], second["id"]}
     tasks = []
@@ -121,9 +121,9 @@ def test_profile_page_reports_add_edit_and_delete_for_pet_source_choices():
     page = AccountProfilesPage()
     changed = []
     page.profiles_changed.connect(lambda: changed.append(True))
-    profile = store.save_profile("openrouter", "Work", {"API_KEY": "one"})
+    profile = store.save_profile("deepseek", "Work", {"API_KEY": "one"})
     page.reload_profiles()
-    store.save_profile("openrouter", "Work 2", {"API_KEY": "two"}, profile["id"])
+    store.save_profile("deepseek", "Work 2", {"API_KEY": "two"}, profile["id"])
     page.reload_profiles()
     store.delete_profile(profile["id"])
     page.reload_profiles()

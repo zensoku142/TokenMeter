@@ -20,7 +20,7 @@ internal static class Program
         string? dataDirectory = Value(args, "--data-dir");
         if (dataDirectory == null) return 2;
         string? character = Value(args, "--character");
-        if (character != null && character is not ("vpet" or "whale")) return 2;
+        if (character != null && character is not ("vpet" or "whale" or "bailong")) return 2;
         long.TryParse(Value(args, "--slot"), out long slot);
         if (slot < 0) return 2;
         Directory.CreateDirectory(dataDirectory);

@@ -833,7 +833,7 @@ class RefreshTests(unittest.TestCase):
                 widget.ball = Mock()
                 widget._sync_vpet_usage = Mock()
                 widget._data = TokenData(
-                    per_provider=[PerProviderData("minimax", "MiniMax")],
+                    per_provider=[PerProviderData("claude", "Claude Code")],
                     quota_metrics=[QuotaMetric("Chat", value, "Provider policy", value_kind=kind)],
                 )
                 FloatingWidget._apply_update(widget)

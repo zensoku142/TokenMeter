@@ -2377,8 +2377,8 @@ class MainPanel(QFrame):
         self.pricing_badge = QLabel()
         self.pricing_badge.setObjectName("pricingBadge")
         self.pricing_badge.setProperty("pricingState", "offpeak")
-        self.pricing_badge.setWordWrap(True)
-        self.pricing_badge.setFixedWidth(176)
+        # 跨日提示会包含日期；保持单行并按内容计算尺寸，避免固定尺寸裁切文字。
+        self.pricing_badge.setWordWrap(False)
         self.pricing_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pricing_badge.hide()
         header_layout.addWidget(logo)
@@ -2492,7 +2492,7 @@ class MainPanel(QFrame):
         self.today_card = MetricCard("今日使用金额", "usage")
         self.today_card.set_variant("hero")
         # 峰谷提示属于用量信息；放到金额下方，避免挤占平台切换和窗口操作空间。
-        self.pricing_badge.setFixedHeight(20)
+        self.pricing_badge.setMinimumHeight(20)
         self.today_card.layout().insertWidget(2, self.pricing_badge, 0, Qt.AlignmentFlag.AlignLeft)
         self.balance_card = MetricCard("账户余额", "balance")
         self.balance_card.set_variant("compact")

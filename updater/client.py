@@ -637,7 +637,7 @@ class GitHubReleaseClient:
                 host_sha = None
             character_assets = {}
             if isinstance(manifest.get("character_resources"), dict):
-                for role in ("vup", "whale"):
+                for role in ("vup", "whale", "bailong"):
                     role_name = PET_CHARACTER_ASSET_TEMPLATE.format(
                         character=role, version=version.normalized())
                     role_asset = by_name.get(role_name)

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
+import re
 from contextlib import suppress
 from ctypes import wintypes
+from uuid import uuid4
 
 from core.identity import APP_STORAGE_NAME
 
@@ -28,6 +31,8 @@ class _CREDENTIALW(ctypes.Structure):
 
 
 _CREDENTIALW_TYPE = 1
+_CHUNK_PREFIX = "TokenMeter:chunks-v1:"
+_CHUNK_CHAR_LIMIT = 640
 _advapi32 = None
 if os.name == "nt":
     try:
@@ -56,7 +61,7 @@ def credential_target(key: str) -> str:
     return f"TokenMeter/{key}"
 
 
-def read_credential_target(target: str) -> str:
+def _read_raw_target(target: str) -> str:
     """Read one target without logging its secret payload."""
 
     if os.name != "nt" or _advapi32 is None:
@@ -76,6 +81,30 @@ def read_credential_target(target: str) -> str:
         if pointer:
             with suppress(Exception):
                 _advapi32.CredFree(pointer)
+
+
+def _chunk_metadata(target: str, value: str) -> tuple[list[str], str] | None:
+    # 限制损坏清单触发的原生读取次数；写入端使用相同的分段数量上限。
+    match = re.fullmatch(re.escape(_CHUNK_PREFIX) + r"([0-9a-f]{32}):([1-9][0-9]{0,3}):([0-9a-f]{64})", value)
+    if match is None or int(match[2]) > 1024:
+        return None
+    return [f"{target}/chunks/{match[1]}/{index}" for index in range(int(match[2]))], match[3]
+
+
+def read_credential_target(target: str) -> str:
+    value = _read_raw_target(target)
+    if not value.startswith(_CHUNK_PREFIX):
+        return value
+    metadata = _chunk_metadata(target, value)
+    if metadata is None:
+        return ""
+    targets, digest = metadata
+    parts = [_read_raw_target(part) for part in targets]
+    # 分段缺失或损坏时不能把截断凭据交给接口，也不能把存储清单当成真实密钥。
+    if not all(parts):
+        return ""
+    value = "".join(parts)
+    return value if hashlib.sha256(value.encode("utf-16-le")).hexdigest() == digest else ""
 
 
 def read_credential(key: str) -> str:
@@ -106,16 +135,64 @@ def write_credential(key: str, value: str) -> None:
     if not value:
         # 清除必须覆盖兼容读取来源，否则下一次加载会把旧凭据重新迁回。
         for prefix in ("TokenSpider", "TokenScope", "TokenMeter"):
-            if not _advapi32.CredDeleteW(f"{prefix}/{key}", _CREDENTIALW_TYPE, 0):
-                error = ctypes.get_last_error()
-                if error != 1168:
-                    raise ctypes.WinError(error)
+            target = f"{prefix}/{key}"
+            metadata = _chunk_metadata(target, _read_raw_target(target))
+            for part in metadata[0] if metadata else []:
+                _delete_target(part)
+            _delete_target(target)
         return
+    target = credential_target(key)
+    previous = _read_raw_target(target)
+    old_parts = _chunk_metadata(target, previous)
+    # 自动保存会提交所有平台凭据；未变化的大 Cookie 无需重复创建和清理多个记录。
+    if read_credential_target(target) == value:
+        return
+    if len(value.encode("utf-16-le")) <= 2560 and not value.startswith(_CHUNK_PREFIX):
+        _write_raw_target(target, value)
+    else:
+        # Windows 单条凭据最多 2560 字节；按字符切分，非 BMP 字符也不会切断 UTF-16 编码。
+        parts = [value[index:index + _CHUNK_CHAR_LIMIT] for index in range(0, len(value), _CHUNK_CHAR_LIMIT)]
+        if len(parts) > 1024:
+            raise OSError("凭据过大，无法保存")
+        generation = uuid4().hex
+        digest = hashlib.sha256(value.encode("utf-16-le")).hexdigest()
+        manifest = f"{_CHUNK_PREFIX}{generation}:{len(parts)}:{digest}"
+        metadata = _chunk_metadata(target, manifest)
+        assert metadata is not None
+        created = []
+        try:
+            for part_target, part in zip(metadata[0], parts):
+                _write_raw_target(part_target, part)
+                created.append(part_target)
+            # 新分段全部写入后才切换主记录；中途失败时并发读取仍能得到完整的旧凭据。
+            _write_raw_target(target, manifest)
+        except Exception:
+            for part_target in created:
+                with suppress(OSError):
+                    _delete_target(part_target)
+            raise
+    for part_target in old_parts[0] if old_parts else []:
+        with suppress(OSError):
+            _delete_target(part_target)
+
+
+def _delete_target(target: str) -> None:
+    if _advapi32 is None:
+        raise OSError("Windows 凭据管理器不可用")
+    if not _advapi32.CredDeleteW(target, _CREDENTIALW_TYPE, 0):
+        error = ctypes.get_last_error()
+        if error != 1168:
+            raise ctypes.WinError(error)
+
+
+def _write_raw_target(target: str, value: str) -> None:
+    if _advapi32 is None:
+        raise OSError("Windows 凭据管理器不可用")
     raw = value.encode("utf-16-le")
     blob = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
     credential = _CREDENTIALW()
     credential.Type = _CREDENTIALW_TYPE
-    credential.TargetName = credential_target(key)
+    credential.TargetName = target
     credential.CredentialBlobSize = len(raw)
     credential.CredentialBlob = ctypes.cast(blob, ctypes.POINTER(ctypes.c_ubyte))
     credential.Persist = 2

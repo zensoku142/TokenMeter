@@ -248,8 +248,12 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(bool(offline.quota_windows), bool(scope))
                 provider.errors = [FetchError("STALE_DATA", "quota", "expired")]
                 stale = self.fetch_with(provider)
-                self.assertEqual(stale.status, "error")
-                self.assertEqual(stale.quota_windows, [])
+                self.assertEqual(stale.status, "partial" if scope else "error")
+                self.assertEqual(bool(stale.quota_windows), bool(scope))
+                if scope:
+                    self.assertEqual(stale.quota_windows, first.quota_windows)
+                    self.assertEqual(stale.last_success_at, first.last_success_at)
+                    self.assertTrue(stale.is_stale)
                 self.assertIn("STALE_DATA", [error.code for error in stale.errors])
 
     def test_subscription_quota_is_propagated_without_billing_data(self):
@@ -360,7 +364,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(data.last_success_at, remote_success_at)
         self.assertEqual(data.last_updated, "10:30:00")
 
-    def test_cursor_transient_failure_keeps_quota_but_auth_failure_does_not(self):
+    def test_cursor_failures_keep_quota_and_auth_failure_stays_visible(self):
         class CursorQuotaProvider(FakeProvider):
             id = "cursor"
             name = "Cursor"
@@ -415,11 +419,14 @@ class StoreTests(unittest.TestCase):
 
         FailedCursorProvider.error_code = "AUTH_EXPIRED"
         expired = self.fetch_with(FailedCursorProvider())
-        self.assertEqual(expired.status, "error")
-        self.assertEqual(expired.quota_windows, [])
+        self.assertEqual(expired.status, "partial")
+        self.assertEqual(expired.quota_windows, cached.quota_windows)
+        self.assertEqual(expired.quota_source, "cache")
+        self.assertEqual(expired.last_success_at, cached.last_success_at)
+        self.assertTrue(expired.is_stale)
         self.assertEqual(expired.errors[0].code, "AUTH_EXPIRED")
 
-    def test_codex_transient_remote_errors_keep_the_complete_cached_snapshot(self):
+    def test_codex_fetch_errors_keep_the_complete_cached_snapshot(self):
         class QuotaProvider(FakeProvider):
             id = "codex"
             name = "Codex"
@@ -450,6 +457,10 @@ class StoreTests(unittest.TestCase):
             "RATE_LIMITED",
             "SERVER_ERROR",
             "UNKNOWN_ERROR",
+            "AUTH_EXPIRED",
+            "STALE_DATA",
+            "FILE_ERROR",
+            "NO_DATA",
         ):
             with self.subTest(error_code=error_code):
                 TokenData._provider_snapshots = {}
@@ -466,7 +477,11 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(data.daily_usage[0]["tokens"], 1234)
                 self.assertEqual(data.weekly_usage[0]["tokens"], 5678)
                 self.assertEqual(data.account_plan, "pro")
-                self.assertEqual(data.errors, [])
+                self.assertEqual(
+                    [error.code for error in data.errors],
+                    [error_code] if error_code in {"AUTH_EXPIRED", "STALE_DATA", "FILE_ERROR", "NO_DATA"} else [],
+                )
+                self.assertTrue(data.is_stale)
                 self.assertEqual(data.refresh_error_codes, (error_code,))
                 recovered = self.fetch_with(SuccessfulQuotaProvider())
                 self.assertEqual(recovered.refresh_error_codes, ())

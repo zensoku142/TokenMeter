@@ -8,8 +8,6 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-from api.providers.antigravity import AntigravityProvider
-from api.providers.api_balance import MoonshotProvider, OpenRouterProvider
 from api.providers.base import (
     ExactMinuteUsage,
     FetchError,
@@ -23,16 +21,10 @@ from api.providers.base import (
 )
 from api.providers.claude import ClaudeProvider
 from api.providers.codex import CodexProvider
-from api.providers.copilot import CopilotProvider
 from api.providers.cursor import CursorProvider
 from api.providers.deepseek import DeepSeekProvider
-from api.providers.elevenlabs import ElevenLabsProvider
-from api.providers.gemini import GeminiProvider
-from api.providers.kimi import KimiProvider
 from api.providers.mimo import MiMoProvider
-from api.providers.minimax import MiniMaxProvider
 from api.providers.nayuto import NayutoProvider
-from api.providers.zai import ZaiProvider
 from config import runtime as config_manager
 
 PROVIDERS: dict[str, type[Provider]] = {
@@ -41,16 +33,7 @@ PROVIDERS: dict[str, type[Provider]] = {
     CodexProvider.id: CodexProvider,
     CursorProvider.id: CursorProvider,
     NayutoProvider.id: NayutoProvider,
-    OpenRouterProvider.id: OpenRouterProvider,
-    MoonshotProvider.id: MoonshotProvider,
-    CopilotProvider.id: CopilotProvider,
     ClaudeProvider.id: ClaudeProvider,
-    ZaiProvider.id: ZaiProvider,
-    KimiProvider.id: KimiProvider,
-    MiniMaxProvider.id: MiniMaxProvider,
-    ElevenLabsProvider.id: ElevenLabsProvider,
-    GeminiProvider.id: GeminiProvider,
-    AntigravityProvider.id: AntigravityProvider,
 }
 
 

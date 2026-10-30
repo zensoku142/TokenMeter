@@ -62,10 +62,10 @@ def visible_ids(picker):
 
 def test_search_focused_shortcut_can_pin_the_visible_result(picker, picker_state):
     picker.showPopup()
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     QTest.keyClick(picker.search, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
-    assert "elevenlabs" in provider_picker.pinned_provider_ids()
-    assert picker.search.text() == "elevenlabs"
+    assert "nayuto" in provider_picker.pinned_provider_ids()
+    assert picker.search.text() == "nayuto"
 
 
 def test_failed_pin_save_keeps_persisted_state_and_reports_error(picker, picker_state, monkeypatch):
@@ -73,7 +73,7 @@ def test_failed_pin_save_keeps_persisted_state_and_reports_error(picker, picker_
     monkeypatch.setattr(provider_picker.config_manager, "save_panel_layout_state", Mock())
     changed = QSignalSpy(picker.pins_changed)
     picker.showPopup()
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     picker.grid.setFocus()
     QTest.keyClick(picker.grid, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
     assert picker_state[0].read_text(encoding="utf-8") == saved
@@ -92,12 +92,12 @@ def open_all(picker):
     [
         ("Claude", "claude"),
         ("cLaUdE", "claude"),
-        ("智谱", "zai"),
-        ("月之暗面", "moonshot"),
-        ("kimi", "kimi"),
-        ("elevenlabs", "elevenlabs"),
-        ("GLM zai", "zai"),
-        ("MiniMax Token", "minimax"),
+        ("中转", "nayuto"),
+        ("小米", "mimo"),
+        ("deepseek", "deepseek"),
+        ("nayuto", "nayuto"),
+        ("Nayuto AI", "nayuto"),
+        ("OpenAI GPT", "codex"),
     ],
 )
 def test_search_matches_names_aliases_ids_and_multiple_words(picker, picker_state, query, expected):
@@ -124,27 +124,27 @@ def test_no_matches_is_explicit_and_enter_does_not_change_provider(picker):
 
 def test_default_filter_shows_configured_but_search_can_find_unconfigured(picker, picker_state):
     configured = picker_state[1]
-    configured.return_value = ["kimi", "claude"]
+    configured.return_value = ["deepseek", "claude"]
     picker.showPopup()
     assert picker.filter_buttons["configured"].isChecked()
-    assert set(visible_ids(picker)) == {"kimi", "claude"}
-    picker.search.setText("kim")
-    assert visible_ids(picker) == ["kimi", "moonshot"]
+    assert set(visible_ids(picker)) == {"deepseek", "claude"}
+    picker.search.setText("mi")
+    assert visible_ids(picker) == ["mimo"]
     assert picker.filter_buttons["all"].isChecked()
     assert configured.call_count == 1
     picker.search.clear()
     QTest.mouseClick(picker.filter_buttons["all"], Qt.MouseButton.LeftButton)
     assert set(visible_ids(picker)) == set(PROVIDERS)
-    assert set(visible_ids(picker)[:2]) == {"kimi", "claude"}
+    assert set(visible_ids(picker)[:2]) == {"deepseek", "claude"}
 
 
 def test_pinned_filter_follows_layout_and_deduplicates_invalid_ids(picker, picker_state):
     picker_state[0].write_text(
-        json.dumps({"pinned_providers": ["kimi", "bad-id", "kimi", None]}), encoding="utf-8"
+        json.dumps({"pinned_providers": ["deepseek", "bad-id", "deepseek", None]}), encoding="utf-8"
     )
     picker.showPopup()
     QTest.mouseClick(picker.filter_buttons["pinned"], Qt.MouseButton.LeftButton)
-    assert visible_ids(picker) == ["kimi"]
+    assert visible_ids(picker) == ["deepseek"]
 
 
 @pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter])
@@ -162,7 +162,7 @@ def test_enter_from_search_switches_once_and_closes_popup(picker, key):
 
 def test_down_moves_focus_then_enter_activates_grid_once(picker):
     open_all(picker)
-    picker.search.setText("kimi")
+    picker.search.setText("deepseek")
     activated = QSignalSpy(picker.activated)
     QTest.keyClick(picker.search, Qt.Key.Key_Down)
     assert picker.grid.hasFocus()
@@ -185,12 +185,12 @@ def test_escape_dismisses_without_selection_change(picker, target):
 
 def test_click_card_switches_once(picker):
     open_all(picker)
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     APP.processEvents()
     activated = QSignalSpy(picker.activated)
     rect = picker.grid.visualItemRect(picker.grid.item(0))
     QTest.mouseClick(picker.grid.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
-    assert picker.currentData() == "elevenlabs" and activated.count() == 1
+    assert picker.currentData() == "nayuto" and activated.count() == 1
     assert not picker.popup.isVisible()
 
 
@@ -204,13 +204,13 @@ def test_ctrl_d_persists_only_layout_preserving_other_fields_and_never_switches(
     picker, picker_state
 ):
     open_all(picker)
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     QTest.keyClick(picker.search, Qt.Key.Key_Down)
     pins_changed = QSignalSpy(picker.pins_changed)
     activated = QSignalSpy(picker.activated)
     QTest.keyClick(picker.grid, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
     state = json.loads(picker_state[0].read_text(encoding="utf-8"))
-    assert state["pinned_providers"] == ["elevenlabs", "codex", "claude", "cursor"]
+    assert state["pinned_providers"] == ["nayuto", "codex", "claude", "cursor"]
     assert state["keep_this_field"] == {"width": 640}
     assert set(state) == {"pinned_providers", "keep_this_field"}
     assert pins_changed.count() == 1 and activated.count() == 0
@@ -227,7 +227,7 @@ def test_ctrl_d_persists_only_layout_preserving_other_fields_and_never_switches(
 
 def test_star_click_toggles_favorite_without_activating_card(picker, picker_state):
     open_all(picker)
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     APP.processEvents()
     pins_changed = QSignalSpy(picker.pins_changed)
     activated = QSignalSpy(picker.activated)
@@ -235,19 +235,19 @@ def test_star_click_toggles_favorite_without_activating_card(picker, picker_stat
     star_center = QPoint(rect.right() - 23, rect.top() + 26)
     QTest.mouseClick(picker.grid.viewport(), Qt.MouseButton.LeftButton, pos=star_center)
     state = json.loads(picker_state[0].read_text(encoding="utf-8"))
-    assert "elevenlabs" in state["pinned_providers"]
+    assert "nayuto" in state["pinned_providers"]
     assert pins_changed.count() == 1 and activated.count() == 0
     assert picker.currentData() == "codex" and picker.popup.isVisible()
-    assert picker.hint.text() == "已收藏 ElevenLabs"
+    assert picker.hint.text() == "已收藏 NayutoAI"
     QTest.mouseClick(picker.grid.viewport(), Qt.MouseButton.LeftButton, pos=star_center)
-    assert picker.hint.text() == "已取消收藏 ElevenLabs"
+    assert picker.hint.text() == "已取消收藏 NayutoAI"
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_star_hover_press_and_drag_out_feedback(picker, picker_state, theme, tmp_path):
     configure_theme(APP, theme)
     open_all(picker)
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     APP.processEvents()
     viewport = picker.grid.viewport()
     rect = picker.grid.visualItemRect(picker.grid.item(0))
@@ -264,29 +264,29 @@ def test_star_hover_press_and_drag_out_feedback(picker, picker_state, theme, tmp
     picker.popup.grab().save(str(tmp_path / f"favorite-{theme}-pressed.png"))
     QTest.mouseMove(viewport, rect.center())
     QTest.mouseRelease(viewport, Qt.MouseButton.LeftButton, pos=rect.center())
-    assert "elevenlabs" not in provider_picker.pinned_provider_ids()
+    assert "nayuto" not in provider_picker.pinned_provider_ids()
     assert picker.currentData() == "codex" and picker.popup.isVisible()
     assert viewport.grab().toImage() == normal
 
 
 def test_star_release_without_press_does_not_toggle(picker):
     open_all(picker)
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     rect = picker.grid.visualItemRect(picker.grid.item(0))
     QTest.mouseRelease(picker.grid.viewport(), Qt.MouseButton.LeftButton,
                        pos=QPoint(rect.right() - 23, rect.top() + 26))
-    assert "elevenlabs" not in provider_picker.pinned_provider_ids()
+    assert "nayuto" not in provider_picker.pinned_provider_ids()
 
 
 def test_disabled_star_explains_why_it_cannot_be_pinned(picker, monkeypatch):
     monkeypatch.setattr(provider_picker.config_manager, "get",
-                        lambda key, default=None: ["elevenlabs"] if key == "DISABLED_PROVIDER_IDS" else default)
+                        lambda key, default=None: ["nayuto"] if key == "DISABLED_PROVIDER_IDS" else default)
     open_all(picker)
-    picker.search.setText("elevenlabs")
+    picker.search.setText("nayuto")
     rect = picker.grid.visualItemRect(picker.grid.item(0))
     QTest.mouseClick(picker.grid.viewport(), Qt.MouseButton.LeftButton,
                      pos=QPoint(rect.right() - 23, rect.top() + 26))
-    assert "elevenlabs" not in provider_picker.pinned_provider_ids()
+    assert "nayuto" not in provider_picker.pinned_provider_ids()
     assert "重新启用" in picker.hint.text()
     assert picker.popup.isVisible()
 

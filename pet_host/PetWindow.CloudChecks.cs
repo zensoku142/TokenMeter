@@ -79,7 +79,7 @@ internal sealed partial class PetWindow
                     checks[$"cloudCompact{side}{testSize}"] =
                         cloudRect.Right - cloudRect.Left <= QuotaCloudWindow.BaseWidth * dpi.DpiScaleX + 1;
                     checks[$"cloudTallerHeight{side}{testSize}"] = Math.Abs(cloudRect.Bottom - cloudRect.Top -
-                        QuotaCloudWindow.BaseHeight * Math.Clamp(testSize / 220.0, 0.95, 1.0) * dpi.DpiScaleY) <= 1;
+                        QuotaCloudWindow.BaseHeight * dpi.DpiScaleY) <= 1;
                     CaptureCloudPreview(Path.Combine(output, $"cloud-{side}-{testSize}.png"));
                     pet.Display(left ? GraphType.SideHide_Left_Rise : GraphType.SideHide_Right_Rise,
                         AnimatType.A_Start, pet.DisplayBLoopingForce);

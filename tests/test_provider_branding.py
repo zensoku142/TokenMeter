@@ -76,15 +76,10 @@ def test_missing_or_corrupt_packaged_mark_keeps_picker_usable(monkeypatch, tmp_p
     assert _opaque_colors(icon.pixmap(32, 32).toImage())
 
 
-def test_product_names_and_search_aliases_distinguish_kimi_api_from_coding():
-    assert provider_short_name("moonshot") == "Kimi API"
-    assert provider_short_name("kimi") == "Kimi Coding"
-    assert provider_short_name(" COPILOT ") == "Copilot"
-    assert provider_short_name("zai") == "GLM / Z.ai"
-    assert "月之暗面" in provider_search_terms("moonshot")
-    assert "智谱" in provider_search_terms("zai")
-    assert "Google" in provider_search_terms("gemini")
-    assert "语音" in provider_search_terms("elevenlabs")
+def test_nayuto_name_and_search_aliases():
+    assert provider_short_name(" NAYUTO ") == "NayutoAI"
+    assert "Nayuto" in provider_search_terms("nayuto")
+    assert "中转" in provider_search_terms("nayuto")
 
 
 def test_distribution_contains_brand_assets_and_upstream_license():

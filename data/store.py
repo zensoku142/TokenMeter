@@ -638,7 +638,8 @@ class TokenData:
             if not getattr(provider, "supports_subscription_quota", False):
                 return None
             snapshot = cls._load_persisted_quota_snapshot(provider)
-            if snapshot is not None:
+            # 独立档案预载与采集使用相同隔离规则，不能覆盖默认连接的内存缓存。
+            if snapshot is not None and not (isinstance(config, Mapping) and config.get("_ACCOUNT_PROFILE_ID")):
                 with cls._cache_lock:
                     cls._provider_snapshots[provider.id] = cls._copy_for_cache(snapshot)
             return snapshot
@@ -1079,7 +1080,6 @@ class TokenData:
             )
             kept_cached_quota = bool(
                 quota_error
-                and quota_error.code in _TRANSIENT_QUOTA_ERROR_CODES
                 and previous_per
                 and (
                     previous_per.quota_windows
@@ -1092,8 +1092,8 @@ class TokenData:
                 )
             )
             if kept_cached_quota and previous_per is not None:
-                # 暂时性远程失败必须保留整份最后成功快照，避免额度、统计和
-                # 活动图分别回退到不同时间点的数据。
+                # 同账号查询失败（包括登录失效或快照过期）仍展示最后成功快照；
+                # 账号隔离已在读取缓存时校验，错误状态在下方单独保留。
                 per.quota_windows = copy.deepcopy(previous_per.quota_windows)
                 per.quota_metrics = copy.deepcopy(previous_per.quota_metrics)
                 per.quota_statistics = copy.deepcopy(previous_per.quota_statistics)
@@ -1182,7 +1182,7 @@ class TokenData:
                 successes += 1
             if quota_error:
                 data.refresh_error_codes = (quota_error.code,)
-                if kept_cached_quota:
+                if kept_cached_quota and quota_error.code in _TRANSIENT_QUOTA_ERROR_CODES:
                     # 静默降级只影响界面；日志仍保留失败证据用于诊断。
                     config_manager.logger().warning(
                         "Fetch failed: provider=%s source=%s code=%s; retained cached quota",

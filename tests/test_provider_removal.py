@@ -101,10 +101,10 @@ def test_card_buttons_remain_in_card_bottom_right_after_scroll_and_search(state,
         assert rect.contains(button.geometry())
         assert button.x() > rect.center().x()
         assert button.y() > rect.center().y()
-    picker.search.setText("gemini")
+    picker.search.setText("nayuto")
     APP.processEvents()
-    assert list(picker.remove_buttons) == ["gemini"]
-    assert picker.grid.visualItemRect(picker.grid.item(0)).contains(picker.remove_buttons["gemini"].geometry())
+    assert list(picker.remove_buttons) == ["nayuto"]
+    assert picker.grid.visualItemRect(picker.grid.item(0)).contains(picker.remove_buttons["nayuto"].geometry())
 
 
 def test_focusing_offscreen_delete_button_reveals_its_card_and_escape_cancels(state, monkeypatch):

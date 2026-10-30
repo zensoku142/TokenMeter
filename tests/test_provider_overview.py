@@ -83,12 +83,12 @@ def test_empty_unknown_and_mixed_currencies_do_not_invent_values():
     page.set_data({})
     assert not page.empty.isHidden()
     page.set_data({"codex": None, "deepseek": snapshot("deepseek", balance_cny=12),
-                   "openrouter": snapshot("openrouter", currency="USD", today_cost_cny=0.3)})
+                   "nayuto": snapshot("nayuto", currency="USD", today_cost_cny=0.3)})
     assert "尚未采集" in texts(page.cards["codex"])
     assert "0%" not in texts(page.cards["codex"])
     assert "¥12.00" in texts(page.cards["deepseek"])
-    assert "$0.30" in texts(page.cards["openrouter"])
-    assert "¥" not in texts(page.cards["openrouter"])
+    assert "$0.30" in texts(page.cards["nayuto"])
+    assert "¥" not in texts(page.cards["nayuto"])
 
 
 def test_tightest_quota_first_and_hostile_titles_are_plain_text():
@@ -142,8 +142,8 @@ def test_provider_with_unlimited_metric_is_not_shown_as_unavailable():
     from api.providers.base import QuotaMetric
 
     page = ProviderOverview()
-    page.set_data({"copilot": snapshot("copilot", quota_metrics=[QuotaMetric("Chat", "不限量", value_kind="unlimited")])})
-    assert "不限量" in texts(page.cards["copilot"])
+    page.set_data({"claude": snapshot("claude", quota_metrics=[QuotaMetric("Chat", "不限量", value_kind="unlimited")])})
+    assert "不限量" in texts(page.cards["claude"])
 
 
 def test_data_refresh_does_not_reapply_whole_overview_styles(monkeypatch):

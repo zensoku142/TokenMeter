@@ -23,31 +23,37 @@
 
 <p align="center">
   <strong>Windows AI Token 用量、費用與餘額監控工具</strong><br>
-  <sub>Codex · Claude · Cursor · Copilot · Gemini · DeepSeek · MiMo · OpenRouter · Kimi · MiniMax · ElevenLabs · GLM · Antigravity · NayutoAI</sub>
+  <sub>Codex · Claude · Cursor · DeepSeek · MiMo · NayutoAI</sub>
 </p>
 
 <p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 額度、DeepSeek 今日分時與餘額、懸浮球、VPet 與鯨魚娘桌寵（示範資料）" width="960"></a>
+  <a href="site/assets/panel-light.png"><img src="site/assets/panel-light.png" alt="TokenMeter Codex panel (demo data)" width="960"></a><br>
+  <a href="site/assets/panel-token-speed.png"><img src="site/assets/panel-token-speed.png" alt="Token speed candlestick chart (Chinese UI, demo data)" width="960"></a><br>
+  <img src="site/assets/light-ring.png" alt="Light ring displaying three providers (demo data)" width="58">
+  <img src="site/assets/pet-bailong.png" alt="Xiaolong desktop pet" width="220">
 </p>
 
 真實元件截圖，介面為簡體中文，使用示範資料。[查看原圖與來源](docs/images/readme/README.md)。
 
-TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 15 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
+TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 6 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。
 
-目前版本：**v1.16.7** · 桌寵 **v0.2.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+目前版本：**v1.17.0** · 桌寵 **v0.3.0** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+
+
 
 ## 功能
 
+- **CC Switch Codex 多帳號**：在「設定 → 多帳戶」自動發現並更新 CC Switch 管理的 Codex OAuth 帳號，續期與查詢由 CC Switch 處理；暫時斷線時保留快取額度。本機橋接依賴 CC Switch 內部命令，版本變動可能需要適配；若 CC Switch 已在未啟用橋接的情況下執行，請先從系統匣完全結束一次，再重新整理。
+- **輕底細環與 Codex 重設動態**：細環可同時顯示多平台與多帳號，支援拖曳排序及自訂環色。懸停詳情可顯示社群公開重設消息並選擇開啟提醒；公開消息不代表個人帳號已重設。
 - **Codex 今日分時**：依本機工作階段日誌的記錄時間顯示快取命中、新增輸入和輸出 Token，支援模型提示、歷史日期與增量更新。僅包含所選目錄的本機記錄，帳號歸屬未知，不代表訂閱額度或實際帳單。
 - **Token 速度**：在 Codex 和 NayutoAI 面板依模型與時間查看輸出速度。速度根據有效請求的輸出 Token 與耗時估算，包含首字等待；資料不足時顯示未知。
-- **額度與餘額**：支援 Codex、Claude Code、Cursor、GitHub Copilot、GLM / Z.ai、Kimi Coding、MiniMax Token Plan、Gemini CLI 和 ElevenLabs 額度；DeepSeek / MiMo / NayutoAI 用量；OpenRouter 金鑰預算與費用；Moonshot / Kimi API 餘額。Antigravity CLI 讀取明確設定的狀態列快照。缺少的欄位顯示不可用，不混合幣別或預算範圍。
+- **額度與餘額**：支援 Codex、Claude Code、Cursor 額度；DeepSeek / MiMo / NayutoAI 用量與餘額。缺少的欄位顯示不可用，不混合積分、幣別與 Token。
 - **總覽與多帳戶**：總覽可見時自動更新已設定平台。「設定 → 多帳戶」獨立保存連線、憑據和監控狀態，不覆蓋預設連線或 CLI 登入。兩個已設定平台也可在置頂小看板中常駐。
 - **本機統計與 Excel**：讀取 Codex（含封存）與 Claude 本機日誌，先顯示快取，再背景更新。支援日期、專案、模型篩選、每日比較、圖表縮放，並匯出 `.xlsx` 摘要、明細與統計口徑。本機日誌無法確認帳戶歸屬，不代表訂閱額度或實際帳單；可選擇已可存取的 WSL 目錄，不啟動 WSL。
 - **平台管理**：離線品牌圖示、搜尋、收藏及移除應用程式保存的連線；保留 CLI 登入與歷史記錄。
 - **更新與提醒**：失敗退避、離線快取、可選低額度與恢復提醒、消耗預測及靜默時段。預測需要同週期至少 10 分鐘的有效樣本；恢復提醒需先開啟低額度提醒，並以實際更新確認。提醒狀態可跨重啟保留。
-- **桌面顯示**：可拖曳懸浮球、滾輪縮放、貼邊隱藏、系統匣、明暗與系統主題、顏色與透明度、五種語言、自動更新和選用多角色桌寵。主程式 v1.16.2 搭配桌寵 v0.2.2 可同步額度視窗主題。
+- **桌面顯示**：可拖曳懸浮球、滾輪縮放、貼邊隱藏、系統匣、明暗與系統主題、顏色與透明度、五種語言、自動更新和選用多角色桌寵。主程式 v1.17.0 搭配桌寵 v0.3.0 可同步額度視窗主題。
 
-[平台設定與限制](docs/provider-support-research-2026-09-05.md) · [Kimi / MiniMax / ElevenLabs](docs/codexbar-provider-coverage-2026-09-05.md) · [Gemini / Claude](docs/gemini-quota-2026-09-05.md) · [Antigravity 狀態列](docs/antigravity-statusline-2026-09-07.md)
 
 ## 安裝與設定
 
@@ -64,7 +70,7 @@ TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提�
 主安裝程式不含桌寵。在「設定 → 桌寵」下載擴充套件，完整安裝後再啟用；無需另裝 .NET。啟用後預設由桌寵取代懸浮球；開啟「同時顯示懸浮球」可讓兩者一起顯示，設定自動儲存並立即生效。停用或解除安裝桌寵後恢復球體，不影響帳戶與面板。
 
 - 支援輕觸互動、拖曳縮放、自主活動和貼邊額度氣泡；按兩下氣泡可開啟用量面板。
-- 啟動前可選擇 VPet 預設角色或[鯨魚娘](https://github.com/PC2005-cloud/dsh-pet)；設定頁提供角色縮圖與可安裝的相容版本。
+- 啟動前可選擇 VPet、[鯨魚娘](https://github.com/PC2005-cloud/dsh-pet)或[小龍娘](pet_host/bailong/README.md)；小龍娘完整接入 35 段動畫，共用現有桌寵宿主，不包含 AI 對話或歷史會話。設定頁提供角色縮圖與可安裝的相容版本。
 - 右鍵選單可設定氣泡顯示方式，以及預設關閉的喝水、休息提醒；桌寵選單目前為簡體中文。
 - 精簡版不含餵食、工作、養成、Steam 或連線功能。擴充套件可獨立更新，主程式結束時桌寵一同結束。
 
@@ -120,7 +126,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.16.7`，選用桌寵擴充套件 `0.2.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.17.0`，選用桌寵擴充套件 `0.3.0`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

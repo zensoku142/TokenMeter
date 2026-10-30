@@ -13,7 +13,14 @@ from api.deepseek_pricing import (
     parse_time_text,
 )
 from api.http import is_https_url
-from config.defaults import DEFAULT_CONFIG, FIELD_META, OFFICIAL_HOSTS, PROVIDER_IDS, SECRET_KEYS
+from config.defaults import (
+    DEFAULT_CONFIG,
+    FIELD_META,
+    OFFICIAL_HOSTS,
+    PROVIDER_IDS,
+    REMOVED_PROVIDER_IDS,
+    SECRET_KEYS,
+)
 
 
 def validate_value(key: str, value: Any) -> Any:
@@ -82,6 +89,13 @@ def validate_value(key: str, value: Any) -> Any:
             if provider_id not in normalized_providers:
                 normalized_providers.append(provider_id)
         return normalized_providers
+    if kind == "profile_list":
+        if not isinstance(value, (list, tuple)) or any(
+            not isinstance(item, str) or len(item) != 32
+            or any(char not in "0123456789abcdef" for char in item) for item in value
+        ):
+            raise ValueError(f"{key} 必须是账户档案 ID 列表")
+        return list(dict.fromkeys(value))
     if kind == "weekday_list":
         if isinstance(value, str):
             value = [item.strip() for item in value.split(",") if item.strip()]
@@ -99,8 +113,29 @@ def validate_value(key: str, value: Any) -> Any:
 
 
 def validate_config(values: dict[str, Any]) -> dict[str, Any]:
+    values = dict(values)
+    # 合并旧的展示选择与后台采集选择，升级后不丢失已勾选的平台和账号。
+    for legacy, target in (("FLOATING_RING_PROVIDER_IDS", "BACKGROUND_PROVIDER_IDS"),
+                           ("FLOATING_RING_PROFILE_IDS", "BACKGROUND_PROFILE_IDS")):
+        old = values.pop(legacy, None)
+        if isinstance(old, (list, tuple)):
+            current = values.get(target, [])
+            if isinstance(current, str):
+                current = [item.strip() for item in current.split(",") if item.strip()]
+            if isinstance(current, (list, tuple)):
+                values[target] = list(dict.fromkeys([*current, *old]))
     merged = DEFAULT_CONFIG.copy()
     merged.update(values)
+    # 升级时移除已下架来源，避免旧选择或后台监控列表导致整份有效配置加载失败。
+    if str(merged["ACTIVE_PROVIDER"]).strip().lower() in REMOVED_PROVIDER_IDS:
+        merged["ACTIVE_PROVIDER"] = DEFAULT_CONFIG["ACTIVE_PROVIDER"]
+    for key in ("BACKGROUND_PROVIDER_IDS", "DISABLED_PROVIDER_IDS"):
+        entries = merged[key]
+        if isinstance(entries, str):
+            entries = [entry.strip() for entry in entries.split(",") if entry.strip()]
+        if isinstance(entries, (list, tuple)):
+            merged[key] = [entry for entry in entries
+                           if str(entry).strip().lower() not in REMOVED_PROVIDER_IDS]
     for key in list(merged):
         merged[key] = validate_value(key, merged[key])
     if merged["UI_SYNC_ACCENT_COLOR"]:

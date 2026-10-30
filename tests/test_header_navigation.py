@@ -117,7 +117,7 @@ def test_header_uses_only_brand_shortcuts_with_accessible_names(panel):
         assert not button.icon().isNull()
 
 
-@pytest.mark.parametrize("provider_id", ["deepseek", "minimax"])
+@pytest.mark.parametrize("provider_id", ["deepseek", "nayuto"])
 def test_current_provider_is_visible_and_checked_even_when_not_pinned(panel, provider_id):
     if provider_id != "deepseek":
         panel.update_data(provider_data(provider_id))
@@ -234,7 +234,7 @@ def test_open_details_replaces_same_account_rows_without_mixing_old_windows(pane
 
 
 @pytest.mark.parametrize("provider_id,account", [
-    ("gemini", "synthetic-account"), ("claude", "other-synthetic-account"),
+    ("nayuto", "synthetic-account"), ("claude", "other-synthetic-account"),
 ])
 def test_provider_or_account_change_closes_old_details_and_reopens_current_data(panel, provider_id, account):
     panel.update_data(provider_data())

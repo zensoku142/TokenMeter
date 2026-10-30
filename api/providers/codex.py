@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import threading
 import time
@@ -16,6 +17,7 @@ from typing import Any, ClassVar
 
 import requests
 
+from api import cc_switch
 from api.http import HttpsSession
 from api.providers.base import (
     ExactMinuteUsage,
@@ -97,10 +99,15 @@ class CodexProvider(Provider):
 
     @property
     def local_usage_scope(self) -> str:
+        if self.config_get("CODEX_CC_SWITCH_ACCOUNT_ID", ""):
+            return ""
         # 日志没有可靠的账号归属，按目录和时区隔离，不能混入官方账号账单。
         return f"{self.id}:local:{local_cache_scope({self.id: self._home()})}"
 
     def exact_minute_usage(self) -> ExactMinuteUsage | None:
+        if self.config_get("CODEX_CC_SWITCH_ACCOUNT_ID", ""):
+            # CC 只提供账号额度，共享 CLI 日志无法证明属于哪个托管账号。
+            return None
         root = self._home()
         if not root.is_dir():
             return None
@@ -176,6 +183,8 @@ class CodexProvider(Provider):
             return {}
 
     def is_configured(self) -> bool:
+        if account_id := self.config_get("CODEX_CC_SWITCH_ACCOUNT_ID", ""):
+            return bool(cc_switch.account_identity(account_id))
         try:
             self._credentials()
             return True
@@ -183,6 +192,8 @@ class CodexProvider(Provider):
             return False
 
     def snapshot_identity(self) -> str:
+        if account_id := self.config_get("CODEX_CC_SWITCH_ACCOUNT_ID", ""):
+            return cc_switch.account_identity(account_id)
         try:
             access_token, account_id, claims = self._credentials()
         except (OSError, ValueError, json.JSONDecodeError):
@@ -670,6 +681,8 @@ class CodexProvider(Provider):
         return active_until
 
     def fetch_quota(self) -> tuple[ProviderQuota | None, FetchError | None]:
+        if account_id := self.config_get("CODEX_CC_SWITCH_ACCOUNT_ID", ""):
+            return self._fetch_cc_switch_quota(account_id)
         try:
             access_token, account_id, claims = self._credentials()
         except (OSError, ValueError, json.JSONDecodeError):
@@ -779,6 +792,55 @@ class CodexProvider(Provider):
             weekly_activity_source=self._weekly_activity_data_source,
             statistics_source=self._statistics_data_source,
         ), None
+
+    def _fetch_cc_switch_quota(self, account_id: str) -> tuple[ProviderQuota | None, FetchError | None]:
+        try:
+            payload = cc_switch.fetch_codex_quota(account_id)
+        except RuntimeError as exc:
+            code = str(exc)
+            if code == "CC_SWITCH_QUERY_TIMEOUT":
+                return None, FetchError("NETWORK_TIMEOUT", "CC Switch", "CC Switch 额度查询超时，请稍后重试")
+            if code == "CC_SWITCH_NOT_CONFIGURED":
+                return None, FetchError("NOT_CONFIGURED", "CC Switch", "CC Switch 账号未配置，请检查 CC Switch 中的账号设置")
+            if code == "CC_SWITCH_RESTART_REQUIRED":
+                return None, FetchError("NETWORK_ERROR", "CC Switch", "请从托盘退出 CC Switch 后刷新，程序将自动重新连接")
+            # 断连不代表账号被删除；按临时错误保留同账号的上次成功额度。
+            return None, FetchError("NETWORK_ERROR", "CC Switch", "CC Switch 额度查询失败，请在 CC Switch 中检查登录和网络")
+        if payload.get("success") is not True:
+            expired = payload.get("credentialStatus") in {"expired", "refresh_pending"}
+            return None, FetchError(
+                "AUTH_EXPIRED" if expired else "SERVER_ERROR", "CC Switch",
+                "请在 CC Switch 中重新登录该账号" if expired else "CC Switch 未返回可用额度，请检查账号状态",
+            )
+        windows = []
+        try:
+            tiers = payload["tiers"]
+            if not isinstance(tiers, list):
+                raise ValueError
+            for index, tier in enumerate(tiers):
+                used = tier["utilization"]
+                if (isinstance(used, bool) or not isinstance(used, (int, float))
+                        or not math.isfinite(used) or not 0 <= used <= 100):
+                    raise ValueError
+                name = str(tier["name"])
+                minutes = {"five_hour": 300, "seven_day": 10080}.get(name)
+                title = self._window_title(minutes * 60) if minutes else name
+                reset = tier.get("resetsAt")
+                resets_at = datetime.fromisoformat(reset.replace("Z", "+00:00")) if reset else None
+                if resets_at is not None and resets_at.utcoffset() is None:
+                    raise ValueError
+                windows.append(QuotaWindow(f"cc-switch-{index}", title, float(used),
+                                           resets_at=resets_at, window_minutes=minutes))
+            if not windows:
+                raise ValueError
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None, FetchError("INVALID_RESPONSE", "CC Switch", "CC Switch 额度数据结构已变化")
+        credits = payload.get("creditsBalance")
+        metrics = ()
+        if (isinstance(credits, (int, float)) and not isinstance(credits, bool)
+                and math.isfinite(credits) and credits >= 0):
+            metrics = (QuotaMetric("可用 Credits", str(credits)),)
+        return ProviderQuota(windows=tuple(windows), metrics=metrics), None
 
 
 __all__ = ["CodexProvider"]
