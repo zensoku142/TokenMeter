@@ -228,24 +228,6 @@ def test_pet_release_builds_only_extension_and_cannot_replace_main_latest():
     assert "dist-pet/extension.json" in workflow and "dist-pet/SHA256SUMS.txt" in workflow
 
 
-def test_manual_pet_rebuild_guards_existing_tag_until_after_build():
-    workflow = (ROOT / ".github/workflows/pet-release.yml").read_text(encoding="utf-8")
-    assert "workflow_dispatch:" in workflow and "replace_existing:" in workflow
-    assert "Confirm replacement of the existing pet release" in workflow
-    assert "Selected branch changed during the pet build" in workflow
-    assert "Pet release tag changed during the build" in workflow
-    assert workflow.index("- name: Test pet packaging and update lifecycle") < workflow.index(
-        "- name: Build independent pet extension"
-    ) < workflow.index("- name: Verify pet release files") < workflow.index(
-        "- name: Check installed pet resource compatibility"
-    ) < workflow.index(
-        "- name: Move existing pet tag after validation"
-    ) < workflow.index(
-        "- name: Publish pet release"
-    )
-    assert "tag_name: ${{ steps.metadata.outputs.tag }}" in workflow
-
-
 def test_workflows_pin_actions_to_commit_shas():
     # 可变标签会让发布任务在无代码变更时执行不同的第三方代码，因此只接受完整提交 SHA。
     workflows = list((ROOT / ".github" / "workflows").glob("*.yml"))

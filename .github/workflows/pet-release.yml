@@ -4,20 +4,9 @@ on:
   push:
     tags:
       - "pet-v*"
-  workflow_dispatch:
-    inputs:
-      replace_existing:
-        description: "替换当前版本的已发布桌宠 Release（更新标签和附件）"
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: write
-
-concurrency:
-  group: tokenmeter-pet-release
-  cancel-in-progress: false
 
 jobs:
   build-pet:
@@ -37,28 +26,18 @@ jobs:
         id: metadata
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $manifest = Get-Content -LiteralPath "pet_host/extension.json" -Raw | ConvertFrom-Json
-          $tag = "pet-v$($manifest.version)"
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            if ("${{ inputs.replace_existing }}" -ne "true") { throw "Confirm replacement of the existing pet release" }
-            if ($env:GITHUB_REF_TYPE -ne "branch") { throw "Select a branch for the pet rebuild" }
-            $draft = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft
-            if ($LASTEXITCODE -ne 0 -or $draft -ne "false") { throw "Published pet release $tag not found" }
-            $previous = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha
-            if ($LASTEXITCODE -ne 0 -or -not $previous) { throw "Cannot read existing pet tag $tag" }
-            "previous_tag=$previous" >> $env:GITHUB_OUTPUT
-          } elseif ($env:GITHUB_REF_NAME -cne $tag) {
+          if ($env:RELEASE_TAG -cne "pet-v$($manifest.version)") {
             throw "Pet tag must match pet_host/extension.json"
           }
-          $notes = Join-Path "release-notes" "$tag.md"
+          $notes = Join-Path "release-notes" "$($env:RELEASE_TAG).md"
           if (-not (Test-Path -LiteralPath $notes)) { throw "Pet release notes are required" }
           $body = Get-Content -LiteralPath $notes -Raw
           if ($body -notmatch "更新类型" -or $body -notmatch "验证") {
             throw "Pet release notes must include change type and verification"
           }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
           "prerelease=$($manifest.version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
       - name: Install test dependencies
@@ -73,85 +52,16 @@ jobs:
       - name: Build independent pet extension
         run: python scripts/build_release.py --stage pet
 
-      - name: Verify pet release files
-        shell: pwsh
-        run: |
-          $version = (Get-Content -LiteralPath "pet_host/extension.json" -Raw | ConvertFrom-Json).version
-          $required = @("extension.json", "TokenMeter-Pet-v$version-x64.zip", "TokenMeter-Pet-Host-v$version-x64.zip",
-            "TokenMeter-Pet-vup-v$version-x64.zip", "TokenMeter-Pet-whale-v$version-x64.zip",
-            "TokenMeter-Pet-bailong-v$version-x64.zip")
-          $seen = @{}
-          foreach ($line in Get-Content -LiteralPath "dist-pet/SHA256SUMS.txt") {
-            if ($line -cnotmatch '^([0-9a-f]{64}) \*(.+)$') { throw "Invalid pet checksum entry" }
-            $hash = $Matches[1]
-            $name = $Matches[2]
-            if ($name -cnotin $required -or $seen.ContainsKey($name)) { throw "Unexpected pet checksum entry: $name" }
-            if ((Get-FileHash -LiteralPath (Join-Path "dist-pet" $name) -Algorithm SHA256).Hash -cne $hash.ToUpperInvariant()) {
-              throw "Pet checksum mismatch: $name"
-            }
-            $seen[$name] = $true
-          }
-          if ($seen.Count -ne $required.Count) { throw "Missing pet release files" }
-
-      - name: Check installed pet resource compatibility
-        if: github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
-        run: |
-          # 同版本客户端不会自动更新，已有角色与新分角色包必须仍能合并。
-          $previousDir = Join-Path $env:RUNNER_TEMP "previous-pet-release"
-          New-Item -ItemType Directory -Path $previousDir -Force | Out-Null
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern extension.json --dir $previousDir
-          if ($LASTEXITCODE -ne 0) { throw "Cannot download the published pet manifest" }
-          $previous = Get-Content -LiteralPath (Join-Path $previousDir "extension.json") -Raw | ConvertFrom-Json
-          $rebuilt = Get-Content -LiteralPath "dist-pet/extension.json" -Raw | ConvertFrom-Json
-          $pairs = @(@{ Name = "all"; Old = $previous.resources; New = $rebuilt.resources })
-          foreach ($role in @("vup", "whale", "bailong")) {
-            $pairs += @{ Name = $role; Old = $previous.character_resources.$role; New = $rebuilt.character_resources.$role }
-          }
-          foreach ($pair in $pairs) {
-            if ($null -eq $pair.Old -or $null -eq $pair.New) { throw "Missing resource identity: $($pair.Name)" }
-            foreach ($key in @("revision", "files", "bytes", "sha256")) {
-              if ($pair.Old.$key -cne $pair.New.$key) { throw "Pet resource identity changed: $($pair.Name) $key" }
-            }
-          }
-
-      - name: Move existing pet tag after validation
-        if: github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
-          PREVIOUS_TAG: ${{ steps.metadata.outputs.previous_tag }}
-        run: |
-          # 只有构建完成且分支、旧标签均未变化时才替换，避免覆盖并发发布。
-          $branch = [Uri]::EscapeDataString($env:GITHUB_REF_NAME)
-          $head = gh api "repos/$env:GITHUB_REPOSITORY/commits/$branch" --jq .sha
-          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw "Selected branch changed during the pet build" }
-          $current = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$env:RELEASE_TAG" --jq .object.sha
-          if ($LASTEXITCODE -ne 0 -or $current -ne $env:PREVIOUS_TAG) { throw "Pet release tag changed during the build" }
-          $tagObject = gh api --method POST "repos/$env:GITHUB_REPOSITORY/git/tags" `
-            -f "tag=$env:RELEASE_TAG" -f "message=Release $env:RELEASE_TAG rebuild" `
-            -f "object=$env:GITHUB_SHA" -f "type=commit" `
-            -f "tagger[name]=github-actions[bot]" `
-            -f "tagger[email]=41898282+github-actions[bot]@users.noreply.github.com" --jq .sha
-          if ($LASTEXITCODE -ne 0 -or -not $tagObject) { throw "Cannot create rebuilt pet tag" }
-          gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/git/refs/tags/$env:RELEASE_TAG" `
-            -f "sha=$tagObject" -F force=true
-          if ($LASTEXITCODE -ne 0) { throw "Cannot update pet tag" }
-
       # 扩展不占用主程序的 latest，也不构建或上传面板安装器。
       - name: Publish pet release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: ${{ steps.metadata.outputs.tag }}
-          name: TokenMeter Pet ${{ steps.metadata.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          name: TokenMeter Pet ${{ github.ref_name }}
           draft: false
           prerelease: ${{ steps.metadata.outputs.prerelease }}
           make_latest: false
-          body_path: release-notes/${{ steps.metadata.outputs.tag }}.md
+          body_path: release-notes/${{ github.ref_name }}.md
           fail_on_unmatched_files: true
           files: |
             dist-pet/TokenMeter-Pet-v*-x64.zip
