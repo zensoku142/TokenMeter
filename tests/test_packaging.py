@@ -237,6 +237,8 @@ def test_manual_pet_rebuild_guards_existing_tag_until_after_build():
     assert workflow.index("- name: Test pet packaging and update lifecycle") < workflow.index(
         "- name: Build independent pet extension"
     ) < workflow.index("- name: Verify pet release files") < workflow.index(
+        "- name: Check installed pet resource compatibility"
+    ) < workflow.index(
         "- name: Move existing pet tag after validation"
     ) < workflow.index(
         "- name: Publish pet release"
