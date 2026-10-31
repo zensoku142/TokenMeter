@@ -19,6 +19,9 @@ def cc_accounts(tmp_path, monkeypatch):
     path = tmp_path / "cc-switch.db"
     monkeypatch.setattr(cc_switch, "database_path", lambda: path)
     monkeypatch.setattr(config_manager, "CONFIG_DIR", tmp_path / "tokenmeter")
+    # CONFIG_PATH is initialized separately; isolate it too so clean CI never reads real user settings.
+    monkeypatch.setattr(config_manager, "CONFIG_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(config_manager, "LEGACY_CONFIG_PATH", tmp_path / "legacy-config.py")
     monkeypatch.setattr(cc_switch, "_retry_after", 0)
     with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE providers (app_type, name, meta, sort_index, created_at)")
