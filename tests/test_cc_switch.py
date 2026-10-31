@@ -74,6 +74,151 @@ def test_profile_import_is_idempotent_and_preserves_default_connection(cc_accoun
     assert "token" not in json.dumps(store.load_profiles()).lower()
 
 
+@pytest.mark.parametrize("key", ["ACCOUNT_PROFILES_ENABLED", "CC_SWITCH_ENABLED"])
+def test_disabled_cc_preserves_profiles_without_importing_or_connecting(cc_accounts, monkeypatch, key):
+    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    store.import_cc_switch_profiles()
+    profiles = store.load_profiles()
+    manual = store.save_profile("codex", "Manual", {"HOME": "C:/manual"})
+    config_manager._config[key] = False
+    discover = Mock(wraps=cc_switch.codex_accounts)
+    endpoint = Mock()
+    launch = Mock()
+    monkeypatch.setattr(cc_switch, "codex_accounts", discover)
+    monkeypatch.setattr(cc_switch, "_endpoint", endpoint)
+    monkeypatch.setattr(cc_switch.subprocess, "Popen", launch)
+    assert store.import_cc_switch_profiles() == 0
+    discover.assert_not_called()
+    assert store.load_profiles(enabled_only=True) == ([manual] if key == "CC_SWITCH_ENABLED" else [])
+    assert store.load_profiles() == profiles + [manual]
+    with pytest.raises(RuntimeError, match="CC_SWITCH_DISABLED"):
+        cc_switch.connect()
+    endpoint.assert_not_called()
+    launch.assert_not_called()
+    config_manager._config[key] = True
+    assert store.import_cc_switch_profiles() == 0
+    assert store.load_profiles(enabled_only=True) == profiles + [manual]
+
+
+@pytest.mark.parametrize("key", ["ACCOUNT_PROFILES_ENABLED", "CC_SWITCH_ENABLED"])
+def test_disabled_cc_does_not_start_background_work_on_launch(cc_accounts, monkeypatch, key):
+    from ui.qt_update import AppUpdateController
+    from ui.qt_widget import FloatingWidget
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, key: False})
+    monkeypatch.setattr(FloatingWidget, "refresh", Mock())
+    monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
+    monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)
+    pool = Mock()
+    monkeypatch.setattr("ui.qt_widget.QThreadPool.globalInstance", lambda: pool)
+    widget = FloatingWidget()
+    try:
+        widget._periodic_background_refresh()
+        assert store.load_profiles() == []
+        assert widget._vpet_profile_in_flight == {}
+        pool.start.assert_not_called()
+    finally:
+        widget._closed = True
+        widget.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize("key", ["ACCOUNT_PROFILES_ENABLED", "CC_SWITCH_ENABLED"])
+def test_disabling_cc_drops_queued_work_and_late_results(cc_accounts, monkeypatch, key):
+    from ui.account_profiles import AccountProfilesPage
+    from ui.qt_update import AppUpdateController
+    from ui.qt_widget import FloatingWidget
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(FloatingWidget, "refresh", Mock())
+    monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
+    monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)
+    tasks = []
+    pool = Mock()
+    pool.start.side_effect = tasks.append
+    monkeypatch.setattr("ui.qt_widget.QThreadPool.globalInstance", lambda: pool)
+    fetch = Mock()
+    monkeypatch.setattr("ui.qt_widget._fetch_tokens_safely", fetch)
+    widget = FloatingWidget()
+    try:
+        page = AccountProfilesPage(monitor=widget)
+        profiles = store.load_profiles()
+        assert len(tasks) == 2 and len(page.cards) == 2
+        config_manager._config[key] = False
+        page.reload_profiles()
+        widget._on_vpet_profiles_changed()
+        for task in tasks:
+            task.run()
+        app.processEvents()
+        fetch.assert_not_called()
+        # 已实际发出的请求也可能迟到；关闭的账号不能重新进入缓存或展示列表。
+        first = profiles[0]
+        widget._accept_profile_result(first["id"], first["revision"], TokenData(
+            account_key=TokenData.account_key_for_config(store.profile_config(first)), last_success_at=datetime.now()))
+        assert not widget._vpet_profile_results and not widget._vpet_profiles
+        assert not widget._vpet_profile_in_flight and not page.cards
+        assert not any(source["id"].startswith("profile:") for source in widget._vpet_source_options)
+        config_manager._config[key] = True
+        widget._on_vpet_profiles_changed()
+        page.reload_profiles()
+        assert len(tasks) == 4 and len(page.cards) == 2
+        assert store.load_profiles() == profiles
+    finally:
+        widget._closed = True
+        widget.deleteLater()
+        app.processEvents()
+
+
+def test_settings_switches_persist_and_restore_profile_selections(cc_accounts, monkeypatch):
+    from ui.qt_settings import SettingsWindow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(config_manager, "_read_credential", lambda _key: "")
+    monkeypatch.setattr(config_manager, "_write_credential", lambda _key, _value: None)
+    monkeypatch.setattr("ui.qt_settings.sync_autostart", Mock())
+    config_manager.CONFIG_DIR.mkdir()
+    monkeypatch.setattr(config_manager, "CONFIG_PATH", config_manager.CONFIG_DIR / "config.json")
+    store.import_cc_switch_profiles()
+    manual = store.save_profile("codex", "Manual", {"HOME": "C:/manual"})
+    profiles = store.load_profiles()
+    selected = [profile["id"] for profile in profiles]
+    config_manager.save_config({"BACKGROUND_PROFILE_IDS": selected, "CODEX_HOME": "C:/default"})
+    window = SettingsWindow()
+    window.open_account_profiles()
+    window.cc_switch_check.click()
+    window.flush_pending_saves()
+    assert not config_manager.get("CC_SWITCH_ENABLED")
+    assert set(window.account_profiles_page.cards) == {manual["id"]}
+    assert not window.ring_profile_checks[profiles[0]["id"]].isEnabled()
+    assert window.ring_profile_checks[manual["id"]].isEnabled()
+    window.account_profiles_check.click()
+    window.flush_pending_saves()
+    assert not window.cc_switch_check.isEnabled()
+    assert not window.account_profiles_page.cards
+    assert not window.account_profiles_page.isEnabled()
+    saved = json.loads(config_manager.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert saved["CC_SWITCH_ENABLED"] is saved["ACCOUNT_PROFILES_ENABLED"] is False
+    assert saved["BACKGROUND_PROFILE_IDS"] == selected
+    reopened = SettingsWindow()
+    reopened.open_account_profiles()
+    assert not reopened.account_profiles_check.isChecked()
+    assert not reopened.cc_switch_check.isChecked()
+    reopened.account_profiles_check.click()
+    reopened.flush_pending_saves()
+    assert set(reopened.account_profiles_page.cards) == {manual["id"]}
+    reopened.cc_switch_check.click()
+    reopened.flush_pending_saves()
+    assert set(reopened.account_profiles_page.cards) == set(selected)
+    assert store.load_profiles() == profiles
+    assert config_manager.get("BACKGROUND_PROFILE_IDS") == selected
+    assert config_manager.get("CODEX_HOME") == "C:/default"
+    window._autosave_ready = reopened._autosave_ready = False
+    app.processEvents()
+
+
 @pytest.mark.parametrize("url,ws,title", [
     ("https://example.com", "ws://127.0.0.1:9222/x", "CC Switch"),
     ("http://tauri.localhost", "ws://example.com:9222/x", "CC Switch"),

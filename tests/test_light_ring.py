@@ -428,7 +428,7 @@ def test_ring_profile_selection_reuses_account_scoped_tasks(monkeypatch):
     widget._sync_vpet_usage = Mock()
     widget._notify_low_quota = Mock()
     monkeypatch.setattr("ui.qt_widget.profile_store.profile_config", lambda profile: {"ACTIVE_PROVIDER": "codex", "_ACCOUNT_PROFILE_ID": profile["id"]})
-    monkeypatch.setattr("ui.qt_widget.profile_store.load_profiles", lambda: profiles)
+    monkeypatch.setattr("ui.qt_widget.profile_store.load_profiles", lambda **_kwargs: profiles)
     monkeypatch.setattr(TokenData, "account_key_for_config", lambda values: values["_ACCOUNT_PROFILE_ID"])
     widget._refresh_vpet_bound_sources()
     assert widget._thread_pool.start.call_count == 2

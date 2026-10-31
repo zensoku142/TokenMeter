@@ -110,6 +110,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ACTIVE_PROVIDER": "deepseek",
     "BACKGROUND_PROVIDER_IDS": [],
     "BACKGROUND_PROFILE_IDS": [],
+    # 旧版本会自动采集档案和 CC；默认开启，避免升级后改变已有连接行为。
+    "ACCOUNT_PROFILES_ENABLED": True,
+    "CC_SWITCH_ENABLED": True,
     "QUOTA_FORECAST_ENABLED": False,
     "QUOTA_RECOVERY_ALERT_ENABLED": False,
     "QUOTA_QUIET_ENABLED": False,
@@ -170,6 +173,8 @@ FIELD_META: dict[str, dict[str, Any]] = {
     "EDGE_HIDE_ENABLED": {"kind": "bool"},
     "FLOATING_STYLE": {"kind": "choice", "choices": ("ball", "light_ring")},
     "BACKGROUND_PROFILE_IDS": {"kind": "profile_list"},
+    "ACCOUNT_PROFILES_ENABLED": {"kind": "bool"},
+    "CC_SWITCH_ENABLED": {"kind": "bool"},
     "FLOATING_RING_FOLLOW_THEME": {"kind": "bool"},
     "FLOATING_RING_COLOR": {"kind": "color"},
     "CODEX_RESET_ALERT_ENABLED": {"kind": "bool"},

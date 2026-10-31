@@ -623,6 +623,16 @@ class SettingsWindow(QDialog):
         self.account_profiles_page = None
         self._profiles_layout = self._add_settings_page("多账户", "独立管理同一平台的多个连接，不修改默认连接或 CLI 登录。")
         self._profiles_tab_index = self.tabs.count() - 1
+        self.account_profiles_check = _SettingsSwitch("启用多账户")
+        self._add_switch_row(
+            self._profiles_layout, "启用多账户",
+            "关闭后停止所有账户档案的采集与展示，保留已有配置。", self.account_profiles_check,
+        )
+        self.cc_switch_check = _SettingsSwitch("连接 CC Switch")
+        self._add_switch_row(
+            self._profiles_layout, "连接 CC Switch",
+            "自动发现并采集 CC Switch 账号；关闭后停止连接和自动启动，保留账号配置。", self.cc_switch_check,
+        )
 
         appearance_layout = self._add_settings_page("外观", "调整主题与面板外观，修改立即应用并保存。")
 
@@ -1099,6 +1109,20 @@ class SettingsWindow(QDialog):
         if profile_id:
             self.account_profiles_page.show_details(profile_id)
 
+    def _sync_profile_controls(self) -> None:
+        self.cc_switch_check.setEnabled(self.account_profiles_check.isChecked())
+        try:
+            profiles = profile_store.load_profiles()
+        except (OSError, ValueError):
+            profiles = []
+        for profile in profiles:
+            check = self.ring_profile_checks.get(profile["id"])
+            if check is not None:
+                # 只禁用选项，保留勾选，重新开启后继续使用原来的展示选择。
+                check.setEnabled(profile_store.is_profile_enabled(profile))
+        if self.account_profiles_page is not None:
+            self.account_profiles_page.reload_profiles()
+
     def _refresh_pet_controls(self, message: str = "") -> None:
         busy = self._pet_worker is not None
         manifest = pet_extension.installed_manifest()
@@ -1432,6 +1456,7 @@ class SettingsWindow(QDialog):
             check = _SettingsCheckBox()
             bind_text(check, lambda p=profile: tr(PROVIDERS[p["provider"]].name) + " · " + p["name"])
             check.setChecked(profile["id"] in selected)
+            check.setEnabled(profile_store.is_profile_enabled(profile))
             self.ring_profile_checks[profile["id"]] = check
             self.ring_profile_choices.addWidget(check)
             if getattr(self, "_autosave_ready", False):
@@ -2324,6 +2349,9 @@ class SettingsWindow(QDialog):
         self._sync_floating_style_controls()
         for profile_id, check in self.ring_profile_checks.items():
             check.setChecked(profile_id in values.get("BACKGROUND_PROFILE_IDS", []))
+        self.account_profiles_check.setChecked(bool(values.get("ACCOUNT_PROFILES_ENABLED", True)))
+        self.cc_switch_check.setChecked(bool(values.get("CC_SWITCH_ENABLED", True)))
+        self._sync_profile_controls()
         self.quota_ring_counterclockwise_check.setChecked(
             bool(values.get("QUOTA_WEEKLY_RING_COUNTERCLOCKWISE", False))
         )
@@ -2430,6 +2458,8 @@ class SettingsWindow(QDialog):
             "EDGE_HIDE_ENABLED": self.edge_hide_check.isChecked(),
             "FLOATING_STYLE": str(self.floating_style_combo.currentData() or "ball"),
             "BACKGROUND_PROFILE_IDS": [pid for pid, check in self.ring_profile_checks.items() if check.isChecked()],
+            "ACCOUNT_PROFILES_ENABLED": self.account_profiles_check.isChecked(),
+            "CC_SWITCH_ENABLED": self.cc_switch_check.isChecked(),
             "CODEX_RESET_ALERT_ENABLED": self.codex_reset_alert_check.isChecked(),
             "FLOATING_RING_FOLLOW_THEME": self.ring_follow_theme_check.isChecked(),
             "FLOATING_RING_COLOR": self.ring_color_edit.text().strip(),
@@ -2591,6 +2621,7 @@ class SettingsWindow(QDialog):
         )
         if self.update_controller is not None:
             self.update_controller.reload_cached_release()
+        self._sync_profile_controls()
         if self.on_saved:
             self.on_saved()
         if data_dir_changed:

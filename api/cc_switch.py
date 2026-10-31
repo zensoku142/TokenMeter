@@ -140,12 +140,20 @@ def _silent_startup_enabled() -> bool:
         return False
 
 
+def is_enabled() -> bool:
+    return bool(config_manager.get("ACCOUNT_PROFILES_ENABLED", True)
+                and config_manager.get("CC_SWITCH_ENABLED", True))
+
+
 def connect() -> None:
     global _retry_after, _connect_error
 
     if not codex_accounts():
         raise RuntimeError("CC_SWITCH_NOT_CONFIGURED")
     with _lock:
+        # 已排队的账号可能在用户关闭后才拿到锁；此时不能恢复桥接或启动 CC。
+        if not is_enabled():
+            raise RuntimeError("CC_SWITCH_DISABLED")
         try:
             _endpoint(_saved_port())
             _retry_after = 0
@@ -189,6 +197,8 @@ def connect() -> None:
             startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startup.wShowWindow = 0
         monitor_startup = os.name == "nt" and not _silent_startup_enabled()
+        if not is_enabled():
+            raise RuntimeError("CC_SWITCH_DISABLED")
         process = subprocess.Popen(
             [executable], env=env, startupinfo=startup,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -224,6 +234,8 @@ def fetch_codex_quota(account_id: str) -> dict:
         try:
             # 首次采集、程序重启和 CC 退出后都通过同一路径自动恢复，无需手动连接。
             connect()
+            if not is_enabled():
+                raise RuntimeError("CC_SWITCH_DISABLED")
             connection = _CdpConnection(_endpoint(_saved_port()))
             # 仅调用已核对的额度命令，并只取额度字段；不读取或复制 CC 的 OAuth 凭据。
             expression = (

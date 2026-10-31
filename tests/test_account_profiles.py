@@ -163,3 +163,29 @@ def test_profile_management_is_lazy_inside_settings(monkeypatch):
     assert window.account_profiles_page is not None
     assert window.isAncestorOf(window.account_profiles_page)
     window._autosave_ready = False
+
+
+def test_disabling_profiles_clears_page_queue_and_rejects_late_results(monkeypatch):
+    from ui import account_profiles
+
+    app = QApplication.instance() or QApplication([])
+    first = store.save_profile("deepseek", "One", {"API_KEY": "one"})
+    store.save_profile("deepseek", "Two", {"API_KEY": "two"})
+    pool = Mock()
+    monkeypatch.setattr(account_profiles.QThreadPool, "globalInstance", lambda: pool)
+    page = account_profiles.AccountProfilesPage()
+    observed = Mock()
+    page.quota_observed.connect(observed)
+    page.refresh_profiles()
+    assert len(page._queue) == 1 and pool.start.call_count == 1
+    config_manager._config["ACCOUNT_PROFILES_ENABLED"] = False
+    page.reload_profiles()
+    page._finished(first["id"], first["revision"], TokenData(
+        account_key=TokenData.account_key_for_config(store.profile_config(first)), last_success_at=datetime.now()))
+    app.processEvents()
+    assert not page._queue and not page.cards and not page.results
+    assert page._active is None and pool.start.call_count == 1
+    observed.assert_not_called()
+    config_manager._config["ACCOUNT_PROFILES_ENABLED"] = True
+    page.reload_profiles()
+    assert len(page.cards) == 2 and page.isEnabled()

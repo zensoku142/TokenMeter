@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from api.providers import PROVIDERS
 from api.providers.base import QuotaMetric
 from config import account_profiles as store
+from config import runtime as config_manager
 from config.defaults import DEFAULT_CONFIG
 from data.store import TokenData
 from ui.formatting import format_money
@@ -141,13 +142,16 @@ class _ProfileTask(QRunnable):
     def __init__(self, profile, config):
         super().__init__()
         self.profile_id, self.revision = profile["id"], profile["revision"]
+        self.profile = profile
         self.config = config
         self.signals = _ProfileSignals()
 
     def run(self):
         from ui.qt_widget import _fetch_tokens_safely
 
-        result = _fetch_tokens_safely(self.config, lightweight=True)
+        # 线程池中的任务可能尚未开始；关闭后仍回传完成信号释放忙碌状态，但不再请求账号。
+        result = (_fetch_tokens_safely(self.config, lightweight=True)
+                  if store.is_profile_enabled(self.profile) else TokenData())
         self.signals.finished.emit(self.profile_id, self.revision, result)
 
 
@@ -182,7 +186,7 @@ class AccountProfilesPage(ProviderOverview):
         try:
             # CC 已配置账号自动加入采集列表；重复刷新不新增重复档案或改变默认连接。
             store.import_cc_switch_profiles()
-            profiles = store.load_profiles()
+            profiles = store.load_profiles(enabled_only=True)
         except (OSError, ValueError):
             bind_text(self.hint, "账户档案无法读取，请检查数据文件。")
             self.hint.show()
@@ -200,6 +204,10 @@ class AccountProfilesPage(ProviderOverview):
                 if self._detail_profile == profile_id and self._details is not None:
                     self._details.reject()
         self.profiles = profiles
+        self._queue = [profile_id for profile_id in self._queue if profile_id in current]
+        enabled = bool(config_manager.get("ACCOUNT_PROFILES_ENABLED", True))
+        self.setEnabled(enabled)
+        bind_text(self.empty, "尚无账户档案" if enabled else "多账户已关闭，已有配置已保留。")
         if self._monitor is not None:
             for profile in profiles:
                 if profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
@@ -249,7 +257,7 @@ class AccountProfilesPage(ProviderOverview):
         while self._queue:
             profile_id = self._queue.pop(0)
             profile = next((item for item in self.profiles if item["id"] == profile_id), None)
-            if profile is None:
+            if profile is None or not store.is_profile_enabled(profile):
                 continue
             self._active = (profile_id, profile["revision"])
             self._due[profile_id] = time.monotonic() + 60
@@ -287,6 +295,8 @@ class AccountProfilesPage(ProviderOverview):
         QTimer.singleShot(0, self._advance)
 
     def edit_profile(self, profile_id=""):
+        if not config_manager.get("ACCOUNT_PROFILES_ENABLED", True):
+            return
         profile = next((item for item in self.profiles if item["id"] == profile_id), None)
         if profile and profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
             # CC 是账号配置的唯一来源；卡片操作只刷新该账号，不再打开本地凭据编辑器。

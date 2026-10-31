@@ -75,6 +75,24 @@ PROVIDER_MESSAGES = {
     "选择平台": ("Select provider", "選擇平台", "プロバイダーを選択", "공급자 선택"),
     "只监控所选平台的默认连接": ("Monitors the selected providers' default connections", "只監控所選平台的預設連線", "選択したプロバイダーの既定の接続を監視します", "선택한 공급자의 기본 연결을 모니터링합니다"),
     "多账户": ("Profiles", "多帳戶", "複数アカウント", "다중 계정"),
+    "启用多账户": ("Enable account profiles", "啟用多帳戶", "複数アカウントを有効にする", "다중 계정 활성화"),
+    "连接 CC Switch": ("Connect to CC Switch", "連線 CC Switch", "CC Switch に接続", "CC Switch 연결"),
+    "关闭后停止所有账户档案的采集与展示，保留已有配置。": (
+        "Turn off to stop collecting and displaying all account profiles. Saved settings are kept.",
+        "關閉後停止所有帳戶檔案的採集與顯示，保留已有設定。",
+        "無効にするとすべてのアカウントの取得と表示を停止します。設定は保持されます。",
+        "끄면 모든 계정 프로필의 수집과 표시가 중지됩니다. 기존 설정은 유지됩니다.",
+    ),
+    "自动发现并采集 CC Switch 账号；关闭后停止连接和自动启动，保留账号配置。": (
+        "Discover and monitor CC Switch accounts automatically. Turn off to stop connecting and launching CC Switch; account settings are kept.",
+        "自動發現並採集 CC Switch 帳號；關閉後停止連線和自動啟動，保留帳號設定。",
+        "CC Switch のアカウントを自動検出して取得します。無効時は接続と自動起動を停止し、設定は保持します。",
+        "CC Switch 계정을 자동으로 검색하고 수집합니다. 끄면 연결과 자동 실행이 중지되며 계정 설정은 유지됩니다.",
+    ),
+    "多账户已关闭，已有配置已保留。": (
+        "Account profiles are disabled. Saved settings are kept.", "多帳戶已關閉，已有設定已保留。",
+        "複数アカウントは無効です。設定は保持されています。", "다중 계정이 꺼져 있습니다. 기존 설정은 유지됩니다.",
+    ),
     "请从托盘退出 CC Switch 后刷新，程序将自动重新连接": (
         "Quit CC Switch from the tray, then refresh to reconnect automatically",
         "請從托盤退出 CC Switch 後重新整理，程式將自動重新連線",

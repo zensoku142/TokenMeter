@@ -2607,7 +2607,8 @@ def test_vpet_profile_binding_refreshes_without_showing_settings(tmp_path, monke
     profile_id = "d" * 32
     profile = {"id": profile_id, "revision": "e" * 32, "provider": "codex", "name": "工作账号"}
     profile_config = dict(config_manager.all_config(), ACTIVE_PROVIDER="codex", _ACCOUNT_PROFILE_ID=profile_id)
-    monkeypatch.setattr(profile_store, "load_profiles", lambda: [profile])
+    profile["fields"] = {}
+    monkeypatch.setattr(profile_store, "load_profiles", lambda **_kwargs: [profile])
     monkeypatch.setattr(profile_store, "profile_config", lambda _profile: profile_config)
     config_manager.save_config({"VPET_ENABLED": True})
     with patch.object(FloatingWidget, "refresh"):

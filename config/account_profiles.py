@@ -24,7 +24,15 @@ def _valid_id(value) -> bool:
     return isinstance(value, str) and len(value) == 32 and all(char in "0123456789abcdef" for char in value)
 
 
-def load_profiles() -> list[dict]:
+def is_profile_enabled(profile) -> bool:
+    if not config_manager.get("ACCOUNT_PROFILES_ENABLED", True):
+        return False
+    if profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
+        return cc_switch.is_enabled()
+    return True
+
+
+def load_profiles(*, enabled_only=False) -> list[dict]:
     path = _path()
     if not path.exists():
         return []
@@ -47,7 +55,9 @@ def load_profiles() -> list[dict]:
                 or profile["id"] in seen):
             raise ValueError("Invalid profile entry")
         seen.add(profile["id"])
-        result.append(profile)
+        # 保留全部档案供管理和再次启用；采集与展示共用同一开关过滤，避免关闭后仍后台请求。
+        if not enabled_only or is_profile_enabled(profile):
+            result.append(profile)
     return result
 
 
@@ -143,6 +153,8 @@ def profile_config(profile) -> dict:
 
 
 def import_cc_switch_profiles() -> int:
+    if not cc_switch.is_enabled():
+        return 0
     profiles = load_profiles()
     existing = {profile["fields"].get("CC_SWITCH_ACCOUNT_ID") for profile in profiles
                 if profile["provider"] == "codex"}

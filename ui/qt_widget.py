@@ -365,7 +365,7 @@ class FloatingWidget(QWidget):
         self._sync_codex_reset_news()
 
         # CC 多账号是常驻采集来源；不能等设置页或桌宠创建后才开始请求。
-        if cc_switch.codex_accounts():
+        if cc_switch.is_enabled() and cc_switch.codex_accounts():
             self._update_vpet_source_options()
             self._refresh_vpet_bound_sources()
 
@@ -376,9 +376,9 @@ class FloatingWidget(QWidget):
     def _update_vpet_source_options(self) -> None:
         previous = self._vpet_profiles
         try:
-            if cc_switch.codex_accounts():
+            if cc_switch.is_enabled() and cc_switch.codex_accounts():
                 profile_store.import_cc_switch_profiles()
-            profiles = profile_store.load_profiles()
+            profiles = profile_store.load_profiles(enabled_only=True)
         except (OSError, ValueError):
             profiles = []
         self._vpet_profiles = {profile["id"]: dict(profile) for profile in profiles}
@@ -426,7 +426,8 @@ class FloatingWidget(QWidget):
         pet_enabled = not self._vpet_updating and config_manager.get("VPET_ENABLED", False)
         profile_ids = config_manager.all_config().get("BACKGROUND_PROFILE_IDS", [])
         cc_ids = [profile["id"] for profile in self._vpet_profiles.values()
-                  if profile["provider"] == "codex" and profile.get("fields", {}).get("CC_SWITCH_ACCOUNT_ID")]
+                  if profile["provider"] == "codex" and profile.get("fields", {}).get("CC_SWITCH_ACCOUNT_ID")
+                  and profile_store.is_profile_enabled(profile)]
         if not pet_enabled and not profile_ids and not cc_ids and (rail is None or not rail.isVisible()):
             return
         valid = {option["id"] for option in self._vpet_source_options}
@@ -450,7 +451,7 @@ class FloatingWidget(QWidget):
             elif source.startswith("profile:"):
                 profile_id = source.partition(":")[2]
                 profile = self._vpet_profiles.get(profile_id)
-                if (profile is None or profile_id in self._vpet_profile_in_flight
+                if (profile is None or not profile_store.is_profile_enabled(profile) or profile_id in self._vpet_profile_in_flight
                         or now < self._vpet_profile_due.get(profile_id, 0)):
                     continue
                 try:
@@ -476,7 +477,7 @@ class FloatingWidget(QWidget):
 
     def _accept_profile_result(self, profile_id: str, revision: str, result: TokenData) -> None:
         try:
-            profile = next((item for item in profile_store.load_profiles()
+            profile = next((item for item in profile_store.load_profiles(enabled_only=True)
                             if item["id"] == profile_id and item["revision"] == revision), None)
             valid = profile is not None and result.account_key == TokenData.account_key_for_config(
                 profile_store.profile_config(profile))
@@ -2528,7 +2529,7 @@ class FloatingWidget(QWidget):
             return
         captured_config = config_manager.all_config()
         if (captured_config.get("BACKGROUND_PROFILE_IDS") or config_manager.get("VPET_ENABLED", False) is True
-                or cc_switch.codex_accounts()):
+                or (cc_switch.is_enabled() and cc_switch.codex_accounts())):
             self._update_vpet_source_options()
             self._refresh_vpet_bound_sources()
         if config_manager.get("VPET_ENABLED", False) is True:
