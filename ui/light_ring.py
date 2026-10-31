@@ -3,7 +3,16 @@
 from decimal import Decimal, InvalidOperation
 from html import escape
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -41,6 +50,10 @@ from ui.i18n import bind_text, language_controller, tr
 from ui.provider_branding import provider_icon
 from ui.provider_overview import ProviderOverview, provider_status_message
 from ui.qt_theme import current_theme, theme_controller
+
+_MIN_RAIL_WIDTH = 40
+_MAX_RAIL_WIDTH = 120
+_DEFAULT_RAIL_WIDTH = 58
 
 
 def ring_value(provider_id: str, data: TokenData | None) -> tuple[str, float | None]:
@@ -120,7 +133,9 @@ class _RingItem(QAbstractButton):
         theme = current_theme()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        ring = QRectF((self.width() - 38) / 2, 4, 38, 38)
+        # 缩窄时缩小圆环而不是裁掉边缘；扩宽只增加文字空间，保持原有行高。
+        diameter = min(38, self.width() - 4)
+        ring = QRectF((self.width() - diameter) / 2, 4, diameter, diameter)
         track = QColor(theme.border)
         track.setAlpha(95)
         painter.setPen(QPen(track, 3.2))
@@ -134,7 +149,9 @@ class _RingItem(QAbstractButton):
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             painter.drawArc(ring, 90 * 16, -round(min(100, self.remaining) * 3.6 * 16))
-        self._brand_icon.paint(painter, round(ring.center().x() - 11), 12, 22, 22)
+        icon_size = round(22 * diameter / 38)
+        self._brand_icon.paint(painter, round(ring.center().x() - icon_size / 2),
+                               round(ring.center().y() - icon_size / 2), icon_size, icon_size)
         font = QFont("Segoe UI")
         font.setPixelSize(14)
         font.setWeight(QFont.Weight.Medium)
@@ -143,7 +160,9 @@ class _RingItem(QAbstractButton):
         metrics = QFontMetrics(font)
         available = self.width() - 4
         if metrics.horizontalAdvance(self.display_value) > available:
-            font.setPixelSize(max(12, int(14 * available / metrics.horizontalAdvance(self.display_value))))
+            # 窄宽度下先缩小文字；仍放不下的长数值沿用省略及详情中的完整值。
+            minimum = 10 if self.rail._rail_width < _DEFAULT_RAIL_WIDTH else 12
+            font.setPixelSize(max(minimum, int(14 * available / metrics.horizontalAdvance(self.display_value))))
             painter.setFont(font)
         text = QFontMetrics(font).elidedText(self.display_value, Qt.TextElideMode.ElideRight, available)
         painter.drawText(QRectF(0, 46, self.width(), 17), Qt.AlignmentFlag.AlignCenter, text)
@@ -225,6 +244,10 @@ class LightRingWidget(QWidget):
         self._gesture = ""
         self._drag_origin = None
         self._position_loaded = False
+        saved_width = state.load_dict(config_manager.PANEL_LAYOUT_PATH).get("light_ring_width")
+        self._rail_width = (saved_width if type(saved_width) is int and _MIN_RAIL_WIDTH <= saved_width <= _MAX_RAIL_WIDTH
+                            else _DEFAULT_RAIL_WIDTH)
+        self._wheel_delta = 0
         self._reset_payload = None
         self._reset_enabled = False
         self._row_animations = {}
@@ -234,11 +257,14 @@ class LightRingWidget(QWidget):
         root = self._root_layout = QVBoxLayout(self)
         root.setContentsMargins(1, 8, 1, 8)
         self.scroll = QScrollArea()
+        self.scroll.installEventFilter(self)
+        self.scroll.viewport().installEventFilter(self)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content = QWidget()
+        self.content.installEventFilter(self)
         self.rows = QVBoxLayout(self.content)
         self.rows.setContentsMargins(3, 0, 3, 0)
         self.rows.setSpacing(8)
@@ -254,6 +280,10 @@ class LightRingWidget(QWidget):
         self._leave_timer = QTimer(self)
         self._leave_timer.setSingleShot(True)
         self._leave_timer.timeout.connect(self._hide_details_if_outside)
+        self._width_save_timer = QTimer(self)
+        self._width_save_timer.setSingleShot(True)
+        self._width_save_timer.setInterval(400)
+        self._width_save_timer.timeout.connect(self._save_width)
         self._timer = QTimer(self)
         self._timer.setInterval(60_000)
         self._timer.timeout.connect(self.auto_refresh_requested)
@@ -299,6 +329,7 @@ class LightRingWidget(QWidget):
         self.items = {}
         for pid in ids:
             item = _RingItem(self, entries[pid], pid, names[pid])
+            item.installEventFilter(self)
             self.items[pid] = item
             self.rows.addWidget(item)
         self._resize_to_content()
@@ -316,13 +347,28 @@ class LightRingWidget(QWidget):
     def _resize_to_content(self):
         if hasattr(self, "_snap_animation") and self._snap_animation.state() == QPropertyAnimation.State.Running:
             return
-        # 单个平台的长金额或积分不能撑宽整个贴边栏。
-        width = 58
+        # 单个平台的长金额或积分不能撑宽用户选择的宽度。
+        width = self._rail_width
         area = self.screen().availableGeometry()
-        margin = 22 if self._edge_side() else 8
-        self._root_layout.setContentsMargins(1, margin, 1, margin)
         right = self.x() + self.width()
         anchored_right = self._position_loaded and abs(right - (area.right() + 1)) <= 2
+        # 扩宽时自由位置可能被工作区约束到边缘；先按最终位置留出肩部空间。
+        target_x = area.right() + 1 - width if anchored_right else max(
+            area.left(), min(self.x(), area.right() + 1 - width))
+        if not self._position_loaded:
+            side = "right"
+        elif target_x <= area.left() + 1:
+            side = "left"
+        elif target_x + width >= area.right():
+            side = "right"
+        else:
+            side = ""
+        margin = 22 if side else 8
+        # 内容避开屏幕内侧的阴影，窄栏中也不能盖住边缘或截断文字。
+        self._root_layout.setContentsMargins(3 if side == "right" else 1, margin,
+                                             3 if side == "left" else 1, margin)
+        row_margin = 0 if width < _DEFAULT_RAIL_WIDTH else 3
+        self.rows.setContentsMargins(row_margin, 0, row_margin, 0)
         self.content.setMinimumHeight(max(1, len(self.items) * 70 - 8))
         self.setFixedSize(width, min(self.content.minimumHeight() + margin * 2, max(96, area.height() - 32)))
         if anchored_right:
@@ -380,12 +426,59 @@ class LightRingWidget(QWidget):
             self.auto_refresh_requested.emit()
 
     def hideEvent(self, event):
+        if self._width_save_timer.isActive():
+            self._width_save_timer.stop()
+            self._save_width()
         self.popup.hide()
         self._timer.stop()
         self._snap_animation.stop()
         self._leave_timer.stop()
         self.auto_refresh_stopped.emit()
         super().hideEvent(event)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Wheel and self._resize_with_wheel(event):
+            return True
+        return super().eventFilter(watched, event)
+
+    def wheelEvent(self, event):
+        if not self._resize_with_wheel(event):
+            super().wheelEvent(event)
+
+    def _resize_with_wheel(self, event):
+        if not event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._wheel_delta = 0
+            return False
+        event.accept()
+        if self._dragging:
+            return True
+        # 累积高精度滚轮的小步长；普通滚轮事件仍交给滚动区处理。
+        delta = event.angleDelta().y() or event.pixelDelta().y() * 8
+        self._wheel_delta += delta
+        steps = int(self._wheel_delta / 120)
+        self._wheel_delta -= steps * 120
+        width = max(_MIN_RAIL_WIDTH, min(_MAX_RAIL_WIDTH, self._rail_width + steps * 2))
+        if width == self._rail_width:
+            return True
+        if self._snap_animation.state() == QPropertyAnimation.State.Running:
+            self._snap_animation.stop()
+            self._clamp_position(snap=True)
+        self._rail_width = width
+        self._resize_to_content()
+        self._width_save_timer.start()
+        if self.popup.isVisible() and self._hovered in self.items:
+            self.show_details(self._hovered)
+        return True
+
+    def _save_width(self):
+        values = {"light_ring_width": self._rail_width}
+        if self._position_loaded:
+            # 右侧贴边会随宽度改变横坐标，必须与宽度一起保存以便重启后仍贴边。
+            values["light_ring_position"] = [self.x(), self.y()]
+        try:
+            state.merge_dict(config_manager.PANEL_LAYOUT_PATH, values)
+        except OSError:
+            config_manager.logger().warning("Light ring width could not be saved")
 
     def start_drag(self, point, entry_id=""):
         self._snap_animation.stop()
@@ -592,14 +685,15 @@ class LightRingWidget(QWidget):
         side = self._edge_side()
         if side:
             # 上下凹弧与屏幕边缘相接；离开边缘后不保留伸出的肩部。
-            width, height, shoulder, radius = self.width(), self.height(), 14, 20
+            width, height, shoulder, radius, inset = self.width(), self.height(), 14, 20, 2
             path = QPainterPath()
             path.moveTo(width, 0)
             path.quadTo(width, shoulder, width - shoulder, shoulder)
-            path.lineTo(radius, shoulder)
-            path.quadTo(0, shoulder, 0, shoulder + radius)
-            path.lineTo(0, height - shoulder - radius)
-            path.quadTo(0, height - shoulder, radius, height - shoulder)
+            path.lineTo(radius + inset, shoulder)
+            # 直边内移，为窗口内保留阴影空间；原来画在 x=0 时外侧阴影会被窗口裁掉。
+            path.quadTo(inset, shoulder, inset, shoulder + radius)
+            path.lineTo(inset, height - shoulder - radius)
+            path.quadTo(inset, height - shoulder, radius + inset, height - shoulder)
             path.lineTo(width - shoulder, height - shoulder)
             path.quadTo(width, height - shoulder, width, height)
             path.closeSubpath()

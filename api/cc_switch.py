@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from api import cc_switch_windows
 from api.browser_cookie import (
     _CDP_PORT_RANGE,
     _CdpConnection,
@@ -131,6 +132,14 @@ def _executable() -> str:
     return shutil.which("cc-switch") or ""
 
 
+def _silent_startup_enabled() -> bool:
+    try:
+        settings = json.loads((database_path().parent / "settings.json").read_text(encoding="utf-8"))
+        return isinstance(settings, dict) and settings.get("silentStartup") is True
+    except (OSError, ValueError):
+        return False
+
+
 def connect() -> None:
     global _retry_after, _connect_error
 
@@ -162,6 +171,10 @@ def connect() -> None:
         executable = _executable()
         if not executable:
             raise RuntimeError("CC_SWITCH_NOT_INSTALLED")
+        if cc_switch_windows.is_running(executable):
+            # CC 的单实例回调会主动显示现有窗口；无桥接时提示用户退出，不能重复启动。
+            _connect_error = "CC_SWITCH_RESTART_REQUIRED"
+            raise RuntimeError(_connect_error)
         port = pick_free_cdp_port()
         if port < 0:
             raise RuntimeError("CC_SWITCH_NOT_CONNECTED")
@@ -175,10 +188,14 @@ def connect() -> None:
             startup = subprocess.STARTUPINFO()
             startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startup.wShowWindow = 0
+        monitor_startup = os.name == "nt" and not _silent_startup_enabled()
         process = subprocess.Popen(
             [executable], env=env, startupinfo=startup,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        if monitor_startup:
+            # 只处理本次创建进程的首次显示；CC 本身已配置静默时不干预用户手动打开。
+            threading.Thread(target=cc_switch_windows.hide_startup_window, args=(process,), daemon=True).start()
         # 窗口慢加载时下一次连接仍可复用此次启动，避免反复启动单实例进程。
         path = _state_path()
         path.parent.mkdir(parents=True, exist_ok=True)

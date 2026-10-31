@@ -3,8 +3,8 @@ from decimal import Decimal
 from unittest.mock import Mock
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 from test_refresh import widget_stub
@@ -385,6 +385,32 @@ def test_edge_shoulders_mirror_and_snap_animates():
     assert rail.x() == area.left()
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("edge", ["left", "right"])
+@pytest.mark.parametrize("width", [40, 58])
+def test_docked_ring_keeps_shadow_along_straight_edge(theme, edge, width):
+    configure_theme(APP, theme)
+    rail = LightRingWidget()
+    rail._rail_width = width
+    rail.set_sources(["codex", "claude", "deepseek"])
+    rail.show()
+    APP.processEvents()
+    area = rail.screen().availableGeometry()
+    x = area.left() if edge == "left" else area.right() + 1 - rail.width()
+    rail.move(x, rail.y())
+    rail._resize_to_content()
+    APP.processEvents()
+
+    image = rail.grab().toImage()
+    ratio = image.devicePixelRatio()
+    y = round(rail.height() * ratio / 2)
+    # 直线段外侧应有半透明阴影，而不是在窗口边界直接裁成不透明描边。
+    pixels = [image.pixelColor(i if edge == "right" else image.width() - 1 - i, y).alpha()
+              for i in range(max(1, round(ratio)))]
+    assert any(0 < alpha < 255 for alpha in pixels)
+    rail.close()
+
+
 def test_ring_profile_selection_reuses_account_scoped_tasks(monkeypatch):
     widget = widget_stub()
     widget.panel = None
@@ -464,3 +490,110 @@ def test_codex_popup_always_has_public_reset_section_when_enabled():
     assert card.height() == rail.popup.height()
     rail.set_reset_news(None, enabled=False)
     assert footer.isHidden()
+
+
+def wheel(widget, delta, modifiers=Qt.KeyboardModifier.ControlModifier):
+    position = QPointF(10, 10)
+    event = QWheelEvent(position, QPointF(widget.mapToGlobal(position.toPoint())), QPoint(), QPoint(0, delta),
+                        Qt.MouseButton.NoButton, modifiers, Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(widget, event)
+
+
+@pytest.mark.parametrize("edge", ["left", "right"])
+def test_ctrl_wheel_resizes_and_persists_without_losing_edge_or_values(edge):
+    from config import state
+
+    state.merge_dict(config_manager.PANEL_LAYOUT_PATH, {"pinned_providers": ["claude"]})
+    rail = LightRingWidget()
+    rail.set_sources(["codex", "deepseek"])
+    rail.set_data({"codex": quota(84),
+                   "deepseek": TokenData(last_success_at=datetime.now(), balance_cny=Decimal("19.56"))})
+    rail.show()
+    APP.processEvents()
+    area = rail.screen().availableGeometry()
+    if edge == "left":
+        rail.move(area.left(), rail.y())
+    original_height = rail.height()
+
+    # 高精度滚轮的半格先累积，完整一格再改变宽度。
+    wheel(rail.items["codex"], -60)
+    assert rail.width() == 58
+    wheel(rail.items["codex"], -60)
+    assert rail.width() == 56
+    wheel(rail.scroll.viewport(), -120 * 20)
+    APP.processEvents()
+    assert rail.width() == 40
+    assert rail.height() == original_height
+    assert rail.items["codex"].display_value == "16%"
+    assert rail.items["deepseek"].display_value == "¥19.56"
+    font = QFont("Segoe UI")
+    font.setPixelSize(10)
+    # 某些无头 Qt 环境没有加载任何字体，需在有字体时才比较真实字宽。
+    if QFontInfo(font).family():
+        assert QFontMetrics(font).horizontalAdvance("¥19.56") <= rail.items["deepseek"].width() - 4
+    if edge == "left":
+        assert rail.x() == area.left()
+    else:
+        assert rail.x() + rail.width() == area.right() + 1
+
+    # 隐藏前刷新防抖写入；保留已有布局状态，并以新宽度恢复贴边位置。
+    rail.hide()
+    saved = state.load_dict(config_manager.PANEL_LAYOUT_PATH)
+    assert saved["light_ring_width"] == 40
+    assert saved["pinned_providers"] == ["claude"]
+    reopened = LightRingWidget()
+    reopened.set_sources(["codex", "deepseek"])
+    reopened.show()
+    APP.processEvents()
+    assert reopened.width() == 40
+    if edge == "left":
+        assert reopened.x() == area.left()
+    else:
+        assert reopened.x() + reopened.width() == area.right() + 1
+    wheel(reopened.items["codex"], 120 * 100)
+    assert reopened.width() == 120
+    if edge == "left":
+        assert reopened.x() == area.left()
+    else:
+        assert reopened.x() + reopened.width() == area.right() + 1
+    reopened.close()
+
+
+def test_plain_wheel_still_scrolls_overflowing_ring():
+    rail = LightRingWidget()
+    sources = [f"profile:{i:032x}" for i in range(20)]
+    rail.set_sources(sources, providers={key: "codex" for key in sources})
+    rail.show()
+    APP.processEvents()
+    scrollbar = rail.scroll.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+    wheel(rail.scroll.viewport(), -120, Qt.KeyboardModifier.NoModifier)
+    assert scrollbar.value() > 0
+    assert rail.width() == 58
+    rail.close()
+
+
+def test_widening_near_edge_reserves_space_for_shoulders():
+    rail = LightRingWidget()
+    rail.set_sources(["codex", "deepseek"])
+    rail.show()
+    APP.processEvents()
+    area = rail.screen().availableGeometry()
+    rail.move(area.right() + 1 - rail.width() - 10, rail.y())
+    rail._resize_to_content()
+    assert rail._root_layout.contentsMargins().top() == 8
+    wheel(rail.items["codex"], 120 * 10)
+    APP.processEvents()
+    assert rail.x() + rail.width() == area.right() + 1
+    assert rail._root_layout.contentsMargins().top() == 22
+    rail.close()
+
+
+@pytest.mark.parametrize("saved_width", [None, True, "40", 39, 121])
+def test_invalid_saved_ring_width_falls_back_to_default(saved_width):
+    from config import state
+
+    state.merge_dict(config_manager.PANEL_LAYOUT_PATH, {"light_ring_width": saved_width})
+    rail = LightRingWidget()
+    assert rail.width() == 58
+    rail.close()

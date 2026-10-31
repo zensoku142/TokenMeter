@@ -14,6 +14,12 @@ MESSAGES = {
     "圆环自定义颜色": ("Custom ring color", "圓環自訂顏色", "リングのカスタム色", "사용자 지정 링 색상"),
     "悬浮球": ("Floating ball", "懸浮球", "フローティングボール", "플로팅 볼"),
     "轻底细环": ("Light rings", "輕底細環", "ライトリング", "라이트 링"),
+    "悬停在轻底细环上时，按住 Ctrl 并滚动鼠标滚轮即可调整宽度。": (
+        "Hover over the light rings and hold Ctrl while scrolling to adjust their width.",
+        "將滑鼠移到輕底細環上，按住 Ctrl 並滾動滑鼠滾輪即可調整寬度。",
+        "ライトリングにカーソルを合わせ、Ctrl キーを押しながらホイールを回すと幅を調整できます。",
+        "라이트 링 위에 마우스를 올리고 Ctrl을 누른 채 스크롤하면 너비를 조절할 수 있습니다.",
+    ),
     "选择平台或账户；未勾选时跟随当前平台。": (
         "Select providers or accounts; leave unchecked to follow the current provider.",
         "選擇平台或帳戶；未勾選時跟隨目前平台。",

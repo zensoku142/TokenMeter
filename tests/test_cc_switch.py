@@ -105,25 +105,56 @@ def test_bridge_accepts_observed_legacy_cc_window_title(monkeypatch):
     assert cc_switch._endpoint(9222) == "ws://127.0.0.1:9222/page"
 
 
-def test_running_non_bridge_cc_is_not_terminated(cc_accounts, monkeypatch):
+def test_running_non_bridge_cc_is_not_relaunched(cc_accounts, monkeypatch):
     endpoint = Mock(side_effect=OSError())
     monkeypatch.setattr(cc_switch, "_endpoint", endpoint)
     monkeypatch.setattr(cc_switch, "_CDP_PORT_RANGE", range(9222, 9224))
     monkeypatch.setattr(cc_switch, "_executable", lambda: "C:/CC Switch/cc-switch.exe")
+    monkeypatch.setattr(cc_switch.cc_switch_windows, "is_running", lambda _: True)
+    launch = Mock()
+    monkeypatch.setattr(cc_switch.subprocess, "Popen", launch)
+    with pytest.raises(RuntimeError, match="CC_SWITCH_RESTART_REQUIRED"):
+        cc_switch.connect()
+    # 重新运行 CC 会触发其单实例回调，让已隐藏的窗口重新弹出。
+    launch.assert_not_called()
+    with pytest.raises(RuntimeError, match="CC_SWITCH_RESTART_REQUIRED"):
+        cc_switch.connect()
+    launch.assert_not_called()
+
+
+def test_cc_single_instance_race_still_requires_restart(cc_accounts, monkeypatch):
+    monkeypatch.setattr(cc_switch, "_endpoint", Mock(side_effect=OSError()))
+    monkeypatch.setattr(cc_switch, "_CDP_PORT_RANGE", range(9222, 9224))
+    monkeypatch.setattr(cc_switch, "_executable", lambda: "C:/CC Switch/cc-switch.exe")
+    monkeypatch.setattr(cc_switch.cc_switch_windows, "is_running", lambda _: False)
     monkeypatch.setattr(cc_switch, "pick_free_cdp_port", lambda: 9222)
+    monkeypatch.setattr(cc_switch, "_silent_startup_enabled", lambda: True)
     process = Mock()
     process.poll.return_value = 0
     launch = Mock(return_value=process)
     monkeypatch.setattr(cc_switch.subprocess, "Popen", launch)
+
+    # 检查进程后若 CC 恰好被用户打开，单实例子进程退出时仍使用原有错误和退避。
     with pytest.raises(RuntimeError, match="CC_SWITCH_RESTART_REQUIRED"):
         cc_switch.connect()
-    assert launch.call_args.args[0] == ["C:/CC Switch/cc-switch.exe"]
-    assert "127.0.0.1" in launch.call_args.kwargs["env"]["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]
+    with pytest.raises(RuntimeError, match="CC_SWITCH_RESTART_REQUIRED"):
+        cc_switch.connect()
+    launch.assert_called_once()
     process.terminate.assert_not_called()
     process.kill.assert_not_called()
-    with pytest.raises(RuntimeError, match="CC_SWITCH_RESTART_REQUIRED"):
-        cc_switch.connect()
-    assert launch.call_count == 1
+
+
+@pytest.mark.parametrize("content,expected", [
+    ('{"silentStartup": true}', True),
+    ('{"silentStartup": false}', False),
+    ('{"silentStartup": "true"}', False),
+    ("invalid", False),
+])
+def test_cc_silent_startup_setting_is_read_without_modification(cc_accounts, content, expected):
+    settings = cc_accounts.parent / "settings.json"
+    settings.write_text(content, encoding="utf-8")
+    assert cc_switch._silent_startup_enabled() is expected
+    assert settings.read_text(encoding="utf-8") == content
 
 
 def test_quota_request_delegates_refresh_to_cc_and_cleans_up_job(cc_accounts, monkeypatch):
@@ -251,10 +282,13 @@ def test_missing_port_record_recovers_existing_cc_bridge_without_launch(cc_accou
 def test_first_fetch_automatically_starts_cc_when_no_bridge_exists(cc_accounts, monkeypatch):
     monkeypatch.setattr(cc_switch, "_CDP_PORT_RANGE", range(9222, 9224))
     monkeypatch.setattr(cc_switch, "_executable", lambda: "C:/CC Switch/cc-switch.exe")
+    monkeypatch.setattr(cc_switch.cc_switch_windows, "is_running", lambda _: False)
     monkeypatch.setattr(cc_switch, "pick_free_cdp_port", lambda: 9222)
     process = Mock()
     launch = Mock(return_value=process)
     monkeypatch.setattr(cc_switch.subprocess, "Popen", launch)
+    worker = Mock()
+    monkeypatch.setattr(cc_switch.threading, "Thread", worker)
 
     def endpoint(port, **kwargs):
         if not launch.called:
@@ -270,6 +304,34 @@ def test_first_fetch_automatically_starts_cc_when_no_bridge_exists(cc_accounts, 
     assert cc_switch.fetch_codex_quota("work")["success"]
     assert launch.call_count == 1
     assert cc_switch._saved_port() == 9222
+    assert "127.0.0.1" in launch.call_args.kwargs["env"]["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]
+    if cc_switch.os.name == "nt":
+        assert worker.call_args.kwargs["args"] == (process,)
+        worker.return_value.start.assert_called_once()
+
+
+def test_cc_configured_for_silent_startup_needs_no_window_intervention(cc_accounts, monkeypatch):
+    (cc_accounts.parent / "settings.json").write_text('{"silentStartup": true}', encoding="utf-8")
+    monkeypatch.setattr(cc_switch, "_CDP_PORT_RANGE", range(9222, 9223))
+    monkeypatch.setattr(cc_switch, "_executable", lambda: "C:/CC Switch/cc-switch.exe")
+    monkeypatch.setattr(cc_switch.cc_switch_windows, "is_running", lambda _: False)
+    monkeypatch.setattr(cc_switch, "pick_free_cdp_port", lambda: 9222)
+    launch = Mock(return_value=Mock())
+    monkeypatch.setattr(cc_switch.subprocess, "Popen", launch)
+
+    def endpoint(port, **_kwargs):
+        if not launch.called:
+            raise OSError
+        return "ws://127.0.0.1:9222/page"
+
+    monkeypatch.setattr(cc_switch, "_endpoint", endpoint)
+    worker = Mock()
+    monkeypatch.setattr(cc_switch.threading, "Thread", worker)
+
+    cc_switch.connect()
+
+    launch.assert_called_once()
+    worker.assert_not_called()
 
 
 def test_bridge_disconnect_preserves_last_successful_quota_across_restart(cc_accounts, monkeypatch):

@@ -90,10 +90,23 @@ flowchart TD
 `.github/workflows/pet-release.yml`，产物位于 `dist-pet/`，不进入主安装包。
 主程序通过本机管道发送允许的展示字段，不向桌宠传递账户凭据。
 
-桌宠统一使用 `VPetHost` 与独立宿主，旧精灵图实现及其角色资源已移除。
+桌宠统一使用 `VPetHost` 与独立宿主；角色资源分别位于 `pet_host/whale/`、
+`pet_host/bailong/`，萝莉斯核心源码位于 `third_party/VPet/`。
 
 详细构建与发布边界见 [桌宠开发说明](../pet_host/README.md) 和
 [VPet 源码维护说明](../third_party/VPet/UPSTREAM.md)。
+
+## 新增功能从哪里入手
+
+平台适配和桌宠角色是两条不同的扩展路径，分别沿现有入口修改：
+
+| 功能 | 实现和注册 | 配置、展示与验证 |
+| --- | --- | --- |
+| 平台数据源 | `api/providers/base.py` 定义接口，具体适配在 `api/providers/`，`api/providers/__init__.py` 注册启用的 Provider | 按需检查 `config/`、`ui/provider_picker.py`、`ui/provider_branding.py`、`ui/provider_translations.py` 和 `tests/test_providers.py` |
+| 用量展示 | `data/store.py` 聚合数据；`ui/provider_overview.py`、`ui/quota_details.py` 等处理展示 | 对应 UI 和数据测试在 `tests/`；具体入口见上方行为表 |
+| 桌宠角色 | `pet_host/` 下的角色资源和 `PetWindow.*.cs` 实现；构建入口为 `scripts/build_vpet.py` | `core/pet_extension.py` 管理角色安装，`ui/vpet_host.py` 负责主程序通信，测试和发布说明见桌宠开发文档 |
+
+这些入口有各自的配置、资源和发布约束；新增功能时先核对对应路径，避免仅移动文件而遗漏打包或通信依赖。
 
 ## 导入与启动入口
 
@@ -125,6 +138,10 @@ PyInstaller 直接以 `updater/main.py` 为入口，并将仓库根目录加入�
 `__pycache__/`、测试缓存和设计验收产物属于本地环境或生成内容，不纳入上面的源码结构。
 以 `git ls-files` 查看正式维护范围，用 `git status --short` 区分未提交内容。
 未跟踪目录并不一定可删除，可能含未提交工作或个人数据。
+
+`build/` 还可能包含 `worktrees/`、资源缓存、备份和临时验证结果，不能整体当作构建产物删除。
+清理前先用 `git worktree list` 找出登记中的工作区，逐项确认剩余目录是否可重建；
+涉及工作区时先检查其未提交内容，不要直接删除目录。`dist*` 可能保存尚需使用的安装包或发布附件。
 
 `build/vpet-upstream/` 是下载资源缓存；需要改核心逻辑时修改 `third_party/VPet/`，
 不要修改缓存中的源码副本。也不要把代码包 `data/`、`config/` 当作缓存目录清理；
