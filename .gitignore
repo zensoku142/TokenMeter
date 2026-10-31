@@ -55,5 +55,3 @@ docs/images/*
 !docs/images/readme-hero.webp
 !docs/images/readme/
 
-# 小龙娘原动画由固定上游版本提供，不纳入 Git 历史。
-pet_host/bailong/webm/

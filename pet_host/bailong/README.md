@@ -3,7 +3,7 @@
 素材来源：https://github.com/jingh12312-rgb/bailong-desktop-pet ，v0.5.1。
 由用户提供本地完整包并要求迁入；保留上游 README 与 ASSETS 声明。
 
-`actions.json` 保留全部 35 段动画的缩放、位移、时长元数据；原始透明动画不纳入 Git。首次构建前运行 `python scripts/fetch_bailong_assets.py`，从上游 v0.5.1 下载并校验 SHA256。
+`webm/` 和 `actions.json` 保留全部 35 段原始透明动画及其缩放、位移、时长元数据。
 `scripts/build_vpet.py` 使用明确保留透明通道的 libvpx-vp9 解码为 250px APNG，
 按原素材的底部居中规则定位，并生成现有 VPet 内核使用的动画槽位。
 产物只包含人物与动作资源，不打包原项目 Python 程序、解码器、账户查询、对话或聊天历史。

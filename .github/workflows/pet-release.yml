@@ -46,9 +46,6 @@ jobs:
       - name: Install build-time FFmpeg
         run: choco install ffmpeg --no-progress -y
 
-      - name: Fetch verified Bailong animations
-        run: python scripts/fetch_bailong_assets.py
-
       - name: Test pet packaging and update lifecycle
         run: python -m pytest tests/test_pet_extension.py tests/test_packaging.py tests/test_update.py -q
 
