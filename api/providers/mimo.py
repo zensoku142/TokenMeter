@@ -815,7 +815,13 @@ class MiMoProvider(Provider):
     def _fetch_in_browser(self, *, path: str, body: dict[str, Any] | None = None) -> Any:
         """Use the retained browser only after the normal Cookie request is rejected."""
 
+        account = self.extract_cookie_value(self._cookie_value(), "userId")
+        # 浏览器由多个账户共用；无法确认同一 userId 时不能把浏览器数据记到原账户。
+        if not account:
+            raise RuntimeError("AUTH_EXPIRED")
         context = self._fetch_browser_context(path=path, body=body, base_url=self._base_url())
+        if self.extract_cookie_value(context.cookie, "userId") != account:
+            raise RuntimeError("AUTH_EXPIRED")
         # Keep a fresh, complete snapshot for this provider instance. It can make
         # subsequent direct requests work, but is never persisted implicitly.
         self._browser_cookie = context.cookie

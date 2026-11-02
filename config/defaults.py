@@ -110,8 +110,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ACTIVE_PROVIDER": "deepseek",
     "BACKGROUND_PROVIDER_IDS": [],
     "BACKGROUND_PROFILE_IDS": [],
-    # 旧版本会自动采集档案和 CC；默认开启，避免升级后改变已有连接行为。
-    "ACCOUNT_PROFILES_ENABLED": True,
+    # 未显式开启前不自动采集账户档案或连接 CC；已保存的选择仍按原值加载。
+    "ACCOUNT_PROFILES_ENABLED": False,
     "CC_SWITCH_ENABLED": True,
     "QUOTA_FORECAST_ENABLED": False,
     "QUOTA_RECOVERY_ALERT_ENABLED": False,

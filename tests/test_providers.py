@@ -1046,7 +1046,7 @@ class MiMoProviderTests(unittest.TestCase):
         provider._session.get = Mock(return_value=response({"code": 401, "data": None}))
         browser_context = Mock(
             data={"balance": "12.5", "currency": "CNY"},
-            cookie="session=fresh; api-platform_ph=ph",
+            cookie="session=fresh; api-platform_ph=ph; userId=1",
             api_platform_ph="ph",
         )
 
@@ -1056,7 +1056,7 @@ class MiMoProviderTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(str(balance.amount), "12.5")
         recover.assert_called_once_with(path="/api/v1/balance", body=None, base_url="https://platform.xiaomimimo.com")
-        self.assertEqual(provider._browser_cookie, "session=fresh; api-platform_ph=ph")
+        self.assertEqual(provider._browser_cookie, "session=fresh; api-platform_ph=ph; userId=1")
         self.assertEqual(provider._browser_api_platform_ph, "ph")
 
     def test_manual_mimo_collection_keeps_all_first_party_cookie_names(self):

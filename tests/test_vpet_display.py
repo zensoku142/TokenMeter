@@ -69,6 +69,36 @@ def test_pet_low_quota_warning_follows_current_setting(monkeypatch):
     assert usage_message(data, False, "codex")["warning"] is True
 
 
+@pytest.mark.parametrize("threshold,used,expected", [
+    (5, 92, False), (5, 95, True), (20, 85, True), (20, 79, False), (None, 95, True),
+])
+def test_pet_low_quota_uses_configured_threshold(monkeypatch, threshold, used, expected):
+    monkeypatch.setattr(config_manager, "_config", {
+        "QUOTA_ALERT_ENABLED": True, "QUOTA_ALERT_THRESHOLD": threshold,
+    })
+    data = TokenData(status="ok", last_success_at=datetime.now(),
+                     quota_windows=[QuotaWindow("weekly", "周额度", used)])
+    assert usage_message(data, False, "codex")["warning"] is expected
+
+
+def test_pet_low_quota_respects_quiet_hours_without_hiding_refresh_errors(monkeypatch):
+    settings = {"QUOTA_ALERT_ENABLED": True, "QUOTA_QUIET_ENABLED": True,
+                "QUOTA_QUIET_START": "00:00", "QUOTA_QUIET_END": "00:00"}
+    monkeypatch.setattr(config_manager, "_config", settings)
+    data = TokenData(status="ok", last_success_at=datetime.now(),
+                     quota_windows=[QuotaWindow("weekly", "周额度", 95)])
+    message = usage_message(data, False, "codex")
+    assert message["warning"] is False
+    assert message["status"] == ""
+    settings["QUOTA_QUIET_ENABLED"] = False
+    assert usage_message(data, False, "codex")["warning"] is True
+    settings["QUOTA_QUIET_ENABLED"] = True
+    data.status = "error"
+    message = usage_message(data, False, "codex")
+    assert message["warning"] is True
+    assert message["status"] == "用量更新失败，显示上次数据。"
+
+
 def test_pet_refresh_error_warning_remains_when_quota_alerts_are_disabled(monkeypatch):
     monkeypatch.setattr(config_manager, "_config", {"QUOTA_ALERT_ENABLED": False})
     data = TokenData(status="error", last_success_at=datetime.now(),

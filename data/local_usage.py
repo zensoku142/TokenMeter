@@ -139,17 +139,27 @@ class LocalUsageScanner:
     def __init__(self):
         self.files: dict[tuple[str, Path], _FileUsage] = {}
         self.issues = 0
+        self.read_failed = False
         self.changed = False
         self._last_rows: list[LocalUsage] | None = None
 
     def scan(self, roots: dict[str, Path]) -> list[LocalUsage]:
         previous_issues = self.issues
         self.issues = 0
+        # 坏行仍可跳过；文件/目录读取失败则不能证明整份分时快照完整。
+        self.read_failed = False
         self.changed = False
         current: set[tuple[str, Path]] = set()
+
+        def scan_error(error):
+            # sessions/archived_sessions 可以尚未创建；其他遍历错误不能被静默吞掉。
+            if not isinstance(error, FileNotFoundError):
+                raise error
+
         for provider, root in roots.items():
             if not root.is_dir():
                 self.issues += 1
+                self.read_failed = True
                 continue
             if provider == "zcode":
                 path = root / "cli" / "db" / "db.sqlite"
@@ -158,6 +168,7 @@ class LocalUsageScanner:
                     path = root / "db" / "db.sqlite"
                 if not path.is_file():
                     self.issues += 1
+                    self.read_failed = True
                     continue
                 current.add((provider, path))
                 self._read_zcode(path)
@@ -166,12 +177,17 @@ class LocalUsageScanner:
             directories = (root / "sessions", root / "archived_sessions") if provider == "codex" else (root / "projects",)
             for directory in directories:
                 try:
-                    for path in directory.rglob("*.jsonl"):
-                        key = (provider, path)
-                        current.add(key)
-                        self._read(provider, path)
+                    # rglob 会忽略部分目录访问错误；walk 显式上报，避免误当作日志已删除。
+                    for parent, _directories, filenames in directory.walk(on_error=scan_error):
+                        for filename in filenames:
+                            path = parent / filename
+                            if path.match("*.jsonl"):
+                                key = (provider, path)
+                                current.add(key)
+                                self._read(provider, path)
                 except OSError:
                     self.issues += 1
+                    self.read_failed = True
         self.changed = self.changed or bool(set(self.files) - current)
         self.files = {key: value for key, value in self.files.items() if key in current}
         self.issues += sum(data.issues for data in self.files.values())
@@ -245,6 +261,7 @@ class LocalUsageScanner:
             if self.files.pop(key, None) is not None:
                 self.changed = True
             self.issues += 1
+            self.read_failed = True
 
     def _read(self, provider: str, path: Path) -> None:
         key = (provider, path)
@@ -303,6 +320,7 @@ class LocalUsageScanner:
             if self.files.pop(key, None) is not None:
                 self.changed = True
             self.issues += 1
+            self.read_failed = True
 
     def _record(self, provider: str, record: dict, data: _FileUsage) -> None:
         payload = record.get("payload", {})

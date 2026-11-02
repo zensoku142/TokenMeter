@@ -60,6 +60,8 @@ namespace VPet_Simulator.Core
         private int FrameWidth;
         private int FrameHeight;
         private int nowid;
+        private readonly object preparationLock = new object();
+        private Task? preparation;
 
         public bool IsLoop { get; set; }
         public bool IsReady { get; private set; }
@@ -69,6 +71,7 @@ namespace VPet_Simulator.Core
         public TaskControl? Control { get; private set; }
         public string Path { get; private set; }
         public long LastUseTimeTicks = DateTime.UtcNow.Ticks;
+        public bool DeferredLoading { get; }
 
         public APNGAnimation(GraphCore graphCore, string path, GraphInfo graphinfo, bool isLoop = false)
         {
@@ -76,6 +79,9 @@ namespace VPet_Simulator.Core
             Path = path;
             GraphInfo = graphinfo;
             IsLoop = isLoop;
+            DeferredLoading = graphCore.DeferAnimationLoading && (graphinfo.ModeType != graphCore.EagerAnimationMode ||
+                graphinfo.Type is GraphInfo.GraphType.Common or GraphInfo.GraphType.Idel or
+                    GraphInfo.GraphType.StateONE or GraphInfo.GraphType.StateTWO);
             if (!GraphCore.CommConfig.ContainsKey("APA_Setup"))
             {
                 GraphCore.CommConfig["APA_Setup"] = true;
@@ -86,7 +92,13 @@ namespace VPet_Simulator.Core
                     GraphCore.CommUIElements["Image3.APNGAnimation"] = new System.Windows.Controls.Image() { Height = 500 };
                 });
             }
-            Task.Run(startup);
+            if (!DeferredLoading) _ = PrepareAsync();
+        }
+
+        public Task PrepareAsync()
+        {
+            // 预热和点播可能同时请求同一动画，必须共享同一个准备任务。
+            lock (preparationLock) return preparation ??= Task.Run(startup);
         }
 
         public static void LoadGraph(GraphCore graph, FileSystemInfo path, ILine info)
@@ -106,7 +118,7 @@ namespace VPet_Simulator.Core
                 await Task.Delay(100);
             }
 
-            // APNG 解析也会持有全部压缩帧；与 PNG 共用限流，避免首次加载几十段动作时内存暴涨。
+            // 元数据读取同样会遍历大量帧块，与构建一起限流，避免多个别名同时争抢磁盘。
             await PNGAnimation.BuildSlots.WaitAsync();
             try
             {
@@ -241,8 +253,16 @@ namespace VPet_Simulator.Core
 
             using var image = SKImage.FromBitmap(combinedBitmap);
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            using var stream = File.Open(SpriteSheetPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-            data.SaveTo(stream);
+            // 后台预热可能随进程退出而中断；先写临时文件再发布，避免下次把半张图当成缓存。
+            string temporary = SpriteSheetPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var stream = File.Open(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    data.SaveTo(stream);
+                try { File.Move(temporary, SpriteSheetPath); }
+                catch (IOException) when (File.Exists(SpriteSheetPath)) { }
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private static ParsedApng ParseApng(string path, bool includeImageData = true)

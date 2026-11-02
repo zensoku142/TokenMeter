@@ -23,10 +23,15 @@ namespace VPet_Simulator.Core
         /// <summary>
         /// 宠物图像
         /// </summary>
-        public GraphCore Graph(int Resolution, Dispatcher dispatcher)
+        public GraphCore Graph(int Resolution, Dispatcher dispatcher) => Graph(Resolution, dispatcher, false);
+
+        public GraphCore Graph(int Resolution, Dispatcher dispatcher, bool deferAnimationLoading,
+            IGameSave.ModeType? eagerAnimationMode = null)
         {
             GraphCount = 0;
-            var g = new GraphCore(Resolution, dispatcher, Config);
+            var g = new GraphCore(Resolution, dispatcher, Config) {
+                DeferAnimationLoading = deferAnimationLoading, EagerAnimationMode = eagerAnimationMode
+            };
             foreach (var p in path)
                 GraphCount += LoadGraph(g, new DirectoryInfo(p), p);
             return g;

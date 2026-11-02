@@ -25,6 +25,9 @@ namespace VPet_Simulator.Core
         /// 桌宠图形渲染的分辨率,越高图形越清晰
         /// </summary>
         public int Resolution { get; set; } = 1000;
+        // 桌宠宿主可按实际需要准备动画，默认保持原内核全部预加载的行为。
+        public bool DeferAnimationLoading { get; set; }
+        public IGameSave.ModeType? EagerAnimationMode { get; set; }
         /// <summary>
         /// 动画缓存空闲超时时间,超过该时间未使用的动画将被释放,单位 Ticks
         /// </summary>

@@ -13,6 +13,8 @@ from config import runtime as config_manager
 from config.defaults import DEFAULT_CONFIG
 from data.store import TokenData
 
+ENABLED_CONFIG = {**DEFAULT_CONFIG, "ACCOUNT_PROFILES_ENABLED": True}
+
 
 @pytest.fixture
 def cc_accounts(tmp_path, monkeypatch):
@@ -22,6 +24,7 @@ def cc_accounts(tmp_path, monkeypatch):
     # CONFIG_PATH is initialized separately; isolate it too so clean CI never reads real user settings.
     monkeypatch.setattr(config_manager, "CONFIG_PATH", tmp_path / "config.json")
     monkeypatch.setattr(config_manager, "LEGACY_CONFIG_PATH", tmp_path / "legacy-config.py")
+    monkeypatch.setattr(config_manager, "_config", dict(ENABLED_CONFIG))
     monkeypatch.setattr(cc_switch, "_retry_after", 0)
     with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE providers (app_type, name, meta, sort_index, created_at)")
@@ -57,8 +60,67 @@ def test_no_configuration_does_not_create_database_or_launch_cc(tmp_path, monkey
     launch.assert_not_called()
 
 
+@pytest.mark.parametrize("saved, expected", [
+    ({"CODEX_HOME": "C:/existing"}, False),
+    ({"ACCOUNT_PROFILES_ENABLED": False}, False),
+    ({"ACCOUNT_PROFILES_ENABLED": True}, True),
+])
+def test_profile_setting_defaults_off_and_preserves_saved_choice(cc_accounts, monkeypatch, saved, expected):
+    config_manager.CONFIG_PATH.write_text(json.dumps(saved), encoding="utf-8")
+    monkeypatch.setattr(config_manager, "_read_credential", lambda _key: "")
+    assert config_manager.load_config()["ACCOUNT_PROFILES_ENABLED"] is expected
+    assert cc_switch.is_enabled() is expected
+
+
+def test_missing_runtime_profile_setting_keeps_connections_off(cc_accounts, monkeypatch):
+    monkeypatch.setattr(config_manager, "_config", {})
+    manual = store.save_profile("codex", "Manual", {"HOME": "C:/manual"})
+    discover = Mock(wraps=cc_switch.codex_accounts)
+    monkeypatch.setattr(cc_switch, "codex_accounts", discover)
+    assert not store.is_profile_enabled(manual)
+    assert not cc_switch.is_enabled()
+    assert store.import_cc_switch_profiles() == 0
+    discover.assert_not_called()
+
+
+def test_fresh_profile_setting_stays_off_until_enabled_in_settings(cc_accounts, monkeypatch):
+    from ui.qt_settings import SettingsWindow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(config_manager, "_read_credential", lambda _key: "")
+    monkeypatch.setattr(config_manager, "_write_credential", lambda _key, _value: None)
+    monkeypatch.setattr("ui.qt_settings.sync_autostart", Mock())
+    config_manager.CONFIG_DIR.mkdir()
+    loaded = config_manager.load_config()
+    assert loaded["ACCOUNT_PROFILES_ENABLED"] is False
+    assert json.loads(config_manager.CONFIG_PATH.read_text(encoding="utf-8"))["ACCOUNT_PROFILES_ENABLED"] is False
+    manual = store.save_profile("codex", "Manual", {"HOME": "C:/manual"})
+    discover = Mock(wraps=cc_switch.codex_accounts)
+    monkeypatch.setattr(cc_switch, "codex_accounts", discover)
+
+    window = SettingsWindow()
+    window.open_account_profiles()
+    assert not window.account_profiles_check.isChecked()
+    assert not window.cc_switch_check.isEnabled()
+    assert not window.account_profiles_page.isEnabled()
+    assert store.load_profiles() == [manual]
+    assert store.load_profiles(enabled_only=True) == []
+    discover.assert_not_called()
+
+    window.account_profiles_check.click()
+    window.flush_pending_saves()
+    assert window.account_profiles_page.isEnabled()
+    assert len(store.load_profiles(enabled_only=True)) == 3
+    assert config_manager.load_config()["ACCOUNT_PROFILES_ENABLED"] is True
+    reopened = SettingsWindow()
+    assert reopened.account_profiles_check.isChecked()
+    window._autosave_ready = reopened._autosave_ready = False
+    app.processEvents()
+
+
 def test_profile_import_is_idempotent_and_preserves_default_connection(cc_accounts, monkeypatch):
-    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "CODEX_HOME": "default-home"})
+    monkeypatch.setattr(config_manager, "_config", {**ENABLED_CONFIG, "CODEX_HOME": "default-home"})
     assert store.import_cc_switch_profiles() == 2
     profiles = store.load_profiles()
     first, second = profiles
@@ -76,7 +138,7 @@ def test_profile_import_is_idempotent_and_preserves_default_connection(cc_accoun
 
 @pytest.mark.parametrize("key", ["ACCOUNT_PROFILES_ENABLED", "CC_SWITCH_ENABLED"])
 def test_disabled_cc_preserves_profiles_without_importing_or_connecting(cc_accounts, monkeypatch, key):
-    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(config_manager, "_config", dict(ENABLED_CONFIG))
     store.import_cc_switch_profiles()
     profiles = store.load_profiles()
     manual = store.save_profile("codex", "Manual", {"HOME": "C:/manual"})
@@ -100,16 +162,21 @@ def test_disabled_cc_preserves_profiles_without_importing_or_connecting(cc_accou
     assert store.load_profiles(enabled_only=True) == profiles + [manual]
 
 
-@pytest.mark.parametrize("key", ["ACCOUNT_PROFILES_ENABLED", "CC_SWITCH_ENABLED"])
+@pytest.mark.parametrize("key", [None, "ACCOUNT_PROFILES_ENABLED", "CC_SWITCH_ENABLED"])
 def test_disabled_cc_does_not_start_background_work_on_launch(cc_accounts, monkeypatch, key):
     from ui.qt_update import AppUpdateController
     from ui.qt_widget import FloatingWidget
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, key: False})
+    values = {**ENABLED_CONFIG, key: False} if key else dict(DEFAULT_CONFIG)
+    monkeypatch.setattr(config_manager, "_config", values)
     monkeypatch.setattr(FloatingWidget, "refresh", Mock())
     monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
     monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)
+    discover = Mock(wraps=cc_switch.codex_accounts)
+    monkeypatch.setattr(cc_switch, "codex_accounts", discover)
+    launch = Mock()
+    monkeypatch.setattr(cc_switch.subprocess, "Popen", launch)
     pool = Mock()
     monkeypatch.setattr("ui.qt_widget.QThreadPool.globalInstance", lambda: pool)
     widget = FloatingWidget()
@@ -118,6 +185,8 @@ def test_disabled_cc_does_not_start_background_work_on_launch(cc_accounts, monke
         assert store.load_profiles() == []
         assert widget._vpet_profile_in_flight == {}
         pool.start.assert_not_called()
+        discover.assert_not_called()
+        launch.assert_not_called()
     finally:
         widget._closed = True
         widget.deleteLater()
@@ -131,7 +200,7 @@ def test_disabling_cc_drops_queued_work_and_late_results(cc_accounts, monkeypatc
     from ui.qt_widget import FloatingWidget
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(config_manager, "_config", dict(ENABLED_CONFIG))
     monkeypatch.setattr(FloatingWidget, "refresh", Mock())
     monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
     monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)
@@ -175,7 +244,7 @@ def test_settings_switches_persist_and_restore_profile_selections(cc_accounts, m
     from ui.qt_settings import SettingsWindow
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(config_manager, "_config", dict(ENABLED_CONFIG))
     monkeypatch.setattr(config_manager, "_read_credential", lambda _key: "")
     monkeypatch.setattr(config_manager, "_write_credential", lambda _key, _value: None)
     monkeypatch.setattr("ui.qt_settings.sync_autostart", Mock())
@@ -507,7 +576,9 @@ def test_cc_accounts_refresh_before_panel_creation_and_continue_while_page_hidde
     from ui.qt_widget import FloatingWidget
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "FLOATING_STYLE": "ball", "VPET_ENABLED": False})
+    monkeypatch.setattr(config_manager, "_config", {**ENABLED_CONFIG, "FLOATING_STYLE": "ball", "VPET_ENABLED": False})
+    # 设置页会重新读取配置；模拟已明确启用多账户的用户。
+    config_manager.CONFIG_PATH.write_text('{"ACCOUNT_PROFILES_ENABLED": true}', encoding="utf-8")
     monkeypatch.setattr(FloatingWidget, "refresh", Mock())
     monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
     monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)
@@ -564,7 +635,7 @@ def test_cc_background_restores_account_cache_before_first_network_result(cc_acc
     from ui.qt_widget import FloatingWidget
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "FLOATING_STYLE": "ball", "VPET_ENABLED": False})
+    monkeypatch.setattr(config_manager, "_config", {**ENABLED_CONFIG, "FLOATING_STYLE": "ball", "VPET_ENABLED": False})
     monkeypatch.setattr(FloatingWidget, "refresh", Mock())
     monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
     monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)
@@ -604,7 +675,7 @@ def test_background_profile_results_arrive_through_real_thread_pool(cc_accounts,
     from ui.qt_widget import FloatingWidget
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "FLOATING_STYLE": "ball", "VPET_ENABLED": False})
+    monkeypatch.setattr(config_manager, "_config", {**ENABLED_CONFIG, "FLOATING_STYLE": "ball", "VPET_ENABLED": False})
     monkeypatch.setattr(FloatingWidget, "refresh", Mock())
     monkeypatch.setattr(FloatingWidget, "_sync_codex_reset_news", lambda self: None)
     monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda self: None)

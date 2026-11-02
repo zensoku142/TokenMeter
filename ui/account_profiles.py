@@ -205,7 +205,7 @@ class AccountProfilesPage(ProviderOverview):
                     self._details.reject()
         self.profiles = profiles
         self._queue = [profile_id for profile_id in self._queue if profile_id in current]
-        enabled = bool(config_manager.get("ACCOUNT_PROFILES_ENABLED", True))
+        enabled = bool(config_manager.get("ACCOUNT_PROFILES_ENABLED", False))
         self.setEnabled(enabled)
         bind_text(self.empty, "尚无账户档案" if enabled else "多账户已关闭，已有配置已保留。")
         if self._monitor is not None:
@@ -295,7 +295,7 @@ class AccountProfilesPage(ProviderOverview):
         QTimer.singleShot(0, self._advance)
 
     def edit_profile(self, profile_id=""):
-        if not config_manager.get("ACCOUNT_PROFILES_ENABLED", True):
+        if not config_manager.get("ACCOUNT_PROFILES_ENABLED", False):
             return
         profile = next((item for item in self.profiles if item["id"] == profile_id), None)
         if profile and profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):

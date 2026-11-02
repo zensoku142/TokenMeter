@@ -91,7 +91,7 @@ internal sealed partial class PetWindow
         PlayAutonomousFrame(autonomousGeneration, 0);
     }
 
-    private void PlayAutonomousFrame(int generation, int index)
+    private async void PlayAutonomousFrame(int generation, int index)
     {
         if (generation != autonomousGeneration || autonomousSequence == null) return;
         if (!CanMoveAutonomously)
@@ -107,7 +107,16 @@ internal sealed partial class PetWindow
             pet!.DisplayToNomal();
             return;
         }
-        autonomousFrame = autonomousSequence[index];
+        var nextFrame = autonomousSequence[index];
+        if (IsDeferredAnimation(nextFrame))
+        {
+            bool prepared = await PrepareOptionalAnimation(nextFrame);
+            // 异步解码期间动作可能被提醒、拖动或角色切换取消。
+            if (generation != autonomousGeneration || autonomousSequence == null) return;
+            if (!prepared || !CanMoveAutonomously) { CancelAutonomousSequence(); return; }
+        }
+        // 准备期间仍以旧画面为当前帧，避免迟到的显示事件把等待中的新动作误判为被打断。
+        autonomousFrame = nextFrame;
         pet!.Display(autonomousFrame, () => {
             // 原版动画回调在后台执行；回到 UI 后验证批次，拖动/提醒/隐藏不能被旧动作续播覆盖。
             if (!Dispatcher.HasShutdownStarted)

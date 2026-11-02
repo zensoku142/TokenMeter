@@ -1,10 +1,11 @@
 from datetime import datetime
 from decimal import Decimal
+from html.parser import HTMLParser
 from unittest.mock import Mock
 
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QWheelEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 from test_refresh import widget_stub
@@ -339,6 +340,92 @@ def test_profile_entries_keep_independent_values_and_aliases():
     assert rail.selected_providers() == []
 
 
+def mouse(widget, event_type, global_position):
+    button = (Qt.MouseButton.NoButton if event_type == QEvent.Type.MouseMove
+              else Qt.MouseButton.LeftButton)
+    buttons = (Qt.MouseButton.NoButton if event_type == QEvent.Type.MouseButtonRelease
+               else Qt.MouseButton.LeftButton)
+    event = QMouseEvent(event_type, QPointF(widget.mapFromGlobal(global_position)),
+                        QPointF(global_position), button, buttons, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(widget, event)
+
+
+@pytest.mark.parametrize("delta", [QPoint(0, 90), QPoint(0, -90), QPoint(80, 0),
+                                   QPoint(-80, 0), QPoint(20, 90)])
+def test_direct_icon_drag_moves_window_in_any_direction_without_reordering(delta):
+    from config import state
+
+    rail = LightRingWidget()
+    rail.set_sources(["codex", "claude", "cursor"])
+    rail.show()
+    APP.processEvents()
+    rail.move(rail.screen().availableGeometry().center() - rail.rect().center())
+    origin = rail.pos()
+    item = rail.items["codex"]
+    point = item.mapToGlobal(item.rect().center())
+    opened = Mock()
+    rail.provider_selected.connect(opened)
+    mouse(item, QEvent.Type.MouseButtonPress, point)
+    mouse(item, QEvent.Type.MouseMove, point + delta)
+    assert rail.pos() == origin + delta
+    assert rail.selected_sources() == ["codex", "claude", "cursor"]
+    assert not rail.popup.isVisible()
+
+    # 移动已经开始后，即使超过长按时间，也不能中途切换成排序。
+    QTest.qWait(QApplication.startDragTime() + 20)
+    mouse(item, QEvent.Type.MouseMove, point + delta + QPoint(0, 20))
+    assert rail.pos() == origin + delta + QPoint(0, 20)
+    mouse(item, QEvent.Type.MouseButtonRelease, point + delta + QPoint(0, 20))
+    opened.assert_not_called()
+    saved = state.load_dict(config_manager.PANEL_LAYOUT_PATH)
+    assert saved["light_ring_position"] == [rail.x(), rail.y()]
+    assert "light_ring_order" not in saved
+
+
+def test_hold_icon_then_drag_reorders_without_moving_window_or_opening_panel():
+    from config import state
+
+    rail = LightRingWidget()
+    rail.set_sources(["codex", "claude", "cursor"])
+    rail.show()
+    APP.processEvents()
+    origin = rail.pos()
+    item = rail.items["codex"]
+    point = item.mapToGlobal(item.rect().center())
+    opened = Mock()
+    rail.provider_selected.connect(opened)
+    mouse(item, QEvent.Type.MouseButtonPress, point)
+    mouse(item, QEvent.Type.MouseMove, point + QPoint(1, 1))
+    assert rail.pos() == origin
+    QTest.qWait(QApplication.startDragTime() + 20)
+    mouse(item, QEvent.Type.MouseMove, point + QPoint(0, 140))
+    assert rail.pos() == origin
+    assert rail.selected_sources() == ["claude", "cursor", "codex"]
+    mouse(item, QEvent.Type.MouseButtonRelease, point + QPoint(0, 140))
+    opened.assert_not_called()
+    assert state.load_dict(config_manager.PANEL_LAYOUT_PATH)["light_ring_order"] == ["claude", "cursor", "codex"]
+
+
+@pytest.mark.parametrize("surface", ["rail", "gap", "viewport"])
+def test_background_drag_moves_window(surface):
+    rail = LightRingWidget()
+    rail.set_sources(["codex", "claude"])
+    rail.show()
+    APP.processEvents()
+    rail.move(rail.screen().availableGeometry().center() - rail.rect().center())
+    origin = rail.pos()
+    widget, local = {"rail": (rail, QPoint(rail.width() // 2, 4)),
+                     "gap": (rail.content, QPoint(rail.content.width() // 2, 65)),
+                     "viewport": (rail.scroll.viewport(), QPoint(0, 20))}[surface]
+    point = widget.mapToGlobal(local)
+    mouse(widget, QEvent.Type.MouseButtonPress, point)
+    mouse(widget, QEvent.Type.MouseMove, point + QPoint(0, 60))
+    assert rail.pos() == origin + QPoint(0, 60)
+    assert rail.selected_sources() == ["codex", "claude"]
+    mouse(widget, QEvent.Type.MouseButtonRelease, point + QPoint(0, 60))
+    assert rail._drag_origin is None
+
+
 def test_reorder_persists_for_platforms_and_accounts_and_keeps_other_state():
     from config import state
 
@@ -411,7 +498,8 @@ def test_docked_ring_keeps_shadow_along_straight_edge(theme, edge, width):
     rail.close()
 
 
-def test_ring_profile_selection_reuses_account_scoped_tasks(monkeypatch):
+def test_ring_profile_selection_reuses_account_scoped_tasks(monkeypatch, preferences):
+    preferences["ACCOUNT_PROFILES_ENABLED"] = True
     widget = widget_stub()
     widget.panel = None
     rail = widget._light_ring = Mock()
@@ -486,7 +574,16 @@ def test_codex_popup_always_has_public_reset_section_when_enabled():
     footer = card.findChild(QLabel, "publicResetNews")
     assert "上次公开重置" in footer.text()
     assert "已过去" in footer.text()
-    assert "https://codex-resets.com/" in footer.text()
+    class Links(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                self.urls.append(dict(attrs).get("href"))
+
+    # 检查实际链接目标，避免子串断言既误命中正文又被 CodeQL 当作 URL 校验。
+    links = Links()
+    links.urls = []
+    links.feed(footer.text())
+    assert "https://codex-resets.com/" in links.urls
     assert card.height() == rail.popup.height()
     rail.set_reset_news(None, enabled=False)
     assert footer.isHidden()

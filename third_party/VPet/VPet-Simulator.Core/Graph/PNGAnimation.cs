@@ -54,7 +54,12 @@ namespace VPet_Simulator.Core
         private byte[]? FramePixels;
         private int FrameWidth;
         private int FrameHeight;
+        private readonly string sourcePath;
+        private readonly FileInfo[] sourcePaths;
+        private readonly object preparationLock = new object();
+        private Task? preparation;
         public long LastUseTimeTicks = DateTime.UtcNow.Ticks;
+        public bool DeferredLoading { get; }
 
         public bool IsFail { get; set; } = false;
 
@@ -72,6 +77,11 @@ namespace VPet_Simulator.Core
             IsLoop = isLoop;
             GraphInfo = graphinfo;
             GraphCore = graphCore;
+            sourcePath = path;
+            sourcePaths = paths;
+            DeferredLoading = graphCore.DeferAnimationLoading && (graphinfo.ModeType != graphCore.EagerAnimationMode ||
+                graphinfo.Type is GraphInfo.GraphType.Common or GraphInfo.GraphType.Idel or
+                    GraphInfo.GraphType.StateONE or GraphInfo.GraphType.StateTWO);
             if (!GraphCore.CommConfig.ContainsKey("PA_Setup"))
             {
                 GraphCore.CommConfig["PA_Setup"] = true;
@@ -82,7 +92,13 @@ namespace VPet_Simulator.Core
                     GraphCore.CommUIElements["Image3.PNGAnimation"] = new System.Windows.Controls.Image() { Height = 500 }; // 多整个, 防止动画闪烁
                 });
             }
-            Task.Run(() => startup(path, paths));
+            if (!DeferredLoading) _ = PrepareAsync();
+        }
+
+        public Task PrepareAsync()
+        {
+            // 自主动作和后台预热共用同一任务，避免重复解码或覆盖帧缓存。
+            lock (preparationLock) return preparation ??= Task.Run(() => startup(sourcePath, sourcePaths));
         }
 
         public static void LoadGraph(GraphCore graph, FileSystemInfo path, ILine info)
@@ -115,7 +131,7 @@ namespace VPet_Simulator.Core
         // 每路径锁只防止同一张图重复构建；还需限制不同动画同时解码时的原生内存峰值。
         internal static readonly SemaphoreSlim BuildSlots = new SemaphoreSlim(2, 2);
 
-        private async void startup(string path, FileInfo[] paths)
+        private async Task startup(string path, FileInfo[] paths)
         {
             while (Function.MemoryUsage() > MaxLoadMemory)
             {
@@ -180,9 +196,17 @@ namespace VPet_Simulator.Core
                                 // Save the combined image to the cache path
                                 using (var image = SKImage.FromBitmap(combinedBitmap))
                                 using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
-                                using (var stream = File.OpenWrite(Path))
                                 {
-                                    data.SaveTo(stream);
+                                    // 预热可能因退出中断；只在完整写入后发布缓存，避免下次读取残缺图片。
+                                    string temporary = Path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                                    try
+                                    {
+                                        using (var stream = File.Open(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                                            data.SaveTo(stream);
+                                        try { File.Move(temporary, Path); }
+                                        catch (IOException) when (File.Exists(Path)) { }
+                                    }
+                                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
                                 }
                             }
                         }

@@ -19,7 +19,7 @@ from data.store import TokenData
 def isolated_profiles(monkeypatch, tmp_path):
     secrets = {}
     monkeypatch.setattr(config_manager, "CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(config_manager, "_config", dict(DEFAULT_CONFIG))
+    monkeypatch.setattr(config_manager, "_config", {**DEFAULT_CONFIG, "ACCOUNT_PROFILES_ENABLED": True})
     monkeypatch.setattr(credentials, "read_credential", lambda key: secrets.get(key, ""))
     monkeypatch.setattr(credentials, "write_credential", lambda key, value: secrets.__setitem__(key, value))
     return secrets

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from config import runtime as config_manager
 from data.local_usage import (
@@ -777,7 +778,15 @@ class LocalAnalyticsDialog(QDialog):
         self.navigator.setVisible(bool(series) and self.result_stack.currentWidget() is self.chart)
 
     def _chart_hover(self, position):
-        view = self.chart.getPlotItem().getViewBox()
+        # SignalProxy 的限频回调可能晚于窗口销毁或隐藏，不能访问已释放的图表。
+        if not isValid(self) or not isValid(self.chart) or not self.isVisible():
+            return
+        plot = self.chart.getPlotItem()
+        if plot is None or not isValid(plot):
+            return
+        view = plot.getViewBox()
+        if view is None or not isValid(view):
+            return
         if not view.sceneBoundingRect().contains(position):
             self.hover_tooltip.hide()
             self._hover_key = None

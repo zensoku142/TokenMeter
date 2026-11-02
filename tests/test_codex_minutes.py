@@ -1,6 +1,8 @@
 import json
+import os
 from dataclasses import astuple
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -132,6 +134,77 @@ def test_store_loads_local_minutes_without_payloads_and_keeps_official_quota(tmp
             assert other.local_usage_scope != provider.local_usage_scope
         finally:
             other.close()
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("failure", ["file", "directory"])
+def test_partial_log_scan_preserves_minutes_and_recovers_without_stale_deleted_logs(tmp_path, monkeypatch, failure):
+    stamp = datetime.now().astimezone().replace(hour=11, minute=12, second=0, microsecond=0)
+    good, blocked = tmp_path / "sessions/good.jsonl", tmp_path / "sessions/other/blocked.jsonl"
+    write(good, session_records(stamp))
+    records = session_records(stamp)
+    records[0]["payload"]["id"] = "other-session"
+    write(blocked, records)
+    provider = CodexProvider({"CODEX_HOME": str(tmp_path)})
+    monkeypatch.setattr(provider, "is_configured", Mock(return_value=True))
+    monkeypatch.setattr(provider, "snapshot_identity", Mock(return_value="test-account"))
+    monkeypatch.setattr(provider, "fetch_quota", Mock(return_value=(ProviderQuota(), None)))
+    monkeypatch.setattr(CodexProvider, "_minute_scanner", None)
+    monkeypatch.setattr(TokenData, "_provider_snapshots", {})
+    original_stat = Path.stat
+    original_scandir = os.scandir
+
+    def unavailable(path, *args, **kwargs):
+        if path == blocked:
+            raise PermissionError("synthetic unreadable log")
+        return original_stat(path, *args, **kwargs)
+
+    def unavailable_directory(path):
+        if Path(path) == blocked.parent:
+            raise PermissionError("synthetic unreadable directory")
+        return original_scandir(path)
+
+    try:
+        complete = TokenData._fetch_with_provider(provider)
+        assert sum(row["token_amount"] for row in complete.minute_usage) == 197310
+        with monkeypatch.context() as patch:
+            if failure == "file":
+                patch.setattr(Path, "stat", unavailable)
+            else:
+                patch.setattr(os, "scandir", unavailable_directory)
+            partial = TokenData._fetch_with_provider(provider)
+        assert partial.minute_usage_status == "failed"
+        assert partial.minute_usage == complete.minute_usage
+        recovered = TokenData._fetch_with_provider(provider)
+        assert recovered.minute_usage_status == "recorded"
+        assert recovered.minute_usage == complete.minute_usage
+        blocked.unlink()
+        remaining = TokenData._fetch_with_provider(provider)
+        assert sum(row["token_amount"] for row in remaining.minute_usage) == 98655
+        good.unlink()
+        empty = TokenData._fetch_with_provider(provider)
+        assert empty.minute_usage_status == "empty"
+        assert empty.minute_usage == []
+    finally:
+        provider.close()
+
+
+def test_malformed_log_record_does_not_block_valid_minute_usage(tmp_path, monkeypatch):
+    stamp = datetime.now().astimezone().replace(hour=11, minute=12, second=0, microsecond=0)
+    path = tmp_path / "sessions/log.jsonl"
+    write(path, session_records(stamp))
+    with path.open("ab") as stream:
+        stream.write(b'{"usage": broken}\n')
+    monkeypatch.setattr(CodexProvider, "_minute_scanner", None)
+    provider = CodexProvider({"CODEX_HOME": str(tmp_path)})
+    try:
+        snapshot = provider.exact_minute_usage()
+        assert snapshot is not None
+        assert sum(row["token_amount"] for row in snapshot.token_rows) == 98655
+        scanner = CodexProvider._minute_scanner[1]
+        assert scanner.issues == 1
+        assert not scanner.read_failed
     finally:
         provider.close()
 

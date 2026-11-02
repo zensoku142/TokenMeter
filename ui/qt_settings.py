@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from api.deepseek_pricing import normalize_offpeak_dates
 from api.providers import PROVIDERS, list_providers
@@ -1434,8 +1435,28 @@ class SettingsWindow(QDialog):
         # 细环贴边始终保留数字，原来的自动隐藏选项只控制悬浮球。
         self.edge_hide_check.setEnabled(not rings)
 
+    def _select_color(self, initial: QColor, title: str) -> QColor:
+        dialog = QColorDialog(initial, self)
+        try:
+            dialog.setWindowTitle(title)
+            parent = self.window()
+            if parent.windowFlags() & Qt.WindowType.WindowStaysOnTopHint:
+                dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            # 内嵌设置页可能生成中间原生窗口；显式归属置顶面板，避免选色窗口被面板遮住。
+            parent.winId()
+            dialog.winId()
+            if dialog.windowHandle() is not None:
+                dialog.windowHandle().setTransientParent(parent.windowHandle())
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                return dialog.selectedColor()
+            return QColor()
+        finally:
+            # 模态循环中父窗口可能已销毁；仍有效时释放对话框，避免重复打开后累积。
+            if isValid(dialog):
+                dialog.deleteLater()
+
     def _choose_ring_color(self) -> None:
-        selected = QColorDialog.getColor(QColor(self.ring_color_edit.text()), self, tr("圆环自定义颜色"))
+        selected = self._select_color(QColor(self.ring_color_edit.text()), tr("圆环自定义颜色"))
         if selected.isValid():
             self.ring_color_edit.setText(selected.name().upper())
             self._schedule_save()
@@ -1824,7 +1845,7 @@ class SettingsWindow(QDialog):
             QColorDialog.setCustomColor(index, color)
             previous_colors.append(color.name(QColor.NameFormat.HexRgb).upper())
         initial = QColor(self.accent_color_edit.text().strip())
-        selected = QColorDialog.getColor(initial, self, "选择主题主色")
+        selected = self._select_color(initial, "选择主题主色")
         if selected.isValid():
             self.accent_color_edit.setText(
                 selected.name(QColor.NameFormat.HexRgb).upper()
@@ -2349,7 +2370,7 @@ class SettingsWindow(QDialog):
         self._sync_floating_style_controls()
         for profile_id, check in self.ring_profile_checks.items():
             check.setChecked(profile_id in values.get("BACKGROUND_PROFILE_IDS", []))
-        self.account_profiles_check.setChecked(bool(values.get("ACCOUNT_PROFILES_ENABLED", True)))
+        self.account_profiles_check.setChecked(bool(values.get("ACCOUNT_PROFILES_ENABLED", False)))
         self.cc_switch_check.setChecked(bool(values.get("CC_SWITCH_ENABLED", True)))
         self._sync_profile_controls()
         self.quota_ring_counterclockwise_check.setChecked(

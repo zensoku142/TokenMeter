@@ -1,6 +1,7 @@
 """Regression cases for account boundaries and bounded history/log reads."""
 
 import json
+import sqlite3
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import Mock
@@ -12,10 +13,61 @@ from requests.adapters import BaseAdapter
 from api.http import HttpsSession
 from api.providers.base import FetchError, Provider, ProviderQuota, ProviderSummary, QuotaMetric, QuotaWindow
 from api.providers.codex import CodexProvider
+from api.providers.mimo import MiMoProvider, _BrowserContextResult
 from config import credentials
 from config.store import is_official_base_url, validate_config
 from data import history
 from data.store import TokenData, _load_minute_history
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize("browser_user", ["account-b", ""])
+def test_mimo_browser_fallback_rejects_other_or_unknown_account(monkeypatch, method, browser_user):
+    provider = MiMoProvider({"MIMO_COOKIE": "session=old; userId=account-a"})
+    monkeypatch.setattr(provider._session, method, Mock(return_value=Mock(status_code=401)))
+    monkeypatch.setattr(provider, "_fetch_browser_context", Mock(return_value=_BrowserContextResult(
+        {"balance": "99"}, f"session=new; userId={browser_user}", "browser-ph",
+    )))
+    try:
+        with pytest.raises(RuntimeError, match="^AUTH_EXPIRED$"):
+            if method == "get":
+                provider._get("/api/v1/balance")
+            else:
+                provider._post("/api/v1/usage", {})
+        assert provider._browser_cookie == ""
+        assert provider._browser_api_platform_ph == ""
+    finally:
+        provider.close()
+
+
+def test_mimo_browser_fallback_requires_original_account_id(monkeypatch):
+    provider = MiMoProvider({"MIMO_COOKIE": "session=unknown"})
+    recover = Mock()
+    monkeypatch.setattr(provider, "_fetch_browser_context", recover)
+    try:
+        with pytest.raises(RuntimeError, match="^AUTH_EXPIRED$"):
+            provider._fetch_in_browser(path="/api/v1/balance")
+        recover.assert_not_called()
+    finally:
+        provider.close()
+
+
+def test_mimo_browser_fallback_cannot_publish_other_profile_data(database, monkeypatch):
+    provider = MiMoProvider({"MIMO_COOKIE": "session=old; userId=account-a",
+                            "_ACCOUNT_PROFILE_ID": "a" * 32})
+    monkeypatch.setattr(provider._session, "get", Mock(return_value=Mock(status_code=401)))
+    monkeypatch.setattr(provider._session, "post", Mock(return_value=Mock(status_code=401)))
+    monkeypatch.setattr(provider, "_fetch_browser_context", Mock(return_value=_BrowserContextResult(
+        {"balance": "99", "currency": "CNY"}, "session=new; userId=account-b", "browser-ph",
+    )))
+    try:
+        result = TokenData._fetch_with_provider(provider, lightweight=True)
+        assert result.status == "error"
+        assert result.balance_cny is None
+        assert {error.code for error in result.errors} == {"AUTH_EXPIRED"}
+        assert history.recent_daily(7, f"mimo:{result.account_key}") == []
+    finally:
+        provider.close()
 
 
 @pytest.fixture
@@ -398,3 +450,66 @@ def test_release_metadata_has_a_bounded_read(monkeypatch):
     finally:
         client._session.close()
     response.close.assert_called_once()
+
+
+def test_exact_minute_unchanged_snapshot_skips_writes_and_keeps_cleanup_and_retry(database):
+    today = date.today()
+    tokens = [{"usage_date": today, "minute": 60, "token_type": "RESPONSE_TOKEN", "token_amount": 10}]
+    costs = [{"usage_date": today, "minute": 60, "cost_cny": Decimal("1.20")}]
+    models = [{"usage_date": today, "minute": 60, "model": "test", "output_tokens": 10,
+               "cost_cny": Decimal("1.20")}]
+
+    def save():
+        return history.replace_exact_minute_usage("synthetic", {today}, tokens, costs, today,
+                                                 model_rows=models)
+
+    assert save() == "recorded"
+    tables = ("minute_usage", "minute_cost_usage", "minute_model_usage")
+    with history._connect() as connection:
+        connection.execute("CREATE TABLE exact_writes (operation TEXT)")
+        for table in tables:
+            connection.execute(f"UPDATE {table} SET updated_at='original'")
+            for operation in ("INSERT", "DELETE", "UPDATE"):
+                connection.execute(f"""CREATE TRIGGER audit_{table}_{operation} AFTER {operation} ON {table}
+                    BEGIN INSERT INTO exact_writes VALUES ('{operation}'); END""")
+        # 重复刷新也必须执行过期清理，而不是直接跳过整个存储流程。
+        connection.execute("INSERT INTO minute_usage VALUES (?, ?, ?, ?, ?, ?)",
+                           ("synthetic", (today - timedelta(days=20)).isoformat(), 60,
+                            "RESPONSE_TOKEN", 1, "expired"))
+        connection.execute("DELETE FROM exact_writes")
+    costs[0]["cost_cny"] = models[0]["cost_cny"] = Decimal("1.200")
+    assert save() == "recorded"
+    with history._connect() as connection:
+        assert connection.execute("SELECT operation FROM exact_writes").fetchall() == [("DELETE",)]
+        for table in tables:
+            assert connection.execute(f"SELECT updated_at FROM {table}").fetchall() == [("original",)]
+        connection.execute("DELETE FROM exact_writes")
+    assert save() == "recorded"
+    with history._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM exact_writes").fetchone()[0] == 0
+        # 旧估算基线即便与新快照数值相同，也必须清除，避免以后混用两种采样方式。
+        connection.execute("INSERT INTO minute_usage_snapshot VALUES (?, ?, ?, ?, ?)",
+                           ("synthetic", today.isoformat(), "RESPONSE_TOKEN", 10, "baseline"))
+    assert save() == "recorded"
+    with history._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM minute_usage_snapshot").fetchone()[0] == 0
+        connection.execute("""CREATE TRIGGER fail_exact BEFORE INSERT ON minute_model_usage
+            BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END""")
+    tokens[0]["token_amount"] = models[0]["output_tokens"] = 11
+    with pytest.raises(sqlite3.DatabaseError, match="synthetic write failure"):
+        save()
+    assert history.minute_usage_for_day("synthetic", today)[0]["token_amount"] == 10
+    with history._connect() as connection:
+        connection.execute("DROP TRIGGER fail_exact")
+    assert save() == "recorded"
+    assert history.minute_usage_for_day("synthetic", today)[0]["token_amount"] == 11
+    # 没有进程内“已保存”标记；数据库记录丢失后，相同快照也能恢复它。
+    with history._connect() as connection:
+        connection.execute("DELETE FROM minute_usage")
+    assert save() == "recorded"
+    assert history.minute_usage_for_day("synthetic", today)[0]["token_amount"] == 11
+    tokens.clear()
+    costs.clear()
+    models.clear()
+    assert save() == "empty"
+    assert history.minute_usage_for_day("synthetic", today) == []

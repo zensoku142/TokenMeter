@@ -163,7 +163,7 @@ internal sealed partial class PetWindow
         var owner = whaleGraph ?? throw new InvalidOperationException("鲸鱼娘图池尚未就绪");
         var animation = new APNGAnimation(owner, destination,
             new GraphInfo(name, GraphType.Common, AnimatType.Single, save.Mode));
-        while (!closing && !animation.IsReady && !animation.IsFail) await Task.Delay(30);
+        await animation.PrepareAsync();
         if (closing || animation.IsFail)
         {
             string message = animation.FailMessage;

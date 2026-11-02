@@ -5,6 +5,7 @@ from html import escape
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QElapsedTimer,
     QEvent,
     QPoint,
     QPropertyAnimation,
@@ -102,6 +103,7 @@ class _RingItem(QAbstractButton):
         self._keyboard_focus = False
         self.setFixedHeight(62)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        bind_text(self, "拖动可移动窗口；长按后上下拖动可排序。", method="setToolTip")
         self.clicked.connect(lambda: rail.provider_selected.emit(entry_id))
         self.refresh_theme()
 
@@ -203,11 +205,19 @@ class _RingItem(QAbstractButton):
             if origin is not None:
                 delta = point - origin
                 if not self.rail._gesture and delta.manhattanLength() >= QApplication.startDragDistance():
-                    self.rail._gesture = "reorder" if len(self.rail.items) > 1 and abs(delta.y()) > abs(delta.x()) else "move"
+                    # 普通拖动优先移动窗口；只有先长按再纵向拖动才排序，并锁定本次手势。
+                    reorder = (len(self.rail.items) > 1 and abs(delta.y()) > abs(delta.x())
+                               and self.rail._drag_clock.elapsed() >= QApplication.startDragTime())
+                    self.rail._gesture = "reorder" if reorder else "move"
                 if self.rail._gesture == "reorder":
                     self.rail.reorder_at(self.entry_id, point)
                 else:
                     self.rail.move_drag(point)
+                if self.rail._dragging:
+                    # 已处理的拖动不能冒泡到窗口，否则排序也会把整个窗口带走。
+                    self.setDown(False)
+                    event.accept()
+                    return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -243,6 +253,7 @@ class LightRingWidget(QWidget):
         self._dragging = False
         self._gesture = ""
         self._drag_origin = None
+        self._drag_clock = QElapsedTimer()
         self._position_loaded = False
         saved_width = state.load_dict(config_manager.PANEL_LAYOUT_PATH).get("light_ring_width")
         self._rail_width = (saved_width if type(saved_width) is int and _MIN_RAIL_WIDTH <= saved_width <= _MAX_RAIL_WIDTH
@@ -445,6 +456,28 @@ class LightRingWidget(QWidget):
         if not self._resize_with_wheel(event):
             super().wheelEvent(event)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # 留白和条目间隙也可移动窗口，避免用户只能抓住狭窄的图标区域。
+            self.start_drag(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton and self._drag_origin is not None:
+            self.move_drag(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.finish_drag()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def _resize_with_wheel(self, event):
         if not event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self._wheel_delta = 0
@@ -482,6 +515,7 @@ class LightRingWidget(QWidget):
 
     def start_drag(self, point, entry_id=""):
         self._snap_animation.stop()
+        self._drag_clock.start()
         self._drag_origin = point
         self._window_origin = self.pos()
         self._dragging = False

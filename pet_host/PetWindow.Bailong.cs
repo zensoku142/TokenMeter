@@ -47,7 +47,7 @@ internal sealed partial class PetWindow
             catalog.GetProperty("quotaAnimation") });
     }
 
-    private void PlayBailongAction(string id)
+    private async void PlayBailongAction(string id)
     {
         if (character != "bailong" || pet == null || closing || !visible) return;
         var animation = graph!.FindGraph("bailong.action." + id, AnimatType.Single, save.Mode);
@@ -55,6 +55,10 @@ internal sealed partial class PetWindow
         CancelAutonomousSequence();
         int generation = ++bailongActionGeneration;
         bailongManualFrame = animation;
+        bool prepared = await PrepareOptionalAnimation(animation);
+        // 等待解码时可能发生拖动、切换、隐藏或新的点播，旧请求不能再接管画布。
+        if (generation != bailongActionGeneration || character != "bailong" || closing || !visible) return;
+        if (!prepared) { bailongManualFrame = null; return; }
         pet.CleanState();
         pet.Display(animation, () => {
             // 动画回调来自后台；只允许当前动作恢复待机，不能覆盖后来的拖动、切换或隐藏。
@@ -96,6 +100,7 @@ internal sealed partial class PetWindow
         Capture(this, Path.Combine(output, "bailong-b.png"));
         checks["animated"] = !File.ReadAllBytes(Path.Combine(output, "bailong-a.png"))
             .SequenceEqual(File.ReadAllBytes(Path.Combine(output, "bailong-b.png")));
+        await PrepareOptionalAnimation(graph.FindGraph("bailong.action.20", AnimatType.Single, save.Mode)!);
         PlayBailongAction("20");
         await Task.Delay(180);
         checks["manualAction"] = pet!.DisplayType.Name == "bailong.action.20";

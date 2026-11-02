@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
     QDialog,
+    QDialogButtonBox,
     QFrame,
     QLabel,
     QLineEdit,
@@ -2604,13 +2605,13 @@ def test_vpet_instances_can_show_distinct_provider_and_profile_data(monkeypatch)
 def test_vpet_profile_binding_refreshes_without_showing_settings(tmp_path, monkeypatch):
     from config import account_profiles as profile_store
 
+    config_manager.save_config({"VPET_ENABLED": True, "ACCOUNT_PROFILES_ENABLED": True})
     profile_id = "d" * 32
     profile = {"id": profile_id, "revision": "e" * 32, "provider": "codex", "name": "工作账号"}
     profile_config = dict(config_manager.all_config(), ACTIVE_PROVIDER="codex", _ACCOUNT_PROFILE_ID=profile_id)
     profile["fields"] = {}
     monkeypatch.setattr(profile_store, "load_profiles", lambda **_kwargs: [profile])
     monkeypatch.setattr(profile_store, "profile_config", lambda _profile: profile_config)
-    config_manager.save_config({"VPET_ENABLED": True})
     with patch.object(FloatingWidget, "refresh"):
         widget = FloatingWidget()
     extra = VPetHost(widget)
@@ -5221,7 +5222,7 @@ def test_settings_custom_colors_survive_restart_even_when_dialog_is_cancelled(
         QColorDialog.setCustomColor(len(expected) - 1, QColor(expected[-1]))
         return QColor(expected[0]) if accepted else QColor()
 
-    with patch("ui.qt_settings.QColorDialog.getColor", side_effect=add_colors):
+    with patch.object(window, "_select_color", side_effect=add_colors):
         window._choose_accent_color()
 
     saved = json.loads(config_manager.CONFIG_PATH.read_text(encoding="utf-8"))
@@ -5245,7 +5246,7 @@ def test_settings_custom_colors_survive_restart_even_when_dialog_is_cancelled(
 
     try:
         with (
-            patch("ui.qt_settings.QColorDialog.getColor", side_effect=inspect_restored_colors),
+            patch.object(reopened, "_select_color", side_effect=inspect_restored_colors),
             patch.object(config_manager, "save_ui_custom_colors") as save_colors,
         ):
             reopened._choose_accent_color()
@@ -5255,7 +5256,7 @@ def test_settings_custom_colors_survive_restart_even_when_dialog_is_cancelled(
 
 
 def test_settings_custom_colors_unchanged_does_not_write_config(custom_color_settings):
-    with patch("ui.qt_settings.QColorDialog.getColor", return_value=QColor()):
+    with patch.object(custom_color_settings, "_select_color", return_value=QColor()):
         custom_color_settings._choose_accent_color()
     assert not config_manager.CONFIG_PATH.exists()
 
@@ -5266,7 +5267,7 @@ def test_settings_custom_colors_save_failure_is_visible(custom_color_settings):
         return QColor("#D14C2F")
 
     with (
-        patch("ui.qt_settings.QColorDialog.getColor", side_effect=add_color),
+        patch.object(custom_color_settings, "_select_color", side_effect=add_color),
         patch.object(config_manager, "save_ui_custom_colors", side_effect=OSError("disk full")),
     ):
         custom_color_settings._choose_accent_color()
@@ -5275,6 +5276,133 @@ def test_settings_custom_colors_save_failure_is_visible(custom_color_settings):
     assert custom_color_settings.save_feedback.property("tone") == "danger"
     assert custom_color_settings.accent_color_edit.text() == "#D14C2F"
     assert not config_manager.CONFIG_PATH.exists()
+
+
+@pytest.mark.parametrize("color_setting", ["accent", "ring"])
+@pytest.mark.parametrize("accepted", [True, False])
+def test_settings_color_dialog_stays_above_panel_and_preserves_selection(
+    tmp_path, color_setting, accepted
+):
+    from PySide6.QtCore import QTimer
+
+    original_colors = [QColorDialog.customColor(index) for index in range(QColorDialog.customCount())]
+    with (
+        patch.object(FloatingWidget, "refresh"),
+        patch.object(config_manager, "CONFIG_PATH", tmp_path / "config.json"),
+    ):
+        widget = FloatingWidget()
+        widget.open_settings()
+        settings = widget._settings_window
+        if color_setting == "accent":
+            settings.tabs.setCurrentIndex(2)
+            edit = settings.accent_color_edit
+            button = settings.accent_color_button
+        else:
+            settings.tabs.setCurrentIndex(3)
+            settings.floating_style_combo.setCurrentIndex(
+                settings.floating_style_combo.findData("light_ring")
+            )
+            settings.ring_follow_theme_check.setChecked(False)
+            edit = settings.ring_color_edit
+            button = settings.ring_color_button
+        initial = edit.text()
+        seen = {}
+
+        def finish_dialog():
+            dialog = APP.activeModalWidget()
+            try:
+                seen["is_color_dialog"] = isinstance(dialog, QColorDialog)
+                seen["parent"] = dialog.parentWidget()
+                handle = dialog.windowHandle()
+                seen["transient_is_panel"] = bool(
+                    handle and handle.transientParent() == widget.windowHandle()
+                )
+                seen["topmost"] = bool(dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+                # 即使面板重新被唤出，对话框也必须保持在面板前面。
+                widget.raise_()
+                APP.processEvents()
+                seen["order"] = _native_window_order(dialog, widget)
+                if accepted:
+                    dialog.setCurrentColor(QColor("#D14C2F"))
+                button_box = dialog.findChild(QDialogButtonBox)
+                action = (
+                    QDialogButtonBox.StandardButton.Ok
+                    if accepted else QDialogButtonBox.StandardButton.Cancel
+                )
+                QTest.mouseClick(button_box.button(action), Qt.MouseButton.LeftButton)
+            except Exception as exc:
+                seen["error"] = exc
+            finally:
+                if dialog is not None and dialog.isVisible():
+                    dialog.reject()
+
+        try:
+            APP.processEvents()
+            assert button.isVisible() and button.isEnabled()
+            QTimer.singleShot(100, finish_dialog)
+            button.click()
+            assert "error" not in seen
+            assert seen["is_color_dialog"]
+            assert seen["parent"] is settings
+            assert seen["transient_is_panel"]
+            assert seen["topmost"]
+            if seen["order"] is not None:
+                assert seen["order"] == [0, 1]
+            assert edit.text() == ("#D14C2F" if accepted else initial)
+            if color_setting == "accent" and accepted:
+                saved = json.loads(config_manager.CONFIG_PATH.read_text(encoding="utf-8"))
+                assert saved[f"UI_{settings._resolved_theme.upper()}_ACCENT_COLOR"] == "#D14C2F"
+            if color_setting == "ring":
+                assert settings._save_pending is accepted
+                assert settings._values()["FLOATING_RING_COLOR"] == edit.text()
+                if accepted:
+                    settings.on_saved = None
+                    settings._auto_save()
+                    assert config_manager.get("FLOATING_RING_COLOR") == "#D14C2F"
+            assert widget._expanded and settings.isVisible()
+        finally:
+            widget._closed = True
+            widget.hide()
+            widget.deleteLater()
+            for index, color in enumerate(original_colors):
+                QColorDialog.setCustomColor(index, color)
+            configure_theme(APP, "dark")
+
+
+def test_standalone_settings_color_dialog_does_not_force_topmost(custom_color_settings):
+    from PySide6.QtCore import QTimer
+
+    window = custom_color_settings
+    window.tabs.setCurrentIndex(2)
+    window.show()
+    APP.processEvents()
+    original = window.accent_color_edit.text()
+    seen = {}
+
+    def cancel_dialog():
+        dialog = APP.activeModalWidget()
+        try:
+            seen["topmost"] = bool(dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+            seen["transient_is_settings"] = (
+                dialog.windowHandle().transientParent() == window.windowHandle()
+            )
+            button_box = dialog.findChild(QDialogButtonBox)
+            QTest.mouseClick(
+                button_box.button(QDialogButtonBox.StandardButton.Cancel),
+                Qt.MouseButton.LeftButton,
+            )
+        except Exception as exc:
+            seen["error"] = exc
+        finally:
+            if dialog is not None and dialog.isVisible():
+                dialog.reject()
+
+    QTimer.singleShot(100, cancel_dialog)
+    window.accent_color_button.click()
+    assert "error" not in seen
+    assert not seen["topmost"]
+    assert seen["transient_is_settings"]
+    assert window.accent_color_edit.text() == original
 
 
 @pytest.mark.parametrize("mode", ["light", "dark"])

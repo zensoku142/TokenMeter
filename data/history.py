@@ -1007,7 +1007,39 @@ def replace_exact_minute_usage(
         cleanup_threshold, deleted_rows = _delete_expired_minute_usage(
             connection, provider, current_day, retention_days
         )
-        for usage_date in normalized_dates:
+        # 以实际落盘内容判断重复快照，避免写入失败、数据库重建后被内存缓存误跳过。
+        scope_sql = f"provider = ? AND usage_date IN ({','.join('?' for _ in normalized_dates)})"
+        parameters = (provider, *sorted(normalized_dates))
+        stored_tokens = {
+            (day, minute, kind): amount for day, minute, kind, amount in connection.execute(
+                f"SELECT usage_date, minute_index, token_type, token_amount FROM minute_usage WHERE {scope_sql}",
+                parameters,
+            )
+        }
+        stored_costs = {
+            (day, minute): Decimal(amount) for day, minute, amount in connection.execute(
+                f"SELECT usage_date, minute_index, cost_cny FROM minute_cost_usage WHERE {scope_sql}",
+                parameters,
+            )
+        }
+        stored_models = {
+            (day, minute, model): dict(cache_hit_tokens=hit, cache_miss_tokens=miss,
+                                      output_tokens=output, cost_cny=Decimal(cost))
+            for day, minute, model, hit, miss, output, cost in connection.execute(
+                "SELECT usage_date, minute_index, model, cache_hit_tokens, cache_miss_tokens, "
+                f"output_tokens, cost_cny FROM minute_model_usage WHERE {scope_sql}", parameters,
+            )
+        } if model_rows is not None else {}
+        changed_dates = normalized_dates
+        if (stored_tokens == {key: amount for key, amount in token_totals.items() if amount}
+                and stored_costs == cost_totals and stored_models == model_totals
+                and not connection.execute(
+                    f"SELECT 1 FROM minute_usage_snapshot WHERE {scope_sql} UNION ALL "
+                    f"SELECT 1 FROM minute_cost_snapshot WHERE {scope_sql} LIMIT 1", parameters * 2,
+                ).fetchone()):
+            # 无变化时保留原记录时间；过期清理仍正常执行，旧估算基线仍必须移除。
+            changed_dates = set()
+        for usage_date in changed_dates:
             connection.execute(
                 "DELETE FROM minute_usage WHERE provider = ? AND usage_date = ?",
                 (provider, usage_date),
@@ -1032,7 +1064,7 @@ def replace_exact_minute_usage(
                 (provider, usage_date),
             )
         for (usage_date, minute, token_type), amount in token_totals.items():
-            if amount:
+            if amount and usage_date in changed_dates:
                 connection.execute(
                     """INSERT INTO minute_usage
                            (provider, usage_date, minute_index, token_type, token_amount, updated_at)
@@ -1040,6 +1072,8 @@ def replace_exact_minute_usage(
                     (provider, usage_date, minute, token_type, amount, updated_at),
                 )
         for (usage_date, minute), amount in cost_totals.items():
+            if usage_date not in changed_dates:
+                continue
             connection.execute(
                 """INSERT INTO minute_cost_usage
                        (provider, usage_date, minute_index, cost_cny, updated_at)
@@ -1047,6 +1081,8 @@ def replace_exact_minute_usage(
                 (provider, usage_date, minute, str(amount), updated_at),
             )
         for (usage_date, minute, model), values in model_totals.items():
+            if usage_date not in changed_dates:
+                continue
             connection.execute(
                 """INSERT INTO minute_model_usage
                        (provider, usage_date, minute_index, model,

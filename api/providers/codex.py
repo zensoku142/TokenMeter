@@ -118,7 +118,8 @@ class CodexProvider(Provider):
                 CodexProvider._minute_scanner = (scope, LocalUsageScanner())
             scanner = CodexProvider._minute_scanner[1]
             rows = scanner.scan({self.id: root})
-            if scanner.issues and not rows:
+            # 部分文件失败也不能当作完整快照，否则会覆盖已经保存的分时记录。
+            if scanner.read_failed or (scanner.issues and not rows):
                 return None
         today = datetime.now().astimezone().date()
         retention = max(1, int(self.config_get("MINUTE_USAGE_RETENTION_DAYS", 3)))

@@ -1,12 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using VPet_Simulator.Core;
 
 // 仅测试进程使用反射驱动真实宿主，不向生产通信协议增加调试指令。
 internal static class Program
@@ -16,11 +20,23 @@ internal static class Program
     private static Window petWindow = null!;
     private static StreamWriter output = null!;
     private static int measuredCollections, measuredMoves, measuredTicks;
+    private static readonly SemaphoreSlim BuildSlots = (SemaphoreSlim)typeof(PNGAnimation)
+        .GetField("BuildSlots", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+    private static bool preparationsBlocked;
+    private static readonly List<string> playedState = new();
+    private static string[] expectedState = Array.Empty<string>();
 
     private static object? Get(string name) => PetType.GetField(name, Fields)!.GetValue(petWindow);
     private static void Set(string name, object value) => PetType.GetField(name, Fields)!.SetValue(petWindow, value);
     private static object? Call(string name, params object[] args) => PetType.GetMethod(name, Fields)!.Invoke(petWindow, args);
     private static DispatcherTimer Timer(string name) => (DispatcherTimer)Get(name)!;
+    private static bool Deferred(IGraph animation) => animation is
+        APNGAnimation { DeferredLoading: true } or PNGAnimation { DeferredLoading: true };
+    private static string StatePart(GraphInfo info) => $"{info.Name}:{info.Type}:{info.Animat}:{info.ModeType}";
+    private static void RecordState(GraphInfo info)
+    {
+        if (info.Name == "state") lock (playedState) playedState.Add(StatePart(info));
+    }
 
     private static void ChangeVisibility(bool visible)
     {
@@ -38,7 +54,8 @@ internal static class Program
             app.Resources.MergedDictionaries.Add(new ResourceDictionary {
                 Source = new Uri($"/VPet-Simulator.Core;component/Display/{name}.xaml", UriKind.Relative)
             });
-        petWindow = (Window)Activator.CreateInstance(PetType, args[0], false, false, null, args[1], 0L)!;
+        petWindow = (Window)Activator.CreateInstance(PetType, args[0], false, false, null,
+            args[1] == "default" ? null : args[1], 0L)!;
         app.MainWindow = petWindow;
         petWindow.Loaded += async (_, _) => {
             while (!(bool)Get("ready")!) await Task.Delay(20);
@@ -68,6 +85,80 @@ internal static class Program
         if (action == "close") { petWindow.Close(); return new { closed = true }; }
         if (action == "hide") { ChangeVisibility(false); return Snapshot(); }
         if (action == "show") { ChangeVisibility(true); return Snapshot(); }
+        if (action == "resize") { Call("ResizePet", command.GetProperty("delta").GetInt32()); return Snapshot(); }
+        if (action == "switch") { _ = Call("ChangeCharacterAsync", command.GetProperty("character").GetString()!); return Snapshot(); }
+        if (action == "play") { Call("PlayBailongAction", command.GetProperty("id").GetString()!); return Snapshot(); }
+        if (action == "play_whale") { _ = Call("PlayWhaleActionAsync", command.GetProperty("name").GetString()!); return Snapshot(); }
+        if (action == "graph_event")
+        {
+            Call("OnPetGraphDisplayed", ((VPet_Simulator.Core.Main)Get("pet")!).DisplayType);
+            return Snapshot();
+        }
+        if (action == "action_ready")
+        {
+            var graph = (GraphCore)Get("graph")!;
+            var animation = graph.GraphsALL.First(item => item.GraphInfo.Name == "bailong.action." +
+                command.GetProperty("id").GetString());
+            return new { ready = animation.IsReady, failed = animation.IsFail };
+        }
+        if (action == "deferred_ready")
+        {
+            var graph = (GraphCore)Get("graph")!;
+            var animation = graph.GraphsALL[command.GetProperty("index").GetInt32()];
+            return new { ready = animation.IsReady, failed = animation.IsFail };
+        }
+        if (action == "play_deferred")
+        {
+            var graph = (GraphCore)Get("graph")!;
+            var animation = graph.GraphsALL.Last(item => Deferred(item) && !item.IsReady &&
+                !item.IsLoop && item.GraphInfo.Type is
+                    (GraphInfo.GraphType.Idel or GraphInfo.GraphType.StateONE or GraphInfo.GraphType.StateTWO));
+            petWindow.IsHitTestVisible = false;
+            Set("allowMove", true);
+            Set("manualDockedEdge", null!);
+            Call("StartAutonomousSequence", new List<IGraph> { animation });
+            return new { name = animation.GraphInfo.Name, index = graph.GraphsALL.IndexOf(animation),
+                pending = Get("autonomousSequence") != null };
+        }
+        if (action == "state_start")
+        {
+            var graph = (GraphCore)Get("graph")!;
+            var first = graph.GraphsALL.First(item => item.GraphInfo.Type == GraphInfo.GraphType.StateONE &&
+                item.GraphInfo.Animat == GraphInfo.AnimatType.A_Start && item.GraphInfo.ModeType == IGameSave.ModeType.Happy);
+            var sequence = (List<IGraph>)Call("BuildAutonomousSequence",
+                (first.GraphInfo.Type, first.GraphInfo.Name, first.GraphInfo.ModeType))!;
+            lock (playedState)
+            {
+                playedState.Clear();
+                expectedState = sequence.Select(item => StatePart(item.GraphInfo)).ToArray();
+            }
+            var main = (VPet_Simulator.Core.Main)Get("pet")!;
+            main.GraphDisplayHandler -= RecordState;
+            main.GraphDisplayHandler += RecordState;
+            petWindow.IsHitTestVisible = false;
+            Set("allowMove", true);
+            Set("manualDockedEdge", null!);
+            Call("StartAutonomousSequence", sequence);
+            return Snapshot();
+        }
+        if (action == "state_result")
+        {
+            lock (playedState) return new { active = Get("autonomousSequence") != null,
+                display = ((VPet_Simulator.Core.Main)Get("pet")!).DisplayType.Type.ToString(),
+                expected = expectedState, played = playedState.ToArray() };
+        }
+        if (action == "block_preparations" && !preparationsBlocked)
+        {
+            // 测试专用的解码闸门让等待期间的取消路径可重复，不依赖机器快慢。
+            if (!BuildSlots.Wait(10000)) throw new TimeoutException("First build slot was not released");
+            if (!BuildSlots.Wait(10000)) { BuildSlots.Release(); throw new TimeoutException("Second build slot was not released"); }
+            preparationsBlocked = true;
+        }
+        if (action == "release_preparations" && preparationsBlocked)
+        {
+            preparationsBlocked = false;
+            BuildSlots.Release(2);
+        }
         if (action == "measure")
         {
             measuredCollections = GC.CollectionCount(2);
@@ -140,10 +231,13 @@ internal static class Program
     private static object Snapshot()
     {
         var visual = (FrameworkElement)Get("pet")!;
+        var core = (GraphCore)Get("graph")!;
+        var main = (VPet_Simulator.Core.Main)visual;
         var scale = visual.RenderTransform as ScaleTransform;
         var point = petWindow.PointToScreen(new Point());
         var dpi = VisualTreeHelper.GetDpi(petWindow);
-        var pixels = (Rect)Call("PetVisiblePixels", Get("character")!)!;
+        var pixels = (string)Get("character")! == "vpet" ? new Rect(0, 0, 1, 1) :
+            (Rect)Call("PetVisiblePixels", Get("character")!)!;
         double width = petWindow.ActualWidth * dpi.DpiScaleX, height = petWindow.ActualHeight * dpi.DpiScaleY;
         var bounds = new Rect(point.X + pixels.Left * width, point.Y + pixels.Top * height,
             pixels.Width * width, pixels.Height * height);
@@ -154,6 +248,12 @@ internal static class Program
             throwing = Timer("whaleThrowTimer").IsEnabled,
             scaleX = scale?.ScaleX ?? 1, scaleY = scale?.ScaleY ?? 1,
             impact = Get("whaleLastImpact"), visible = petWindow.IsVisible,
+            character = Get("character"), size = Get("size"), display = main.DisplayType.Name,
+            manualPending = Get("bailongManualFrame") != null,
+            autonomousActive = Get("autonomousSequence") != null,
+            deferred = core.GraphsALL.Count(Deferred),
+            deferredUnready = core.GraphsALL.Count(animation => Deferred(animation) && !animation.IsReady),
+            requiredReady = ((IGraph[])Call("RequiredAnimations", core)!).All(animation => animation.IsReady),
             fullCollections = GC.CollectionCount(2) - measuredCollections, moves = measuredMoves, physicsTicks = measuredTicks,
             dpi = dpi.DpiScaleX, work = new { x = work.X, y = work.Y, width = work.Width, height = work.Height }
         };

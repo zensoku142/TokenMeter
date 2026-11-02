@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 from api.providers import PROVIDERS
 from config import runtime as config_manager
 from core.pet_extension import installed_executable
+from data.quota_history import in_quiet_hours
 from ui.formatting import format_codex_reset_time, format_money, format_reset_countdown, quota_used_percent
 
 if TYPE_CHECKING:
@@ -63,9 +64,13 @@ def usage_message(
             else format_reset_countdown(quota.resets_at)
         )
         label = f"{provider_name} · {quota.title}"
-        # 桌宠会主动说出 warning，必须遵守低额度提醒开关，避免刷新时绕过用户设置。
+        threshold = config_manager.get("QUOTA_ALERT_THRESHOLD", 10)
+        if type(threshold) is not int or not 1 <= threshold <= 50:
+            threshold = 10
+        # 桌宠会主动说出 warning，须与托盘一起遵守阈值和静默时段。
         if (config_manager.get("QUOTA_ALERT_ENABLED", False) is True
-                and not refreshing and remaining is not None and remaining <= 10):
+                and not refreshing and remaining is not None and remaining <= threshold
+                and not in_quiet_hours(config_manager.all_config())):
             status = "剩余额度不足，请留意用量。"
             warning = True
     elif provider_cls and provider_cls.supports_subscription_quota:

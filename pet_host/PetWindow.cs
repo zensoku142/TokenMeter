@@ -40,6 +40,7 @@ internal sealed partial class PetWindow : Window, IController
     private GraphCore? defaultGraph;
     private GraphCore? whaleGraph;
     private GraphCore? bailongGraph;
+    private readonly Dictionary<GraphCore, Task> animationWarmTasks = new();
     private string character = "vpet";
     private bool switchingCharacter;
     private Rect? whaleVisiblePixels;
@@ -63,6 +64,7 @@ internal sealed partial class PetWindow : Window, IController
     private bool? cloudDockedState;
     private bool? manualDockedEdge;
     private int size = 220;
+    private readonly Dictionary<string, int> modelSizes = new(StringComparer.Ordinal);
     // 小龙娘在画布中占比更大，允许缩到 80；原有角色仍保留 160 的下限。
     private int MinimumPetSize => character == "bailong" ? 80 : 160;
     private int ctrlWheelRemainder;
@@ -113,6 +115,9 @@ internal sealed partial class PetWindow : Window, IController
             !File.Exists(Path.Combine(resources, "pet", CharacterFile(character))))
             character = new[] { "vpet", "whale", "bailong" }.FirstOrDefault(candidate =>
                 File.Exists(Path.Combine(resources, "pet", CharacterFile(candidate)))) ?? "vpet";
+        // 角色确定后再应用尺寸边界；固定小龙娘实例不能先被旧角色的 160 下限截断。
+        if (modelSizes.TryGetValue(character, out int savedModelSize)) size = savedModelSize;
+        size = Math.Clamp(size, MinimumPetSize, 320);
         Width = Height = size;
         ClampPosition();
         Loaded += async (_, _) => await LoadPet();
@@ -180,7 +185,14 @@ internal sealed partial class PetWindow : Window, IController
             pet = new PetMain(new GameCore { Controller = this, Graph = graph, Save = save });
             // 原版事件计时器混合了睡眠和养成逻辑；改用宿主计时器仅触发走动与待机动作。
             pet.EventTimer.Stop();
-            await Task.Run(() => pet.LoadALL());
+            if (!await WaitForRequiredAnimations(graph)) return;
+            // 核心交互动画就绪即可启动，其余自主动作稍后预热或按需加载。
+            await Task.Run(() => {
+                pet.Load_0_BaseConsole();
+                pet.Load_2_TouchEvent();
+                pet.Load_3_BindingTimer();
+                pet.Load_4_Start();
+            });
             if (closing) return;
             if (pet.ErrorMessage.Count != 0 || !pet.IsWorking)
                 throw new InvalidDataException("VPet animation load failed: " + string.Join("\n", pet.ErrorMessage));
@@ -251,6 +263,9 @@ internal sealed partial class PetWindow : Window, IController
             ambientTimer.Tick += (_, _) => { if (!smoke) RunAutonomousBehavior(); };
             SyncAutonomy();
             Program.Send(new { @event = "ready", animations = graph.GraphsALL.Count });
+            StartAnimationWarmup(graph);
+            // 冒烟检查会逐项断言动作，需先等完预热以避免把准备时间当成播放失败。
+            if (smoke) await animationWarmTasks[graph];
             if (captureDirectory != null || smoke)
                 await RunVisualCheck();
         }
@@ -269,7 +284,75 @@ internal sealed partial class PetWindow : Window, IController
         string file = CharacterFile(selected);
         var loader = new PetLoader(new LpsDocument(File.ReadAllText(Path.Combine(resources, "pet", file))),
             new DirectoryInfo(Path.Combine(resources, "pet")));
-        return Task.Run(() => loader.Graph(250, Dispatcher));
+        // 在扫描期间先准备常用心情的交互帧；缺少该心情时仍由 WaitForRequiredAnimations 按内核规则回退。
+        var eagerMode = selected == "vpet" ? IGameSave.ModeType.Happy : IGameSave.ModeType.Nomal;
+        return Task.Run(() => loader.Graph(250, Dispatcher, deferAnimationLoading: true, eagerAnimationMode: eagerMode));
+    }
+
+    private static bool IsDeferredAnimation(IGraph animation) => animation is
+        APNGAnimation { DeferredLoading: true } or PNGAnimation { DeferredLoading: true };
+
+    private static async Task<bool> PrepareOptionalAnimation(IGraph animation)
+    {
+        if (animation is APNGAnimation { DeferredLoading: true } apng) await apng.PrepareAsync();
+        else if (animation is PNGAnimation { DeferredLoading: true } png) await png.PrepareAsync();
+        if (animation.IsFail) Console.Error.WriteLine(animation.FailMessage);
+        return animation.IsReady && !animation.IsFail;
+    }
+
+    private void StartAnimationWarmup(GraphCore loaded)
+    {
+        if (!animationWarmTasks.TryGetValue(loaded, out var task) || task.IsCompleted)
+            animationWarmTasks[loaded] = WarmAnimations(loaded);
+    }
+
+    private async Task WarmAnimations(GraphCore loaded)
+    {
+        // 一次只预热一个动作，留出另一个解码名额给立即触发的自主动作或点播。
+        // 鲸鱼娘可能在运行时新增动作，先拍快照避免遍历时集合发生变化。
+        foreach (var animation in loaded.GraphsALL.Where(animation => IsDeferredAnimation(animation) && !animation.IsReady).ToArray())
+        {
+            if (closing || graph != loaded) return;
+            if (!await PrepareOptionalAnimation(animation) && !closing && graph == loaded)
+            {
+                // 预热才发现资源损坏时仍沿用宿主的失败回退，不能让动作静默消失。
+                File.AppendAllText(Path.Combine(dataDirectory, "host-error.log"), animation.FailMessage + "\n");
+                Program.Send(new { @event = "error", message = "桌宠资源加载失败，已返回悬浮球。" });
+                Application.Current.Shutdown(1);
+                return;
+            }
+        }
+    }
+
+    private async Task<bool> WaitForRequiredAnimations(GraphCore loaded)
+    {
+        var required = RequiredAnimations(loaded);
+        // 先并发准备启动及交互所需帧，限流仍由原图像内核负责。
+        foreach (var animation in required)
+        {
+            if (animation is APNGAnimation apng) _ = apng.PrepareAsync();
+            else if (animation is PNGAnimation png) _ = png.PrepareAsync();
+        }
+        while (!closing && required.Any(animation => !animation.IsReady && !animation.IsFail))
+            await Task.Delay(50);
+        if (closing) return false;
+        var errors = required.Where(animation => animation.IsFail).Select(animation => animation.FailMessage).ToArray();
+        if (errors.Length != 0) throw new InvalidDataException(string.Join("\n", errors));
+        return true;
+    }
+
+    private IGraph[] RequiredAnimations(GraphCore loaded)
+    {
+        var moveNames = loaded.GraphConfig.Moves.Select(move => move.Graph).ToHashSet(StringComparer.Ordinal);
+        // 无养成模式下心情固定；按内核原有回退规则选出所有可能用于交互的版本，其他心情及自主动作后台加载。
+        return loaded.GraphsALL.Where(animation => animation.GraphInfo.Type is not
+                (GraphType.Common or GraphType.Idel or GraphType.StateONE or GraphType.StateTWO) ||
+                moveNames.Contains(animation.GraphInfo.Name))
+            .GroupBy(animation => (animation.GraphInfo.Name, animation.GraphInfo.Animat))
+            .SelectMany(group => loaded.FindGraphs(group.Key.Name, group.Key.Animat, save.Mode))
+            .Distinct()
+            .OrderBy(animation => animation.GraphInfo.Type is GraphType.Default or GraphType.StartUP ? 0 : 1)
+            .ToArray();
     }
 
     private async Task ChangeCharacterAsync(string selected)
@@ -297,17 +380,9 @@ internal sealed partial class PetWindow : Window, IController
             if (next == null)
             {
                 next = await LoadCharacterGraph(selected);
-                // APNG 帧表由内核异步准备；全部就绪后才切图，避免出现旧角色或空白帧。
-                while (!closing && next.GraphsALL.Any(animation => !animation.IsReady && !animation.IsFail))
-                    await Task.Delay(50);
-                var errors = next.GraphsALL.Where(animation => animation.IsFail)
-                    .Select(animation => animation.FailMessage).ToArray();
-                if (errors.Length != 0)
-                {
-                    next.Dispose();
-                    throw new InvalidDataException(string.Join("\n", errors));
-                }
-                if (closing) { next.Dispose(); return; }
+                // 切图前等待必需动画，可选动作不阻塞角色切换。
+                try { if (!await WaitForRequiredAnimations(next)) { next.Dispose(); return; } }
+                catch { next.Dispose(); throw; }
                 if (selected == "whale") whaleGraph = next;
                 else if (selected == "bailong") bailongGraph = next;
                 else defaultGraph = next;
@@ -329,7 +404,9 @@ internal sealed partial class PetWindow : Window, IController
             // 触摸区域来自角色配置；只换图池会把新角色的点击判定留在旧坐标。
             pet.Core.TouchEvent.Clear();
             pet.Load_2_TouchEvent();
+            modelSizes[character] = size;
             character = selected;
+            if (modelSizes.TryGetValue(selected, out int savedModelSize)) size = savedModelSize;
             // 从小龙娘的小尺寸切回旧角色时，恢复该角色原有的尺寸边界。
             size = Math.Clamp(size, MinimumPetSize, 320);
             Width = Height = size;
@@ -344,6 +421,7 @@ internal sealed partial class PetWindow : Window, IController
             SyncWhaleEvents();
             UpdateQuotaCloud();
             SaveState();
+            StartAnimationWarmup(next);
         }
         catch (Exception ex)
         {
@@ -617,7 +695,7 @@ internal sealed partial class PetWindow : Window, IController
         // 动画回调可能来自后台线程；排回 UI 后读取最新状态，避免过期回调重新显示已隐藏的云朵。
         if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(() => {
             // 挥手等内核互动也会切换动画；保留新动作，同时取消未走完的自主序列。
-            if (autonomousSequence != null && pet?.DisplayType != autonomousFrame?.GraphInfo)
+            if (autonomousSequence != null && autonomousFrame != null && pet?.DisplayType != autonomousFrame.GraphInfo)
                 CancelAutonomousSequence(returnToNormal: false);
             if (whaleChainFrame != null && pet?.DisplayType != whaleChainFrame.GraphInfo)
                 CancelWhaleChain();
@@ -766,7 +844,14 @@ internal sealed partial class PetWindow : Window, IController
             if (data.RootElement.TryGetProperty("x", out var savedX)) Left = savedX.GetDouble();
             if (data.RootElement.TryGetProperty("y", out var savedY)) Top = savedY.GetDouble();
             if (data.RootElement.TryGetProperty("size", out var savedSize))
-                size = Math.Clamp(savedSize.GetInt32(), MinimumPetSize, 320);
+                size = savedSize.GetInt32();
+            if (data.RootElement.TryGetProperty("modelSizes", out var savedSizes) && savedSizes.ValueKind == JsonValueKind.Object)
+                foreach (string model in new[] { "vpet", "whale", "bailong" })
+                    if (savedSizes.TryGetProperty(model, out var savedModelSize) &&
+                        savedModelSize.ValueKind == JsonValueKind.Number && savedModelSize.TryGetInt32(out int previousSize))
+                        modelSizes[model] = Math.Clamp(previousSize, model == "bailong" ? 80 : 160, 320);
+            // 旧布局只有通用 size；首次升级时把它保留给布局中记录的角色。
+            if (!modelSizes.ContainsKey(character)) modelSizes[character] = Math.Clamp(size, MinimumPetSize, 320);
             allowMove = !data.RootElement.TryGetProperty("allowMove", out var autonomous) || autonomous.GetBoolean();
             if (data.RootElement.TryGetProperty("dockedEdge", out var docked) &&
                 docked.ValueKind is JsonValueKind.True or JsonValueKind.False)
@@ -792,7 +877,8 @@ internal sealed partial class PetWindow : Window, IController
         try
         {
             var position = notificationOrigin?.Position ?? new Point(Left, Top);
-            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, allowMove, character,
+            modelSizes[character] = size;
+            WriteAtomic("layout.json", JsonSerializer.Serialize(new { x = position.X, y = position.Y, size, modelSizes, allowMove, character,
                 dockedEdge = manualDockedEdge, quotaPinned,
                 cloudMode, bubbleStyle, cloudRandomMinutes, drinkReminderEnabled, drinkReminderMinutes, restReminderEnabled, restReminderMinutes,
                 quotaX = quota?.Left ?? quotaPosition?.X ?? 0, quotaY = quota?.Top ?? quotaPosition?.Y ?? 0 }));

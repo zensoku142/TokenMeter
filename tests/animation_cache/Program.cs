@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -80,6 +81,23 @@ internal static class Program
                 "Idle images were retained");
             Require(ReferenceEquals(Frame(0), first) && Pixels(Frame(0)).SequenceEqual(pixels[0]),
                 "Cache reload changed pixels");
+        }
+        // 可选动作必须真正延后，且后台预热与点播应等待同一个准备任务。
+        using var deferredCore = new GraphCore(250, Dispatcher.CurrentDispatcher,
+            new GraphCore.Config(new LpsDocument())) { DeferAnimationLoading = true };
+        foreach (bool apng in new[] { false, true })
+        {
+            var info = new GraphInfo("deferred-check", GraphInfo.GraphType.Idel);
+            using IGraph animation = apng
+                ? new APNGAnimation(deferredCore, Path.Combine(source, "animation.png"), info)
+                : new PNGAnimation(deferredCore, source, Directory.GetFiles(source, "frame*.png").Order()
+                    .Select(path => new FileInfo(path)).ToArray(), info);
+            Require(!animation.IsReady, "Optional animation started before it was requested");
+            Task Prepare() => animation is APNGAnimation a ? a.PrepareAsync() : ((PNGAnimation)animation).PrepareAsync();
+            var firstPreparation = Prepare();
+            Require(ReferenceEquals(firstPreparation, Prepare()), "Preparation was started more than once");
+            firstPreparation.GetAwaiter().GetResult();
+            Require(animation.IsReady && !animation.IsFail, animation.FailMessage);
         }
         Console.WriteLine(JsonSerializer.Serialize(new { png = true, apng = true }));
         return 0;

@@ -141,7 +141,7 @@ def _silent_startup_enabled() -> bool:
 
 
 def is_enabled() -> bool:
-    return bool(config_manager.get("ACCOUNT_PROFILES_ENABLED", True)
+    return bool(config_manager.get("ACCOUNT_PROFILES_ENABLED", False)
                 and config_manager.get("CC_SWITCH_ENABLED", True))
 
 

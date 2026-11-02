@@ -140,17 +140,28 @@ def test_out_of_range_local_timestamp_skips_only_bad_record(tmp_path, provider, 
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude"])
-def test_deep_json_record_does_not_abort_local_scan(tmp_path, provider):
+def test_deep_json_record_does_not_abort_local_scan(tmp_path, provider, monkeypatch):
     path = tmp_path / ("sessions/log.jsonl" if provider == "codex" else "projects/a/log.jsonl")
     record = codex(100) if provider == "codex" else claude()
     write(path, [record])
     valid = path.read_bytes()
-    path.write_bytes(b'{"usage":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}\n' + valid)
+    deep = b'{"usage":' + b'[' * 10000 + b'0' + b']' * 10000 + b'}\n'
+    path.write_bytes(deep + valid)
+    original_loads = json.loads
+
+    def decode(raw, *args, **kwargs):
+        # 各 Python 版本的 JSON 深度限制不同；固定模拟解析异常，验证后续有效记录仍可读取。
+        if raw == deep:
+            raise RecursionError("synthetic JSON depth limit")
+        return original_loads(raw, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", decode)
     scanner = LocalUsageScanner()
     rows = scanner.scan({provider: tmp_path})
     assert len(rows) == 1
     assert rows[0].total == (100 if provider == "codex" else 180)
     assert scanner.issues == 1
+    assert not scanner.read_failed
     assert scanner.scan({provider: tmp_path}) is rows
     assert scanner.issues == 1
 
@@ -482,6 +493,32 @@ def test_visible_page_auto_refreshes_and_hidden_page_stops_timer(monkeypatch):
     dialog.show()
     app.processEvents()
     dialog.scan.assert_called_once_with()
+
+
+@pytest.mark.parametrize("destroy", [False, True])
+def test_pending_chart_hover_is_safe_after_hiding_or_destroying_page(monkeypatch, destroy):
+    from unittest.mock import Mock
+
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtWidgets import QApplication
+
+    from ui.local_analytics import LocalAnalyticsDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = LocalAnalyticsDialog()
+    monkeypatch.setattr(dialog, "scan", Mock())
+    dialog.show()
+    app.processEvents()
+    proxy = dialog._hover_proxy
+    proxy.signalReceived(QPointF(0, 0))
+    if destroy:
+        dialog.deleteLater()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    else:
+        dialog.hide()
+    # 真实限频回调在销毁后到达，不能再访问 ViewBox 或抛出 Qt 事件异常。
+    assert proxy.flush()
+    app.processEvents()
 
 
 def test_hiding_statistics_does_not_lose_pending_project_filter(monkeypatch):

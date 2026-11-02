@@ -25,7 +25,7 @@ def _valid_id(value) -> bool:
 
 
 def is_profile_enabled(profile) -> bool:
-    if not config_manager.get("ACCOUNT_PROFILES_ENABLED", True):
+    if not config_manager.get("ACCOUNT_PROFILES_ENABLED", False):
         return False
     if profile["provider"] == "codex" and profile["fields"].get("CC_SWITCH_ACCOUNT_ID"):
         return cc_switch.is_enabled()
