@@ -26,42 +26,40 @@
   <sub>Codex · Claude · Cursor · DeepSeek · MiMo · NayutoAI</sub>
 </p>
 
-<p align="center">
-  <a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="TokenMeter：Codex 額度、DeepSeek 今日分時與餘額、懸浮球、VPet 與鯨魚娘桌寵（示範資料）" width="960"></a>
-</p>
+TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，支援 6 個平台的訂閱額度、重設時間、API 費用、餘額與歷史趨勢，可透過懸浮球、輕底細環或桌寵常駐查看。
 
-產品總覽展示用量面板、懸浮球、VPet 與鯨魚娘；Token 速度、輕底細環和小龍娘截圖見下方對應介紹。圖片均來自真實元件，介面為簡體中文，使用示範資料。[查看原圖與來源](docs/images/readme/README.md)。
+<table>
+  <tr>
+    <td align="center" width="46%"><a href="docs/images/readme-hero.webp"><img src="docs/images/readme-hero.webp" alt="產品總覽" width="440"></a><br>產品總覽</td>
+    <td align="center" width="46%"><a href="site/assets/panel-token-speed.png"><img src="site/assets/panel-token-speed.png" alt="Token 速度" width="440"></a><br>Token 速度</td>
+    <td align="center" width="8%"><a href="site/assets/light-ring.png"><img src="site/assets/light-ring.png" alt="輕底細環" width="42"></a><br>輕底細環</td>
+  </tr>
+</table>
 
-TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，提供 6 個獨立平台入口，依平台能力顯示訂閱額度、重設時間、API 費用、餘額與歷史趨勢。可透過懸浮球、輕底細環或桌寵常駐查看用量，也可開啟面板查看分時統計、Token 速度與多帳號額度。
+真實元件截圖，使用簡體中文介面與示範資料；點擊查看原圖。[截圖與來源](docs/images/readme/README.md)。
 
 目前版本：**v1.17.1** · 桌寵 **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
-
-
 ## 功能
 
-- **CC Switch Codex 多帳號**：在「設定 → 多帳戶」啟用多帳戶與 CC Switch 連線後，程式啟動即自動發現並更新 CC Switch 管理的 Codex OAuth 帳號，續期與查詢由 CC Switch 處理；暫時斷線時保留快取額度。本機橋接依賴 CC Switch 內部命令，版本變動可能需要適配；若 CC Switch 已在未啟用橋接的情況下執行，請先從系統匣完全結束一次，再重新整理。
-- **輕底細環與 Codex 重設動態**：除懸浮球外，也可選擇細環，支援單平台、多平台與多帳號常駐顯示、貼邊吸附及自訂環色。直接拖曳圖示或留白可移動視窗，長按圖示後上下拖曳可排序，順序自動儲存；懸停時按住 Ctrl 滾動滾輪可調整寬度。懸停詳情可顯示社群公開重設消息並選擇開啟提醒；公開消息不代表個人帳號已重設。顯示來源統一在「擷取與統計 → 同時取得」選擇。
-- **Codex 今日分時**：依本機工作階段日誌的記錄時間顯示快取命中、新增輸入和輸出 Token，支援模型提示、歷史日期與增量更新。僅包含所選目錄的本機記錄，帳號歸屬未知，不代表訂閱額度或實際帳單。
-- **Token 速度**：在 Codex 和 NayutoAI 面板依模型與時間查看輸出速度。速度根據有效請求的輸出 Token 與耗時估算，包含首字等待；資料不足時顯示未知。
-- **額度與餘額**：支援 Codex、Claude Code、Cursor 額度；DeepSeek / MiMo / NayutoAI 用量與餘額。缺少的欄位顯示不可用，不混合積分、幣別與 Token。
-- **總覽與多帳戶**：總覽可見時自動更新已設定平台。多帳戶預設關閉，可在「設定 → 多帳戶」啟用後獨立保存連線、憑據和監控狀態，不覆蓋預設連線或 CLI 登入。關閉多帳戶可暫停全部帳戶檔案採集與顯示，或單獨關閉 CC Switch 連線以停止連線與自動啟動；重新開啟沿用原設定。兩個已設定平台也可在置頂小看板中常駐。
-- **本機統計與 Excel**：讀取 Codex（含封存）與 Claude 本機日誌，先顯示快取，再背景更新。支援日期、專案、模型篩選、每日比較、圖表縮放，並匯出 `.xlsx` 摘要、明細與統計口徑。本機日誌無法確認帳戶歸屬，不代表訂閱額度或實際帳單；可選擇已可存取的 WSL 目錄，不啟動 WSL。
-- **平台管理**：離線品牌圖示、搜尋、收藏及移除應用程式保存的連線；保留 CLI 登入與歷史記錄。
-- **更新與提醒**：失敗退避、離線快取、可選低額度與恢復提醒、消耗預測及靜默時段。預測需要同週期至少 10 分鐘的有效樣本；恢復提醒需先開啟低額度提醒，並以實際更新確認。提醒狀態可跨重啟保留。
-- **桌面顯示**：懸浮球以額度水球或餘額顯示用量，支援拖曳、滾輪縮放、貼邊隱藏和系統匣常駐；另有明暗與系統主題、顏色與透明度、五種語言、自動更新和選用多角色桌寵。主程式 v1.17.0 搭配桌寵 v0.3.1 可同步額度視窗主題。
+- **額度與餘額**：Codex / Claude Code / Cursor 訂閱額度，DeepSeek / MiMo / NayutoAI 費用、餘額與歷史趨勢；幣別、積分和 Token 分開顯示。
+- **統計與速度**：Codex 今日分時，Codex / Claude / ZCode 本機日誌統計、篩選與 Excel 匯出；Codex / NayutoAI 支援模型輸出速度。
+- **總覽與多帳戶**：多平台總覽、置頂雙平台看板；多帳戶預設關閉，開啟後獨立監控，不覆蓋預設連線或 CLI 登入。
+- **CC Switch**：啟用多帳戶及 CC 連線，自動發現並在背景更新託管 Codex OAuth 帳號；CC 負責續期與查詢，斷線保留快取。
+- **懸浮顯示**：原有額度／餘額懸浮球與輕底細環，支援拖曳、縮放和貼邊；細環可顯示多平台、多帳號，並調整順序、顏色與寬度。
+- **擷取與提醒**：背景同步、失敗退避、離線快取、峰谷提示與 Cookie 取得；可選低額度、恢復、消耗預測、靜默時段及 Codex 公開重設消息提醒。
+- **外觀與整合**：明暗／系統主題、調色、透明度、五種語言，平台搜尋與收藏、開機啟動、自動更新和資料遷移。
 
-<p align="center">
-  <a href="site/assets/panel-token-speed.png"><img src="site/assets/panel-token-speed.png" alt="Token 速度 K 線面板（簡體中文介面，示範資料）" width="960"></a>
-</p>
+本機統計帳戶歸屬未知，不代表訂閱額度或帳單；速度估算含首字等待，資料不足時顯示未知；社群重設消息不代表個人額度已恢復。
 
-Token 速度面板展示模型輸出速度隨時間的變化，可搭配原有額度、餘額與分時統計使用。
+<details>
+<summary>操作與連線說明</summary>
 
-<p align="center">
-  <a href="site/assets/light-ring.png"><img src="site/assets/light-ring.png" alt="輕底細環同時顯示三個平台額度（示範資料）" width="58"></a>
-</p>
+- 直接拖曳細環可移動視窗，長按圖示後上下拖曳可排序，Ctrl＋滾輪調整寬度；來源在「擷取與統計 → 同時取得」選擇。
+- 多帳戶和 CC 連線可分別關閉，重新開啟沿用設定。CC 橋接依賴其內部命令；若已一般啟動，請先從系統匣完全結束一次再更新。未設定 CC 時不提供獨立多帳號登入或續期。
+- 消耗預測需同週期至少 10 分鐘有效樣本；恢復提醒需先開啟低額度提醒，並以實際更新為準。提醒狀態跨重啟保留；移除平台連線保留 CLI 登入與歷史。
 
-輕底細環提供精簡的多平台常駐顯示；原有懸浮球仍可在設定中選擇。
+</details>
 
 ## 安裝與設定
 
@@ -75,27 +73,21 @@ Token 速度面板展示模型輸出速度隨時間的變化，可搭配原有�
 
 ## 桌寵（選用）
 
-主安裝程式不含桌寵。在「設定 → 桌寵」下載擴充套件，完整安裝後再啟用；無需另裝 .NET。啟用後預設由桌寵取代懸浮球；開啟「同時顯示懸浮球」可讓兩者一起顯示，設定自動儲存並立即生效。停用或解除安裝桌寵後恢復球體，不影響帳戶與面板。
+<table>
+  <tr>
+    <td align="center" width="33%"><a href="docs/images/readme/pet-vpet-current.png"><img src="docs/images/readme/pet-vpet-current.png" alt="蘿莉斯（VPet）" width="160"></a><br>蘿莉斯（VPet）</td>
+    <td align="center" width="33%"><a href="site/assets/pet-whale-transparent.png"><img src="site/assets/pet-whale-transparent.png" alt="鯨魚娘" width="160"></a><br>鯨魚娘</td>
+    <td align="center" width="34%"><a href="site/assets/pet-bailong.png"><img src="site/assets/pet-bailong.png" alt="小龍娘" width="160"></a><br>小龍娘</td>
+  </tr>
+</table>
 
-- 支援輕觸互動、拖曳縮放、自主活動和貼邊額度氣泡；按兩下氣泡可開啟用量面板。
-- 啟動前可選擇蘿莉斯（VPet）、[鯨魚娘](https://github.com/PC2005-cloud/dsh-pet)或[小龍娘](pet_host/bailong/README.md)，已安裝角色可設為預設。蘿莉斯提供待機、走動和互動；鯨魚娘保留動作播放、額度扣減回饋與餘額卡片，素材僅限非商業用途；小龍娘完整接入 35 段動畫，共用現有宿主、用量氣泡、顯示來源與多開，支援自主動作和移動，不包含 AI 對話或歷史會話。設定頁提供角色縮圖與可安裝的相容版本。
-- 支援只下載所選角色，之後可單獨新增或移除 VPet、鯨魚娘和小龍娘資源；移除最後一個角色時同時解除安裝共用宿主。桌寵更新可獨立選擇正式版或體驗版通道。
-- 可從桌寵右鍵選單即時增開已安裝角色，或單獨關閉某隻桌寵。額外執行個體各自記住位置；每隻桌寵可分別跟隨主程式目前平台、已設定平台的預設帳戶，或已儲存的帳戶檔案。
-- 懸停桌寵時按住 Ctrl 滾動滾輪即可縮放；小龍娘範圍為 80–320，其餘角色為 160–320。
-- 右鍵選單可設定氣泡顯示方式，以及預設關閉的喝水、休息提醒；桌寵選單目前為簡體中文。
-- 精簡版不含餵食、工作、養成、Steam 或連線功能。擴充套件可獨立更新，主程式結束時桌寵一同結束。
+在「設定 → 桌寵」下載角色並啟用，無需另裝 .NET；可取代懸浮球或同時顯示，停用後恢復球體。
 
-實作細節與獨立建置見 [桌寵開發說明](pet_host/README.md)，使用素材前請閱讀 [來源與授權](pet_host/THIRD_PARTY_NOTICES.md)。
+- **角色**：蘿莉斯（VPet）待機、走動與互動；[鯨魚娘](https://github.com/PC2005-cloud/dsh-pet)動作與額度回饋、餘額卡片；[小龍娘](pet_host/bailong/README.md)含 35 段動畫和自主移動。
+- **互動**：拖曳、Ctrl＋滾輪縮放、主題氣泡及預設關閉的喝水／休息提醒；按兩下氣泡開啟面板。支援多開，各執行個體獨立保存位置與顯示帳戶。
+- **管理**：角色可單獨安裝、移除或設為預設，擴充套件可獨立更新（正式／體驗通道）；移除最後一個角色時解除安裝宿主，主程式結束時一同結束。
 
-![鯨魚娘桌寵角色展示](site/assets/pet-whale-transparent.png)
-
-鯨魚娘素材來源：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，僅限非商業用途。
-
-<p align="center">
-  <a href="site/assets/pet-bailong.png"><img src="site/assets/pet-bailong.png" alt="小龍娘桌寵角色展示" width="220"></a>
-</p>
-
-小龍娘與蘿莉斯、鯨魚娘使用相同的安裝與切換入口，可依需求單獨下載。動作與素材說明見[小龍娘角色介紹](pet_host/bailong/README.md)。
+小龍娘尺寸 80–320，其餘 160–320；桌寵選單為簡體中文。不含養成、餵食、工作、Steam、連線或 AI 對話；鯨魚娘素材僅限非商業用途。[開發說明](pet_host/README.md) · [來源與授權](pet_host/THIRD_PARTY_NOTICES.md)。
 
 ## 資料、隱私與更新
 
