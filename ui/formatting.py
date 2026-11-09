@@ -71,6 +71,25 @@ def format_money(value: float | Decimal | None, currency: str = "CNY") -> str:
     return f"{_currency_prefix(currency)}{amount:.{decimals}f}"
 
 
+def format_openai_balance(value: float | Decimal | None) -> str:
+    # 仅 OpenAI API 余额固定美元两位，其他平台保留原有小额精度。
+    if value is None or isinstance(value, bool):
+        return "--"
+    try:
+        amount = Decimal(str(value))
+        if not amount.is_finite():
+            return "--"
+        if amount == 0:
+            return "$0.00"
+        # 不足一美分的非零读数不能冒充服务端确认的零余额。
+        rounded = f"{amount:.2f}"
+        if rounded in {"0.00", "-0.00"}:
+            return "<$0.01" if amount > 0 else ">-$0.01"
+        return f"${rounded}"
+    except (ValueError, ArithmeticError):
+        return "--"
+
+
 def format_minute_money(
     value: float | Decimal | None, currency: str = "CNY"
 ) -> str:

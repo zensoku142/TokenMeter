@@ -44,12 +44,13 @@ from data.store import TokenData
 from ui.formatting import (
     _currency_prefix,
     format_money,
+    format_openai_balance,
     format_quota_metric,
     quota_used_percent,
 )
 from ui.i18n import bind_text, language_controller, tr
 from ui.provider_branding import provider_icon
-from ui.provider_overview import ProviderOverview, provider_status_message
+from ui.provider_overview import ProviderOverview, openai_balance_details, provider_status_message
 from ui.qt_theme import current_theme, theme_controller
 
 _MIN_RAIL_WIDTH = 40
@@ -60,6 +61,8 @@ _DEFAULT_RAIL_WIDTH = 58
 def ring_value(provider_id: str, data: TokenData | None) -> tuple[str, float | None]:
     if data is None or data.last_success_at is None:
         return "--", None
+    if provider_id == "openai":
+        return format_openai_balance(data.balance_cny), None
     if data.quota_windows:
         primary = data.quota_windows[0]
         if provider_id in {"codex", "claude"}:
@@ -124,11 +127,17 @@ class _RingItem(QAbstractButton):
                     # 常驻栏只留紧凑数值，完整积分和单位仍保留在详情及无障碍名称中。
                     self.display_value = _compact_amount(metric.value)
             elif data.balance_cny is not None and abs(data.balance_cny) >= 1000:
-                self.display_value = _currency_prefix(data.currency) + _compact_amount(data.balance_cny)
-        self.stale = bool(provider_status_message(data))
+                prefix = "$" if self.provider_id == "openai" else _currency_prefix(data.currency)
+                self.display_value = prefix + _compact_amount(data.balance_cny)
+        self.stale = bool(provider_status_message(data, provider_id=self.provider_id))
         label = tr(PROVIDERS[self.provider_id].name) + (" · " + self.label if self.label else "") + " · " + self.value
         self.setAccessibleName(label)
-        self.setAccessibleDescription(tr(provider_status_message(data)))
+        if self.provider_id == "openai":
+            bind_text(self, lambda: openai_balance_details(data), method="setAccessibleDescription")
+            bind_text(self, lambda: "<qt>" + escape(openai_balance_details(data)).replace("\n", "<br>")
+                      + "<br>" + escape(tr("拖动可移动窗口；长按后上下拖动可排序。")) + "</qt>", method="setToolTip")
+        else:
+            self.setAccessibleDescription(tr(provider_status_message(data)))
         self.update()
 
     def paintEvent(self, event):
@@ -140,7 +149,7 @@ class _RingItem(QAbstractButton):
         ring = QRectF((self.width() - diameter) / 2, 4, diameter, diameter)
         track = QColor(theme.border)
         track.setAlpha(95)
-        painter.setPen(QPen(track, 3.2))
+        painter.setPen(QPen(track, 1.6 if self.provider_id == "openai" else 3.2))
         painter.drawEllipse(ring)
         if self.remaining is not None:
             accent = QColor(theme.accent if config_manager.get("FLOATING_RING_FOLLOW_THEME", True)
@@ -154,6 +163,18 @@ class _RingItem(QAbstractButton):
         icon_size = round(22 * diameter / 38)
         self._brand_icon.paint(painter, round(ring.center().x() - icon_size / 2),
                                round(ring.center().y() - icon_size / 2), icon_size, icon_size)
+        if self.provider_id == "openai":
+            # 角标随现有图标绘制，不新增条目或改变行高、点击及拖动命中区。
+            badge = QRectF(ring.right() - 23, ring.bottom() - 14, 23, 12)
+            painter.setPen(QPen(QColor(theme.border), 0.8))
+            painter.setBrush(QColor(theme.elevated))
+            painter.drawRoundedRect(badge, 3, 3)
+            badge_font = QFont("Segoe UI")
+            badge_font.setPixelSize(8)
+            badge_font.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(badge_font)
+            painter.setPen(QColor(theme.value))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "API")
         font = QFont("Segoe UI")
         font.setPixelSize(14)
         font.setWeight(QFont.Weight.Medium)

@@ -49,6 +49,9 @@ class ProfileEditor(QDialog):
         form.addRow(bind_text(QLabel(), "账户名称"), self.name)
         self.provider = _SettingsComboBox()
         for provider_id, provider in PROVIDERS.items():
+            # OpenAI 首版只支持账户连接页的浏览器验证，不暴露手填登录凭据的档案入口。
+            if provider_id == "openai":
+                continue
             add_item(self.provider, provider.name, provider_id)
         if profile:
             self.provider.setCurrentIndex(self.provider.findData(profile["provider"]))

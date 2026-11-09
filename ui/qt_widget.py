@@ -35,7 +35,7 @@ from config import runtime as config_manager
 from core import pet_extension
 from core.identity import APP_DISPLAY_NAME
 from data.store import PerProviderData, TokenData
-from ui.formatting import format_money, quota_used_percent
+from ui.formatting import format_money, format_openai_balance, quota_used_percent
 from ui.geometry import (
     WorkArea,
     clamp_window,
@@ -233,6 +233,9 @@ class FloatingWidget(QWidget):
             str, tuple[dict[str, object], bool, str]
         ] = {}
         self._provider_results: dict[str, TokenData] = {}
+        self._openai_connection_key = TokenData.account_key_for_config({
+            **config_manager.all_config(), "ACTIVE_PROVIDER": "openai",
+        })
         self._overview_ids: list[str] = []
         self._overview_refresh_queue: list[str] = []
         self._overview_refresh_active: str | None = None
@@ -600,6 +603,10 @@ class FloatingWidget(QWidget):
                 ids.append(key)
                 entries[key] = profile["provider"]
                 labels[key] = profile["name"]
+        # 新 API 来源默认追加在既有平台和账户之后；持久化拖动顺序仍由细环优先恢复。
+        if "openai" in ids:
+            ids.remove("openai")
+            ids.append("openai")
         active = str(config_manager.get("ACTIVE_PROVIDER", ""))
         if not ids and active in PROVIDERS and active not in config_manager.get("DISABLED_PROVIDER_IDS", []):
             ids = [active]
@@ -786,6 +793,10 @@ class FloatingWidget(QWidget):
         panel.header.dragged.connect(self._move_drag)
         panel.header.released.connect(self._end_drag)
         panel.settings_requested.connect(self.open_settings)
+        panel.connection_requested.connect(self.open_settings)
+        panel.content_stack.currentChanged.connect(
+            lambda _index: self._refresh_openai_balance(dict(config_manager.all_config()))
+        )
         panel.refresh_requested.connect(self._refresh_from_panel)
         panel.overview_requested.connect(self._open_provider_overview)
         panel.compact_requested.connect(self._open_compact_overview)
@@ -1542,6 +1553,21 @@ class FloatingWidget(QWidget):
 
     def _on_config_saved(self) -> None:
         config_manager.load_config()
+        openai_config = {**config_manager.all_config(), "ACTIVE_PROVIDER": "openai"}
+        openai_key = TokenData.account_key_for_config(openai_config)
+        if self.__dict__.get("_openai_connection_key", "") != openai_key:
+            # 换组织或删除连接立即撤销旧任务的交付权限；不清空当前 Codex/DeepSeek 数据。
+            self._openai_connection_key = openai_key
+            self._provider_results.pop("openai", None)
+            self._pending_refreshes.pop("openai", None)
+            self._provider_last_started.pop("openai", None)
+            with self._refresh_lock:
+                self._in_flight_requests.pop("openai", None)
+                self._provider_task_started.pop("openai", None)
+            if self.__dict__.get("_overview_refresh_active") == "openai":
+                self._overview_refresh_active = None
+                QTimer.singleShot(0, self._advance_overview_refresh)
+        self._sync_openai_balance()
         self._ring_hidden_by_tray = False
         self._sync_codex_reset_news()
         self.ball.set_secondary_quota_counterclockwise(
@@ -1585,12 +1611,13 @@ class FloatingWidget(QWidget):
         if self._settings_window is not None:
             self._settings_window.reload_provider_configuration(provider_id, removed)
         active = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
-        self._data = TokenData(per_provider=[PerProviderData(active, PROVIDERS[active].name)])
-        if active in config_manager.get("DISABLED_PROVIDER_IDS", []):
-            self._data.status = "error"
-            self._data.errors = [FetchError("NOT_CONFIGURED", "平台", "没有可用的数据平台")]
-        self._refreshing = False
-        self._apply_update()
+        if provider_id != "openai" or active == "openai":
+            self._data = TokenData(per_provider=[PerProviderData(active, PROVIDERS[active].name)])
+            if active in config_manager.get("DISABLED_PROVIDER_IDS", []):
+                self._data.status = "error"
+                self._data.errors = [FetchError("NOT_CONFIGURED", "平台", "没有可用的数据平台")]
+            self._refreshing = False
+            self._apply_update()
         self._on_config_saved()
 
     def _on_vpet_profiles_changed(self) -> None:
@@ -1714,7 +1741,38 @@ class FloatingWidget(QWidget):
         else:
             self.refresh()
 
+    def _sync_openai_balance(self) -> None:
+        if self.panel is None:
+            return
+        captured = {**config_manager.all_config(), "ACTIVE_PROVIDER": "openai"}
+        account_key = TokenData.account_key_for_config(captured)
+        data = self._provider_results.get("openai")
+        if data is not None and data.account_key != account_key:
+            data = None
+        if account_key and data is None:
+            data = TokenData.cached_snapshot("openai", account_key)
+        organization = "org-…" + str(captured.get("OPENAI_ORGANIZATION", ""))[-4:] if account_key else ""
+        self.panel.set_openai_balance(
+            data if account_key else None, connected=bool(account_key), organization=organization,
+        )
+
+    def _refresh_openai_balance(self, captured_config: dict[str, object]) -> None:
+        # 只把可见 Codex 详情需要的辅助余额加入已有调度，不改来源或后台勾选。
+        if (not self._expanded or self.panel is None or not self.panel.isVisible()
+                or self.panel.content_stack.currentIndex() != 0
+                or captured_config.get("ACTIVE_PROVIDER") != "codex"):
+            return
+        captured = {**captured_config, "ACTIVE_PROVIDER": "openai"}
+        if not TokenData.account_key_for_config(captured):
+            return
+        if time.monotonic() - self._provider_last_started.get("openai", float("-inf")) < 60:
+            return
+        self._start_provider_refresh(
+            "openai", captured, lightweight=True, queue_if_busy=False, reason="overview",
+        )
+
     def _update_provider_overview(self) -> None:
+        self._sync_openai_balance()
         overview = self.panel.provider_overview if self.panel is not None and self.__dict__.get("_overview_opened", False) else None
         if overview is not None and not overview.isVisible():
             overview = None
@@ -1736,6 +1794,13 @@ class FloatingWidget(QWidget):
                 continue
             captured["ACTIVE_PROVIDER"] = provider_id
             account_key = TokenData.account_key_for_config(captured)
+            if provider_id == "openai" and not account_key:
+                snapshots[provider_id] = TokenData(
+                    currency="USD", status="not_configured",
+                    errors=[FetchError("NOT_CONFIGURED", "API 余额", "未连接，请连接账户")],
+                    per_provider=[PerProviderData("openai", "OpenAI API", currency="USD")],
+                )
+                continue
             data = self._provider_results.get(provider_id)
             if self._data.per_provider and self._data.per_provider[0].provider_id == provider_id:
                 data = self._data
@@ -1809,6 +1874,10 @@ class FloatingWidget(QWidget):
         self._overview_refresh_active = None
         while self._overview_refresh_queue:
             provider_id = self._overview_refresh_queue.pop(0)
+            if (provider_id == "openai" and self.__dict__.get("_overview_batch_automatic", False)
+                    and time.monotonic() - self._provider_last_started.get("openai", float("-inf")) < 60):
+                # 排队期间 Codex 底栏可能已采集同一余额，不在队列轮到它时再重复一次。
+                continue
             # 逐个发起轻量采集，复用按平台去重和退避；不改变用户的后台同步设置。
             if self._start_provider_refresh(
                 provider_id, dict(config_manager.all_config()),
@@ -1836,9 +1905,11 @@ class FloatingWidget(QWidget):
             provider_id,
             captured_config,
             lightweight=self._uses_lightweight_mimo_refresh(provider_id),
-            queue_if_busy=queue_if_busy and not force,
+            queue_if_busy=queue_if_busy and not force and provider_id != "openai",
             reason="switch" if force else reason,
         )
+        self._sync_openai_balance()
+        self._refresh_openai_balance(captured_config)
 
     def _start_provider_refresh(
         self,
@@ -2414,6 +2485,10 @@ class FloatingWidget(QWidget):
         provider_id = (
             self._data.per_provider[0].provider_id if self._data.per_provider else ""
         )
+        if provider_id != "openai" and self.__dict__.pop("_ball_openai_details", False):
+            # 离开 API 金额视图时不把组织/错误提示带到其他平台；额度路径随后照常设置自己的提示。
+            bind_text(self.ball, "", method="setToolTip")
+            bind_text(self.ball, "", method="setAccessibleDescription")
         motion_provider_id = provider_id or str(
             config_manager.get("ACTIVE_PROVIDER", "")
         ).strip().lower()
@@ -2510,15 +2585,27 @@ class FloatingWidget(QWidget):
             self.ball.clear_quota_state()
             balance_label = getattr(provider_cls, "balance_label", "账户余额")
             balance_label = "余额" if balance_label == "账户余额" else balance_label
+            if provider_id == "openai":
+                from ui.provider_overview import openai_balance_details, openai_status_message
+
+                if self._data.last_success_at and openai_status_message(self._data):
+                    balance_label = "API 未更新"
+                self._ball_openai_details = True
+                bind_text(self.ball, lambda data=self._data: openai_balance_details(data), method="setToolTip")
+                bind_text(self.ball, lambda data=self._data: openai_balance_details(data), method="setAccessibleDescription")
             self.ball.set_labels("今日使用", balance_label)
             self.ball.set_values(
                 "--" if loading else format_money(self._data.today_cost_cny, self._data.currency),
-                "--" if loading else format_money(self._data.balance_cny, self._data.currency),
+                "--" if loading else (
+                    format_openai_balance(self._data.balance_cny) if provider_id == "openai"
+                    else format_money(self._data.balance_cny, self._data.currency)
+                ),
             )
         if self.panel is not None:
             self.panel.set_refreshing(self._refreshing)
             if self._expanded:
                 self.panel.update_data(self._data, loading, self._refreshing)
+            self._sync_openai_balance()
 
     def _periodic_refresh(self) -> None:
         self.refresh(queue_if_busy=False, reason="periodic_current")
@@ -2528,6 +2615,8 @@ class FloatingWidget(QWidget):
         if self._closed:
             return
         captured_config = config_manager.all_config()
+        self._sync_openai_balance()
+        self._refresh_openai_balance(captured_config)
         if (captured_config.get("BACKGROUND_PROFILE_IDS") or config_manager.get("VPET_ENABLED", False) is True
                 or (cc_switch.is_enabled() and cc_switch.codex_accounts())):
             self._update_vpet_source_options()

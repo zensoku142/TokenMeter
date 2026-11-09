@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from html import escape
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -21,6 +24,7 @@ from api.providers import PROVIDERS
 from data.store import TokenData
 from ui.formatting import (
     format_money,
+    format_openai_balance,
     format_quota_metric,
     format_reset_countdown,
     quota_used_percent,
@@ -30,8 +34,58 @@ from ui.provider_branding import provider_icon
 from ui.qt_theme import current_theme, theme_controller
 
 
-def provider_status_message(data: TokenData | None) -> str:
+def openai_status_message(data: TokenData | None) -> str:
+    # 只按错误码生成说明，禁止回显异常消息、响应正文或请求头。
+    if data is None:
+        return "等待首次更新"
+    codes = set(data.refresh_error_codes) | {error.code for error in data.errors}
+    reasons = (
+        ({"NOT_CONFIGURED"}, "未连接，请连接账户"),
+        ({"AUTH_EXPIRED"}, "登录已失效，请重新连接"),
+        ({"FORBIDDEN", "PERMISSION_DENIED"}, "该组织不可访问或权限不足，请确认所选组织"),
+        ({"RATE_LIMITED"}, "接口限流，稍后自动重试"),
+        ({"NETWORK_TIMEOUT"}, "连接超时，请稍后重试"),
+        ({"NETWORK_ERROR"}, "网络连接失败，请稍后重试"),
+        ({"SERVER_ERROR"}, "服务暂时异常，请稍后重试"),
+        ({"INVALID_RESPONSE"}, "余额数据异常，请稍后重试"),
+    )
+    for matches, reason in reasons:
+        if codes & matches:
+            break
+    else:
+        if data.status == "not_configured":
+            reason = "未连接，请连接账户"
+        elif codes or data.errors or data.status in {"partial", "error"}:
+            reason = "余额读取失败，请稍后重试"
+        elif data.is_stale or data.quota_source.startswith("cache"):
+            reason = "当前显示上次记录，请留意成功更新时间"
+        else:
+            return "等待首次更新" if data.last_success_at is None else ""
+    return ("未更新：" if data.last_success_at is not None else "") + reason
+
+
+def openai_balance_details(
+    data: TokenData | None, *, connected: bool = True, organization: str = ""
+) -> str:
+    # 优先使用主代理的脱敏显示名；防止误传的原始 org-ID 进入提示或无障碍文本。
+    amount = format_openai_balance(data.balance_cny) if connected and data and data.last_success_at else "--"
+    organization = ((data.account_label if data else "") or organization) if connected else ""
+    organization = re.sub(r"org-[A-Za-z0-9_-]+", lambda match: "org-…" + (
+        match.group()[-4:] if len(match.group()) > 11 else ""
+    ), organization)
+    updated = data.last_success_at.strftime("%Y-%m-%d %H:%M:%S %Z").strip() if data and data.last_success_at else ""
+    return "\n".join(filter(None, (
+        f"{tr('API 余额')} {amount} · USD",
+        f"{tr('所属组织')}：{organization}" if organization else "",
+        tr("最后成功更新：{timestamp}", timestamp=updated) if updated else tr("等待首次更新"),
+        tr(openai_status_message(data)) if connected else tr("未连接，请连接账户"),
+    )))
+
+
+def provider_status_message(data: TokenData | None, *, provider_id: str = "") -> str:
     """Use error codes, never raw responses, for a safe recovery explanation."""
+    if provider_id == "openai":
+        return openai_status_message(data)
     if data is None:
         return "尚未采集，等待自动更新"
     codes = set(data.refresh_error_codes) | {error.code for error in data.errors}
@@ -204,12 +258,21 @@ class ProviderOverview(QWidget):
             bind_text(summary, lambda pid=provider_id, value=data: self._summary(pid, value))
             available = bool(data and data.last_success_at)
             subscription = PROVIDERS[provider_id].supports_subscription_quota
+            openai_view = provider_id == "openai"
+            if openai_view:
+                not_configured = bool(data and (data.status == "not_configured" or "NOT_CONFIGURED" in (
+                    set(data.refresh_error_codes) | {error.code for error in data.errors}
+                )))
+                bind_text(card.findChild(QPushButton, "overviewConnection"), "连接账户" if not_configured else "账户连接")
+                bind_text(card, lambda value=data: "<qt>" + escape(openai_balance_details(value)).replace("\n", "<br>") + "</qt>", method="setToolTip")
+                bind_text(card, lambda value=data: openai_balance_details(value), method="setAccessibleDescription")
             windows = sorted(data.quota_windows, key=lambda w: quota_used_percent(w.used_percent) or 0, reverse=True) if data else []
             # 未知或缺失额度不绘制进度；过期读数用灰色并保留醒目的状态说明。
             summary.setVisible(not available or (subscription and not windows))
             stale = bool(data and (data.is_stale or data.errors or data.refresh_error_codes or data.quota_source.startswith("cache")))
             for position, (row, label, value, bar, reset) in enumerate(card._gauges):
-                row.setVisible(available and (not subscription or position < min(len(windows), self._window_limit)))
+                row.setVisible(available and (position == 0 if openai_view else
+                               not subscription or position < min(len(windows), self._window_limit)))
                 if not available:
                     continue
                 if subscription and position < len(windows):
@@ -232,13 +295,15 @@ class ProviderOverview(QWidget):
                     reset.show()
                 elif not subscription:
                     bind_text(label, PROVIDERS[provider_id].balance_label if position == 0 else "今日使用金额")
-                    value.setText(format_money(data.balance_cny if position == 0 else data.today_cost_cny, data.currency))
+                    value.setText(format_openai_balance(data.balance_cny) if openai_view and position == 0
+                                  else "--" if openai_view else
+                                  format_money(data.balance_cny if position == 0 else data.today_cost_cny, data.currency))
                     bar.hide()
                     reset.hide()
             if available and subscription and len(windows) > self._window_limit:
                 bind_text(summary, lambda count=len(windows) - self._window_limit: tr("还有 {count} 个额度窗口，请查看详情", count=count))
                 summary.show()
-            message = provider_status_message(data)
+            message = provider_status_message(data, provider_id=provider_id)
             bind_text(status, message)
             status.setVisible(bool(message))
             updated = data.last_success_at.strftime("%Y-%m-%d %H:%M:%S") if data and data.last_success_at else ""
@@ -266,6 +331,8 @@ class ProviderOverview(QWidget):
         if data is None or data.last_success_at is None:
             return "--"
         provider = PROVIDERS[provider_id]
+        if provider_id == "openai":
+            return f"{tr(provider.balance_label)} · {format_openai_balance(data.balance_cny)}"
         if provider.supports_subscription_quota:
             # 最紧张的窗口先展示，不能只取接口前两项而漏掉受限模型。
             windows = sorted(data.quota_windows, key=lambda w: quota_used_percent(w.used_percent) or 0, reverse=True)

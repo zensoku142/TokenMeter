@@ -240,6 +240,190 @@ class ChromeSession:
                     return {str(key): str(value) for key, value in headers.items()}
         return fallback_headers
 
+    def capture_exact_request_headers(
+        self,
+        *,
+        url: str,
+        page_host: str,
+        header_names: tuple[str, ...],
+        timeout_seconds: float = 5.0,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, str]:
+        """完成采集后刷新当前页面，只接受同一请求、同一页面的唯一凭据组。"""
+
+        def check_cancelled() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("OPENAI_ACQUIRE_CANCELLED")
+
+        check_cancelled()
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("CDP_CONN_CLOSED")
+        target = urlparse(url)
+        names = set(header_names)
+
+        def current_frame() -> dict[str, Any]:
+            tree = connection.call("Page.getFrameTree").get("frameTree", {})
+            frame = tree.get("frame", {}) if isinstance(tree, dict) else {}
+            try:
+                page = urlparse(frame.get("url", ""))
+                valid = (
+                    page.scheme == "https" and page.hostname == page_host
+                    and page.port in (None, 443) and page.username is None
+                    and page.password is None and frame.get("id") and frame.get("loaderId")
+                )
+            except (TypeError, ValueError, AttributeError):
+                valid = False
+            if not valid:
+                raise RuntimeError("BROWSER_REQUEST_EMPTY")
+            return frame
+
+        def selected_headers(raw: Any) -> dict[str, str]:
+            result: dict[str, str] = {}
+            if isinstance(raw, dict):
+                for key, value in raw.items():
+                    name = str(key).lower()
+                    if name not in names:
+                        continue
+                    if not isinstance(value, str) or (name in result and result[name] != value):
+                        raise RuntimeError("BROWSER_REQUEST_AMBIGUOUS")
+                    result[name] = value
+            return result
+
+        def exact_request(request: dict[str, Any]) -> bool:
+            try:
+                parsed = urlparse(request.get("url", ""))
+                return bool(
+                    request.get("method") == "GET" and parsed.scheme == "https"
+                    and parsed.hostname == target.hostname and parsed.port in (None, 443)
+                    and parsed.username is None and parsed.password is None
+                    and parsed.path == target.path and not parsed.query and not parsed.fragment
+                )
+            except (TypeError, ValueError, AttributeError):
+                return False
+
+        connection.call("Page.enable")
+        before = current_frame()
+        connection.call("Network.enable")
+        # 不允许完成前的排队流量或前一组织的旧 loader 成为采集依据。
+        connection._events.clear()
+        requests_by_id: dict[str, tuple[str, str, dict[str, str]]] = {}
+        extra_by_id: dict[str, dict[str, str]] = {}
+        seen_ids: set[str] = set()
+        rejected_ids: set[str] = set()
+        try:
+            check_cancelled()
+            connection.call("Page.reload", {"ignoreCache": True})
+            deadline = time.monotonic() + max(0.1, timeout_seconds)
+            while time.monotonic() < deadline:
+                check_cancelled()
+                event = connection.next_event(min(0.25, deadline - time.monotonic()))
+                if not event:
+                    continue
+                params = event.get("params")
+                if not isinstance(params, dict):
+                    continue
+                request_id = params.get("requestId")
+                if not isinstance(request_id, str) or not request_id:
+                    continue
+                method = event.get("method")
+                if method == "Network.requestWillBeSent":
+                    # 重定向会复用 requestId，不能让两跳的 ExtraInfo 相互补头。
+                    if request_id in seen_ids or "redirectResponse" in params:
+                        rejected_ids.add(request_id)
+                    seen_ids.add(request_id)
+                    request = params.get("request")
+                    if not isinstance(request, dict) or not exact_request(request):
+                        rejected_ids.add(request_id)
+                        extra_by_id.pop(request_id, None)
+                        continue
+                    requests_by_id[request_id] = (
+                        params.get("frameId", ""), params.get("loaderId", ""),
+                        selected_headers(request.get("headers")),
+                    )
+                elif method == "Network.requestWillBeSentExtraInfo" and request_id not in rejected_ids:
+                    # ExtraInfo 可能先于主事件；仅暂存白名单字段，永不保留 Cookie。
+                    headers = selected_headers(params.get("headers"))
+                    previous = extra_by_id.get(request_id)
+                    if previous is not None and previous != headers:
+                        rejected_ids.add(request_id)
+                    extra_by_id[request_id] = headers
+            check_cancelled()
+            after = current_frame()
+            if (
+                after["id"] != before["id"] or after["loaderId"] == before["loaderId"]
+                or after["url"] != before["url"]
+            ):
+                raise RuntimeError("BROWSER_REQUEST_EMPTY")
+            candidates: set[tuple[tuple[str, str], ...]] = set()
+            incomplete = False
+            for request_id, (frame_id, loader_id, headers) in requests_by_id.items():
+                if frame_id != after["id"] or loader_id != after["loaderId"]:
+                    continue
+                if request_id in rejected_ids:
+                    raise RuntimeError("BROWSER_REQUEST_AMBIGUOUS")
+                combined = dict(headers)
+                for name, value in extra_by_id.get(request_id, {}).items():
+                    if name in combined and combined[name] != value:
+                        raise RuntimeError("BROWSER_REQUEST_AMBIGUOUS")
+                    combined[name] = value
+                if set(combined) != names or not all(combined.values()):
+                    incomplete = True
+                    continue
+                candidates.add(tuple(sorted(combined.items())))
+            # 多组织、未完整确认的新请求均失败关闭，而不是随意取最后一条。
+            if len(candidates) > 1 or (candidates and incomplete):
+                raise RuntimeError("BROWSER_REQUEST_AMBIGUOUS")
+            if not candidates:
+                raise RuntimeError("BROWSER_REQUEST_EMPTY")
+            return dict(next(iter(candidates)))
+        finally:
+            try:
+                connection.call("Network.disable")
+            finally:
+                connection._events.clear()
+
+    def close_and_verify(self, timeout_seconds: float = 3.0) -> None:
+        """仅供需要脱离浏览器验证的调用方使用，不改变原 close 的宽松契约。"""
+
+        try:
+            try:
+                self.close()
+            except (OSError, RuntimeError):
+                # Browser.close 可先断开 CDP；是否退出由下方进程及端口确认，不能仅凭断连判失败。
+                pass
+            finally:
+                # 即使 CDP 断连，仍回收本次进程；原 close 的 kill 兜底不会等待。
+                try:
+                    self._process.wait(timeout=timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    self._process.wait(timeout=timeout_seconds)
+            if self._process.poll() is None:
+                raise RuntimeError("BROWSER_NOT_CLOSED")
+            port = urlparse(self._websocket_url).port
+            if port is None:
+                raise RuntimeError("BROWSER_NOT_CLOSED")
+            deadline = time.monotonic() + max(0.1, timeout_seconds)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    # 本机 Windows 对已关闭回环端口约 2 秒才返回拒绝；短探测会误判为超时。
+                    probe = socket.create_connection(("127.0.0.1", port), timeout=remaining)
+                except ConnectionRefusedError:
+                    return
+                except (TimeoutError, ConnectionResetError):
+                    # 超时/重置本身不是退出证据，仅在总期限内继续等待明确的端口拒绝。
+                    pass
+                else:
+                    probe.close()
+                threading.Event().wait(min(0.05, max(0, deadline - time.monotonic())))
+        except Exception:
+            raise RuntimeError("BROWSER_NOT_CLOSED") from None
+        raise RuntimeError("BROWSER_NOT_CLOSED")
+
     def fetch_json(
         self,
         *,

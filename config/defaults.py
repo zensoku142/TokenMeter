@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 PROVIDER_IDS = (
-    "deepseek", "mimo", "codex", "cursor", "nayuto", "claude",
+    "deepseek", "mimo", "codex", "cursor", "nayuto", "claude", "openai",
 )
 REMOVED_PROVIDER_IDS = (
     "openrouter", "moonshot", "copilot", "zai", "kimi", "minimax", "elevenlabs",
@@ -30,6 +30,8 @@ SECRET_KEYS = (
     "GEMINI_ACCESS_TOKEN",
     "CLAUDE_ACCESS_TOKEN",
     "WORKBUDDY_COOKIE",
+    "OPENAI_AUTH",
+    "OPENAI_ORGANIZATION",
 )
 OFFICIAL_HOSTS = {
     "platform.deepseek.com",
@@ -48,6 +50,7 @@ OFFICIAL_HOSTS = {
     "www.minimax.io",
     "www.minimaxi.com",
     "api.elevenlabs.io",
+    "api.openai.com",
 }
 DEFAULT_CONFIG: dict[str, Any] = {
     "DEEPSEEK_API_KEY": "",
@@ -84,6 +87,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "MOONSHOT_API_KEY": "",
     "MOONSHOT_BASE": "https://api.moonshot.cn/v1",
     "COPILOT_TOKEN": "",
+    "OPENAI_AUTH": "",
+    "OPENAI_ORGANIZATION": "",
     "CLAUDE_STATUSLINE_FILE": "",
     "ZAI_API_KEY": "",
     "ZAI_BASE": "https://api.z.ai",

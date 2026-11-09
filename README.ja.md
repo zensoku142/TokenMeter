@@ -38,7 +38,7 @@ TokenMeter は Windows 10/11 向けの軽量な AI 使用量モニターです�
 
 実際のコンポーネント画面です。中国語 UI とデモデータを使用。クリックで拡大できます。[画像と出典](docs/images/readme/README.md)。
 
-現在のバージョン：**v1.17.1** · ペット **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+現在のバージョン：**v1.17.2** · ペット **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 機能
 
@@ -135,7 +135,7 @@ Qt テストには利用可能な Windows デスクトップセッション、�
 
 ## バージョン
 
-本体 `1.17.1`、任意のペット拡張 `0.3.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
+本体 `1.17.2`、任意のペット拡張 `0.3.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
 
 ## ライセンスと謝辞
 

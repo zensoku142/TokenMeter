@@ -397,7 +397,7 @@ class PerProviderData:
     provider_id: str
     provider_name: str
     currency: str = "CNY"
-    balance_cny: float | None = None
+    balance_cny: float | Decimal | None = None
     balance_tokens: int | None = None
     monthly_usage_tokens: int | None = None
     monthly_cost_cny: float | None = None
@@ -425,7 +425,7 @@ class PerProviderData:
 @dataclass
 class TokenData:
     currency: str = "CNY"
-    balance_cny: float | None = None
+    balance_cny: float | Decimal | None = None
     balance_tokens: int | None = 0
     monthly_usage_tokens: int | None = 0
     monthly_cost_cny: float | None = None
@@ -1004,7 +1004,7 @@ class TokenData:
         per.quota_windows = []
         per.quota_metrics = []
         per.quota_statistics = []
-        per.account_label = ""
+        per.account_label = str(getattr(provider, "balance_account_label", "") or "")
         per.account_plan = ""
         per.account_plan_active_until = None
         per.quota_source = ""
@@ -1198,7 +1198,8 @@ class TokenData:
             except Exception as exc:
                 balance, balance_error = None, _unexpected_fetch_error(provider.id, "账户余额", exc)
             if balance is not None:
-                per.balance_cny = float(balance.amount) if balance.amount is not None else None
+                # OpenAI 保留原始 Decimal，避免极小非零余额在 float 下溢后伪装成零。
+                per.balance_cny = (balance.amount if provider.id == "openai" else float(balance.amount)) if balance.amount is not None else None
                 per.balance_tokens = int(balance.token_estimate)
                 per.currency = str(balance.currency or per.currency).upper()
                 successes += 1

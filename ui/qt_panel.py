@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from html import escape
 from math import ceil, floor
 
 import pyqtgraph as pg
 from PySide6.QtCore import (
     QDate,
+    QEvent,
     QPoint,
     QPointF,
     QRect,
@@ -43,6 +45,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpacerItem,
@@ -64,6 +67,7 @@ from ui.formatting import (
     format_minute_money,
     format_money,
     format_money_axis,
+    format_openai_balance,
     format_plan_active_until,
     format_quota_metric,
     format_reset_countdown,
@@ -75,6 +79,7 @@ from ui.i18n import add_item, bind_text, current_language, tr, ui_locale
 from ui.qt_heatmap import TokenActivityHeatmap
 from ui.quota_details import QuotaDetailsDialog
 from ui.provider_picker import ProviderManagerButton, ProviderPicker as ProviderQuickCombo, ProviderShortcuts
+from ui.provider_overview import openai_balance_details, openai_status_message
 from ui.qt_theme import (
     app_icon,
     current_theme,
@@ -2302,6 +2307,7 @@ class MainPanel(QFrame):
     close_requested = Signal()
     theme_requested = Signal(str)
     provider_selected = Signal(str)
+    connection_requested = Signal(str)
     overview_requested = Signal()
     compact_requested = Signal()
     provider_configuration_changed = Signal(str, bool)
@@ -2339,6 +2345,10 @@ class MainPanel(QFrame):
         self._today_tokens: int | None = None
         self._usage_card_loading = False
         self._currency = "CNY"
+        self._display_provider_id = str(config_manager.get("ACTIVE_PROVIDER", "deepseek"))
+        self._openai_balance_data: TokenData | None = None
+        self._openai_connected = False
+        self._openai_organization = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(1, 1, 1, 1)
@@ -2496,6 +2506,11 @@ class MainPanel(QFrame):
         self.today_card.layout().insertWidget(2, self.pricing_badge, 0, Qt.AlignmentFlag.AlignLeft)
         self.balance_card = MetricCard("账户余额", "balance")
         self.balance_card.set_variant("compact")
+        self.openai_connection_button = bind_text(QPushButton(), "连接账户")
+        self.openai_connection_button.setObjectName("openaiConnectionButton")
+        self.openai_connection_button.clicked.connect(lambda: self.connection_requested.emit("openai"))
+        self.balance_card.layout().insertWidget(2, self.openai_connection_button)
+        self.openai_connection_button.hide()
         self.month_card = MetricCard("本月累计", "month")
         self.month_card.set_variant("compact")
         metrics_layout.addWidget(self.today_card, 3)
@@ -2702,6 +2717,14 @@ class MainPanel(QFrame):
         footer.addWidget(self.status_text)
         footer.addStretch(1)
         footer.addWidget(self.updated_text)
+        self._status_bar = footer_widget
+        # 辅助读数只借用原有弹性空白，不参加布局尺寸计算，也不挤压两侧状态。
+        self.openai_balance_text = QLabel(footer_widget)
+        self.openai_balance_text.setObjectName("openaiBalanceText")
+        self.openai_balance_text.setTextFormat(Qt.TextFormat.RichText)
+        self.openai_balance_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.openai_balance_text.hide()
+        footer_widget.installEventFilter(self)
         self._local_analytics_dialog = None
         content.addWidget(footer_widget)
         # 概览和设置共用面板主体，保留顶部拖动、主题切换和收起入口。
@@ -2723,7 +2746,70 @@ class MainPanel(QFrame):
         self._set_activity_view("annual")
         self.refresh_language_layout()
 
+    def set_openai_balance(
+        self, data: TokenData | None, *, connected: bool, organization: str = ""
+    ) -> None:
+        # 主代理只传当前身份校验后的快照；此处不查询、不复用上个身份的余额或成功时间。
+        self._openai_balance_data = data if connected else None
+        self._openai_connected = connected
+        self._openai_organization = organization if connected else ""
+        self._render_openai_balance()
+
+    def _render_openai_balance(self) -> None:
+        label = self.openai_balance_text
+        data = self._openai_balance_data
+        if not self._openai_connected:
+            bind_text(label, "")
+            bind_text(label, "", method="setToolTip")
+            bind_text(label, "", method="setAccessibleName")
+            bind_text(label, "", method="setAccessibleDescription")
+            label.hide()
+            return
+        amount = format_openai_balance(data.balance_cny) if data and data.last_success_at else "--"
+        stale = bool(data and data.last_success_at and openai_status_message(data))
+        bind_text(label, lambda: (
+            f'<span style="color:{current_theme().muted}">{escape(tr("API 余额"))}</span> '
+            f'<span style="color:{current_theme().value};font-weight:600">{amount}</span>'
+            + (f' <span style="color:{current_theme().muted}">{escape(tr("未更新"))}</span>' if stale else "")
+        ))
+        def details():
+            return openai_balance_details(data, connected=True, organization=self._openai_organization)
+
+        bind_text(label, lambda: "<qt>" + escape(details()).replace("\n", "<br>") + "</qt>", method="setToolTip")
+        bind_text(label, lambda: f'{tr("API 余额")} {amount}' + (f' · {tr("未更新")}' if stale else ""), method="setAccessibleName")
+        bind_text(label, details, method="setAccessibleDescription")
+        label.setStyleSheet("font-size: 11px;")
+        self._update_openai_balance_visibility()
+
+    def _update_openai_balance_visibility(self) -> None:
+        if not hasattr(self, "openai_balance_text"):
+            return
+        label = self.openai_balance_text
+        if not self._openai_connected or self._display_provider_id != "codex":
+            label.hide()
+            return
+        layout = self._status_bar.layout()
+        margins = layout.contentsMargins()
+        spacing = layout.spacing()
+        left = (margins.left() + self.status_dot.width()
+                + self.status_text.sizeHint().width() + spacing * 2)
+        right = self._status_bar.width() - margins.right() - self.updated_text.sizeHint().width() - spacing
+        label.ensurePolished()
+        width = label.sizeHint().width()
+        fits = width <= right - left
+        label.setVisible(fits)
+        if fits:
+            label.setGeometry(left + (right - left - width) // 2, 0, width, self._status_bar.height())
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is getattr(self, "_status_bar", None) and event.type() in {
+            QEvent.Type.Resize, QEvent.Type.LayoutRequest,
+        }:
+            self._update_openai_balance_visibility()
+        return super().eventFilter(watched, event)
+
     def refresh_language_layout(self) -> None:
+        self._render_openai_balance()
         # 外语短标签的字宽不同；按实际文字安排固定按钮，避免最小面板宽度下互相覆盖。
         chinese = current_language() == "zh-cn"
         for button in (self.annual_activity_button, self.minute_activity_button, self.speed_activity_button):
@@ -2855,6 +2941,7 @@ class MainPanel(QFrame):
             self._fit_activity_heatmap()
         if hasattr(self, "activity_summary"):
             self._update_activity_header_visibility()
+        self._update_openai_balance_visibility()
 
     def _update_provider_shortcuts_visibility(self) -> None:
         # 峰谷提示已移入用量卡；窄窗口也保留图标切换，不再与提示争抢空间。
@@ -3317,6 +3404,7 @@ class MainPanel(QFrame):
         self.minute_date_edit.refresh_theme()
         self._refresh_minute_control_colors()
         self._refresh_icons()
+        self._render_openai_balance()
         self.update()
 
     def _refresh_icons(self) -> None:
@@ -3393,6 +3481,16 @@ class MainPanel(QFrame):
                 self.provider_quick_combo.setCurrentIndex(provider_index)
             del provider_blocker
         provider_cls = PROVIDERS.get(provider_id)
+        openai_view = provider_id == "openai"
+        if self._display_provider_id == "openai" and not openai_view:
+            bind_text(self.balance_card.value, "", method="setToolTip")
+            bind_text(self.balance_card.value, "", method="setAccessibleDescription")
+        self._display_provider_id = provider_id
+        not_configured = data.status == "not_configured" or "NOT_CONFIGURED" in (
+            set(data.refresh_error_codes) | {error.code for error in data.errors}
+        )
+        self.openai_connection_button.setVisible(openai_view and not_configured)
+        self._update_openai_balance_visibility()
         self._speed_rows = data.token_speed_usage
         self._speed_enabled = bool(provider_cls and provider_cls.supports_token_speed
                                    and data.minute_usage_status != "unavailable")
@@ -3540,6 +3638,7 @@ class MainPanel(QFrame):
             bind_text(self.status_text, status)
             self.status_dot.set_role(self.status_role(data, loading))
             bind_text(self.updated_text, self.codex_update_time(data))
+            self._update_openai_balance_visibility()
             return
 
         # API billing providers retain the original amount, trend and Token activity view.
@@ -3549,24 +3648,36 @@ class MainPanel(QFrame):
         self._set_activity_view(self._activity_view)
 
         self._usage_card_loading = loading
-        self._today_cost_cny = data.today_cost_cny
-        self._today_tokens = data.today_tokens
+        self._today_cost_cny = None if openai_view else data.today_cost_cny
+        self._today_tokens = None if openai_view else data.today_tokens
         self._daily_usage_by_date = {
             str(row.get("date")): row for row in data.daily_usage if row.get("date")
         }
         self.balance_card.set_title(getattr(provider_cls, "balance_label", "账户余额"))
         self.month_card.set_title("本月累计 (UTC)" if provider_id == "openrouter" else "本月累计")
         self.balance_card.set_values(
-            money(data.balance_cny),
+            (format_openai_balance(data.balance_cny) if data.last_success_at and not loading else "--")
+            if openai_view else money(data.balance_cny),
             f"约 {tokens(data.balance_tokens)}" if data.balance_tokens
             else getattr(provider_cls, "balance_description", "账户可用余额"),
             "",
         )
         self.month_card.set_values(
-            money(data.monthly_cost_cny),
-            tokens(data.monthly_usage_tokens),
+            "--" if openai_view else money(data.monthly_cost_cny),
+            "--" if openai_view else tokens(data.monthly_usage_tokens),
             "",
         )
+        if openai_view:
+            def details():
+                return openai_balance_details(data, connected=not not_configured)
+
+            bind_text(self.balance_card.value,
+                      lambda: "<qt>" + escape(details()).replace("\n", "<br>") + "</qt>",
+                      method="setToolTip")
+            bind_text(self.balance_card.value, details, method="setAccessibleDescription")
+            message = openai_status_message(data)
+            bind_text(self.balance_card.detail, message)
+            self.balance_card.detail.setVisible(bool(message))
 
         self._set_annual_activity_data(data)
 
@@ -3605,10 +3716,17 @@ class MainPanel(QFrame):
         bind_text(self.trend.title, trend_source, method='setAccessibleDescription')
         bind_text(self.trend.plot, "", method='setToolTip')
         self.statistics.set_data(data)
+        if openai_view:
+            # API 余额接口没有用量来源；不能把 TokenData 默认的零冒充真实统计。
+            for value in self.statistics._values:
+                bind_text(value, "--")
         status, _color = self.status_summary(data, loading or refreshing)
+        if openai_view:
+            status = openai_status_message(data) or "连接正常，平台未提供按日明细"
         bind_text(self.status_text, status)
         self.status_dot.set_role(self.status_role(data, loading or refreshing))
         bind_text(self.updated_text, self.relative_update_time(data))
+        self._update_openai_balance_visibility()
 
     @staticmethod
     def status_role(data: TokenData, loading: bool = False) -> str:

@@ -38,7 +38,7 @@ TokenMeter 是適用於 Windows 10/11 的輕量級 AI 用量監控工具，支�
 
 真實元件截圖，使用簡體中文介面與示範資料；點擊查看原圖。[截圖與來源](docs/images/readme/README.md)。
 
-目前版本：**v1.17.1** · 桌寵 **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+目前版本：**v1.17.2** · 桌寵 **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
@@ -135,7 +135,7 @@ Qt 測試需要可用的 Windows 桌面工作階段；產生安裝程式需要 I
 
 ## 版本
 
-主程式 `1.17.1`，選用桌寵擴充套件 `0.3.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程式 `1.17.2`，選用桌寵擴充套件 `0.3.2`。更新記錄與校驗檔見 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 授權與致謝
 

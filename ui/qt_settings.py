@@ -353,8 +353,16 @@ class _CookieAcquireWorker(QThread):
         super().__init__(parent)
         self._stop_event = threading.Event()
         self._provider_cls = provider_cls
+        self._cancelled = threading.Event()
+        self._collect_requested = threading.Event()
 
     def stop_and_collect(self) -> None:
+        self._collect_requested.set()
+        self._stop_event.set()
+
+    def cancel(self) -> None:
+        # Provider 的停止事件负责关闭浏览器；取消状态独立保留，不能变成完成采集。
+        self._cancelled.set()
         self._stop_event.set()
 
     def run(self) -> None:
@@ -364,12 +372,20 @@ class _CookieAcquireWorker(QThread):
             )
             if not callable(acquire):
                 acquire = self._provider_cls.acquire_cookie_via_chrome
-            cookie = acquire(self._stop_event)
-        except RuntimeError as exc:
-            self.error.emit(self._provider_cls.describe_acquire_error(exc))
-            return
+            if getattr(self._provider_cls, "id", "") == "openai":
+                cookie = acquire(self._stop_event, cancel_event=self._cancelled)
+            else:
+                cookie = acquire(self._stop_event)
         except Exception as exc:  # noqa: BLE001
-            self.error.emit(self._provider_cls.describe_acquire_error(exc))
+            if getattr(self._provider_cls, "id", "") == "openai":
+                if not self._cancelled.is_set():
+                    self.error.emit(PROVIDERS["openai"].acquire_error_code(exc))
+            else:
+                self.error.emit(self._provider_cls.describe_acquire_error(exc))
+            return
+        if getattr(self._provider_cls, "id", "") == "openai" and (
+            self._cancelled.is_set() or not self._collect_requested.is_set()
+        ):
             return
         direct_usable = True
         if getattr(self._provider_cls, "id", "") == "mimo":
@@ -386,6 +402,30 @@ class _CookieAcquireWorker(QThread):
                 return
             direct_usable = self._provider_cls.is_direct_cookie_usable(cookie)
         self.success.emit(_AcquiredCookie(cookie, direct_usable))
+
+
+class _SettingsProviderPicker(ProviderPicker):
+    def select_provider(self, provider_id: str) -> None:
+        if self.findData(provider_id) < 0:
+            return
+        disabled = config_manager.get("DISABLED_PROVIDER_IDS", [])
+        if provider_id != "openai" or provider_id not in disabled:
+            super().select_provider(provider_id)
+            return
+        # 账户连接页重新启用 OpenAI 只恢复入口，不切换当前数据来源。
+        self.hidePopup()
+        try:
+            config_manager.save_config({
+                "DISABLED_PROVIDER_IDS": [value for value in disabled if value != provider_id],
+            })
+        except Exception:
+            QMessageBox.warning(self.window(), tr("管理平台"), tr("平台启用失败，请检查数据目录后重试。"))
+            return
+        self.configuration_changed.emit(provider_id, False)
+        self.pins_changed.emit()
+        self.setCurrentIndex(self.findData(provider_id))
+        self.activated.emit(self.currentIndex())
+        self.textActivated.emit(self.currentText())
 
 
 class SettingsWindow(QDialog):
@@ -427,6 +467,9 @@ class SettingsWindow(QDialog):
         self._cookie_acquire_worker: "_CookieAcquireWorker | None" = None
         QApplication.instance().aboutToQuit.connect(self.stop_connection_tasks)
         self._cookie_acquire_provider_id = ""
+        self._openai_acquire_token: object | None = None
+        self._openai_acquire_original: tuple[str, str] | None = None
+        self._openai_collect_requested = False
         self._credential_acquire_label = "Cookie"
         self._credential_acquire_automatic = False
         self._external_navigation_pending = False
@@ -486,7 +529,7 @@ class SettingsWindow(QDialog):
         picker_row.setSpacing(8)
         picker_label = bind_text(QLabel(), "数据来源")
         picker_label.setStyleSheet("font-size: 13px; font-weight: 500;")
-        self.provider_combo = ProviderPicker()
+        self.provider_combo = _SettingsProviderPicker()
         for provider_id, provider_name in list_providers():
             add_item(self.provider_combo, provider_name, provider_id)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
@@ -510,6 +553,17 @@ class SettingsWindow(QDialog):
         self.test_button.clicked.connect(self._test_connection)
         connection_actions.addWidget(self.test_button)
         connection_actions.addStretch(1)
+        self.openai_dashboard_link = bind_text(
+            QPushButton(), lambda: tr("打开官方用量页面") + " ↗"
+        )
+        self.openai_dashboard_link.setObjectName("openaiDashboardLink")
+        self.openai_dashboard_link.setFlat(True)
+        self.openai_dashboard_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.openai_dashboard_link.clicked.connect(
+            lambda: self._open_external_url(PROVIDERS["openai"].dashboard_url)
+        )
+        self.openai_dashboard_link.hide()
+        connection_actions.addWidget(self.openai_dashboard_link, 0, Qt.AlignmentFlag.AlignRight)
         self.connection_feedback = QLabel()
         self.connection_feedback.setWordWrap(True)
         self.connection_feedback.setProperty("tone", "muted")
@@ -1515,7 +1569,8 @@ class SettingsWindow(QDialog):
                 return
             self._save()
         except Exception as exc:
-            self._set_feedback(self.save_feedback, f"自动保存失败：{exc}", "danger")
+            message = "自动保存失败，原有连接未更改。" if self._rendered_provider_id == "openai" else f"自动保存失败：{exc}"
+            self._set_feedback(self.save_feedback, message, "danger")
         finally:
             self._saving = False
 
@@ -1531,8 +1586,14 @@ class SettingsWindow(QDialog):
             self._auto_save()
 
     def reject(self) -> None:
+        self.cancel_openai_acquisition()
         self.flush_pending_saves()
         super().reject()
+
+    def hideEvent(self, event) -> None:
+        # 内嵌设置返回主面板或随父窗口隐藏时，同样撤销本次连接。
+        self.cancel_openai_acquisition()
+        super().hideEvent(event)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -1540,13 +1601,15 @@ class SettingsWindow(QDialog):
         self._sync_window_size()
 
     def stop_connection_tasks(self) -> None:
+        self.cancel_openai_acquisition()
         # 结果信号可能早于线程 finished；从 QObject 子对象收集，不能只依赖已清空的 _worker 指针。
         workers: list[QThread] = [worker for worker in self.findChildren(ConnectionWorker)]
         for worker in workers:
             worker.requestInterruption()
         cookie_worker = self._cookie_acquire_worker
         if cookie_worker is not None:
-            cookie_worker.stop_and_collect()
+            if self._cookie_acquire_provider_id != "openai":
+                cookie_worker.stop_and_collect()
             workers.append(cookie_worker)
         # 不强杀 Python/Qt 线程；等待当前有限时查询或浏览器收尾，避免销毁仍运行的 QThread。
         for worker in workers:
@@ -1603,7 +1666,10 @@ class SettingsWindow(QDialog):
         if self._rendered_provider_id != provider_id:
             self._remember_visible_credentials()
         self._provider_drafts.pop(provider_id, None)
-        if removed and self._cookie_acquire_provider_id == provider_id and self._cookie_acquire_worker is not None:
+        if provider_id == "openai":
+            # 删除、重新添加或外部换凭据均使旧任务失效，包括凭据相同的删除再添加。
+            self.cancel_openai_acquisition()
+        if removed and provider_id != "openai" and self._cookie_acquire_provider_id == provider_id and self._cookie_acquire_worker is not None:
             # 停止本次采集，避免删除后仍等待浏览器；禁用检查会丢弃收尾阶段返回的凭据。
             self._cookie_acquire_worker.stop_and_collect()
         check = self.background_provider_checks.get(provider_id)
@@ -1766,6 +1832,15 @@ class SettingsWindow(QDialog):
         self.sync_accent_check.setChecked(theme_controller().sync_accent)
         del blocker
         self._set_appearance_controls(self._resolved_theme)
+        theme = current_theme()
+        self.openai_dashboard_link.setStyleSheet(f"""
+            QPushButton#openaiDashboardLink {{
+                background: transparent; border: 1px solid transparent; border-radius: 4px;
+                color: {theme.subtext}; font-size: 12px; padding: 4px 2px; min-height: 24px;
+            }}
+            QPushButton#openaiDashboardLink:hover {{ color: {theme.text}; text-decoration: underline; }}
+            QPushButton#openaiDashboardLink:focus {{ border-color: {theme.accent}; }}
+        """)
 
     def _set_appearance_controls(
         self,
@@ -1930,21 +2005,46 @@ class SettingsWindow(QDialog):
         if self._cookie_acquire_worker is not None:
             return
         self._cookie_acquire_provider_id = self._rendered_provider_id
+        if self._rendered_provider_id == "openai":
+            if "openai" in config_manager.get("DISABLED_PROVIDER_IDS", []):
+                return
+            self._openai_acquire_token = object()
+            self._openai_acquire_original = self._openai_credentials_snapshot()
+            self._openai_collect_requested = False
         self._cookie_acquire_button.setEnabled(False)
         bind_text(self._cookie_acquire_button, "正在打开浏览器…")
         bind_text(self._cookie_acquire_status, "正在打开浏览器，请在浏览器中完成登录。")
         worker = _CookieAcquireWorker(provider_cls, self)
         self._cookie_acquire_worker = worker
-        worker.success.connect(
-            lambda cookie, provider_id=self._rendered_provider_id: self._apply_acquired_cookie(
-                provider_id, cookie
+        if self._rendered_provider_id == "openai":
+            token = self._openai_acquire_token
+            worker.success.connect(
+                lambda acquired, task=token: self._apply_acquired_cookie("openai", acquired, task)
             )
-        )
-        worker.error.connect(self._cookie_acquire_failed)
-        worker.finished.connect(self._cleanup_cookie_acquire_worker)
+            worker.error.connect(
+                lambda message, task=token: self._cookie_acquire_failed(message, task)
+            )
+            worker.finished.connect(lambda: self._cleanup_cookie_acquire_worker(worker))
+        else:
+            worker.success.connect(
+                lambda cookie, provider_id=self._rendered_provider_id: self._apply_acquired_cookie(
+                    provider_id, cookie
+                )
+            )
+            worker.error.connect(self._cookie_acquire_failed)
+            worker.finished.connect(self._cleanup_cookie_acquire_worker)
         worker.start()
 
         def _after_browser_open() -> None:
+            if provider_cls.id == "openai":
+                if self._cookie_acquire_worker is worker and self._openai_task_is_current(token):
+                    self._update_openai_acquire_controls(
+                        None if self._openai_collect_requested else
+                        "请在专用 Chrome 中登录并选好组织，看到余额后回到此处点击“完成采集”。"
+                    )
+                return
+            if self._rendered_provider_id == "openai":
+                return
             if self._cookie_acquire_worker is worker and worker.isRunning():
                 self._cookie_finish_button.setVisible(
                     not self._credential_acquire_automatic
@@ -1955,19 +2055,107 @@ class SettingsWindow(QDialog):
                     self._cookie_finish_button.setEnabled(True)
                     bind_text(self._cookie_acquire_status, "浏览器已打开，请登录后回到本窗口点击“完成采集”。")
 
-        QTimer.singleShot(500, _after_browser_open)
+        if provider_cls.id == "openai":
+            QTimer.singleShot(500, self, _after_browser_open)
+        else:
+            QTimer.singleShot(500, _after_browser_open)
 
     def _finish_cookie_acquire(self) -> None:
         if self._cookie_acquire_worker is None:
             return
-        bind_text(self._cookie_acquire_status, f"正在读取 {self._credential_acquire_label}…")
+        if "openai" in (self._rendered_provider_id, self._cookie_acquire_provider_id):
+            if self._rendered_provider_id != self._cookie_acquire_provider_id:
+                return
+            if not self._openai_task_is_current(self._openai_acquire_token):
+                self.cancel_openai_acquisition()
+                return
+            if self._openai_collect_requested:
+                return
+            self._openai_collect_requested = True
+            self._update_openai_acquire_controls("正在关闭专用浏览器并独立验证，成功后才保存连接。")
+        else:
+            bind_text(self._cookie_acquire_status, f"正在读取 {self._credential_acquire_label}…")
         self._cookie_acquire_worker.stop_and_collect()
+
+    @staticmethod
+    def _openai_credentials_snapshot() -> tuple[str, str]:
+        return (config_manager.get("OPENAI_AUTH", ""), config_manager.get("OPENAI_ORGANIZATION", ""))
+
+    def _openai_task_is_current(self, token: object | None) -> bool:
+        return (
+            token is not None
+            and token is self._openai_acquire_token
+            and self._cookie_acquire_worker is not None
+            and self._cookie_acquire_provider_id == "openai"
+            and "openai" not in config_manager.get("DISABLED_PROVIDER_IDS", [])
+            and self._openai_acquire_original == self._openai_credentials_snapshot()
+        )
+
+    def _update_openai_acquire_controls(self, message: str | None = None) -> None:
+        if self._rendered_provider_id != "openai" or self._cookie_acquire_button is None:
+            return
+        busy = self._cookie_acquire_worker is not None and self._cookie_acquire_provider_id == "openai"
+        active = busy and self._openai_acquire_token is not None
+        connected = all(self._openai_credentials_snapshot())
+        self._cookie_acquire_button.setEnabled(not busy)
+        bind_text(self._cookie_acquire_button, "正在连接…" if busy else "重新连接" if connected else "连接账户")
+        self._cookie_finish_button.setVisible(active and not self._openai_collect_requested)
+        self._cookie_finish_button.setEnabled(active and not self._openai_collect_requested)
+        if message is not None:
+            bind_text(self._cookie_acquire_status, message)
+
+    def cancel_openai_acquisition(self) -> None:
+        # 先撤销任务身份，再唤醒 Provider 关闭浏览器；其返回值不再有保存权限。
+        self._openai_acquire_token = None
+        self._openai_acquire_original = None
+        self._openai_collect_requested = False
+        if self._cookie_acquire_provider_id == "openai" and self._cookie_acquire_worker is not None:
+            self._cookie_acquire_worker.cancel()
+            self._update_openai_acquire_controls("连接已取消，原有连接未更改。")
+
+    def _apply_openai_credentials(self, acquired: _AcquiredCookie | str, token: object | None) -> None:
+        if not self._openai_task_is_current(token):
+            if token is not None and token is self._openai_acquire_token:
+                self.cancel_openai_acquisition()
+            return
+        if not self._openai_collect_requested:
+            return
+        try:
+            if isinstance(acquired, str):
+                acquired = _AcquiredCookie(acquired)
+            values = PROVIDERS["openai"].acquired_credential_values(acquired.cookie_text)
+            if not acquired.direct_usable or set(values) != {"AUTH", "ORGANIZATION"} or not all(values.values()):
+                raise ValueError
+        except Exception:
+            self._cookie_acquire_failed("", token)
+            return
+        if not self._openai_task_is_current(token):
+            self.cancel_openai_acquisition()
+            return
+        # 任务只消费一次，且不得先更新草稿；字段原子替换与回滚由 save_config 负责。
+        self._openai_acquire_token = None
+        self._openai_acquire_original = None
+        self._openai_collect_requested = False
+        try:
+            config_manager.save_config({f"OPENAI_{field}": value for field, value in values.items()})
+        except Exception:
+            config_manager.logger().error("OpenAI API connection could not be saved")
+            self._update_openai_acquire_controls("连接已验证，但安全保存失败；原有连接未更改，请重试。")
+            return
+        self._provider_drafts.pop("openai", None)
+        self._update_openai_acquire_controls("OpenAI API 连接已验证并安全保存。")
+        if self.on_saved:
+            self.on_saved()
 
     def _apply_acquired_cookie(
         self,
         provider_id: str,
         acquired: _AcquiredCookie | str,
+        acquisition_token: object | None = None,
     ) -> None:
+        if provider_id == "openai":
+            self._apply_openai_credentials(acquired, acquisition_token)
+            return
         # 用户可能在采集线程结束前删除平台；迟到的浏览器结果不能恢复已删除的配置。
         if provider_id in config_manager.get("DISABLED_PROVIDER_IDS", []):
             return
@@ -2060,7 +2248,22 @@ class SettingsWindow(QDialog):
         if self._cookie_acquire_status is not None:
             bind_text(self._cookie_acquire_status, "Cookie 已在后台自动续期并保存。")
 
-    def _cookie_acquire_failed(self, message: str) -> None:
+    def _cookie_acquire_failed(self, message: str, acquisition_token: object | None = None) -> None:
+        if acquisition_token is not None or self._cookie_acquire_provider_id == "openai":
+            if not self._openai_task_is_current(acquisition_token):
+                return
+            self._openai_acquire_token = None
+            self._openai_acquire_original = None
+            self._openai_collect_requested = False
+            # 只解析固定白名单错误码；原始异常/信号文本仍不得回显或记录。
+            provider = PROVIDERS["openai"]
+            code = provider.acquire_error_code(RuntimeError(message))
+            reason = provider.describe_acquire_error(RuntimeError(code))
+            self._update_openai_acquire_controls(
+                f"OpenAI API 连接失败：{reason} [{code}]；原有连接未更改。"
+            )
+            config_manager.logger().warning("OpenAI API connection failed: code=%s", code)
+            return
         if self._rendered_provider_id == getattr(self, "_cookie_acquire_provider_id", ""):
             self._cookie_acquire_button.setEnabled(True)
             bind_text(self._cookie_acquire_button, f"重试获取 {self._credential_acquire_label}")
@@ -2068,14 +2271,22 @@ class SettingsWindow(QDialog):
             bind_text(self._cookie_acquire_status, str(message))
         config_manager.logger().warning("cookie acquire failed: %s", str(message))
 
-    def _cleanup_cookie_acquire_worker(self) -> None:
-        worker = self._cookie_acquire_worker
+    def _cleanup_cookie_acquire_worker(self, finished_worker=None) -> None:
+        worker = finished_worker if finished_worker is not None else self._cookie_acquire_worker
         if worker is not None:
             worker.deleteLater()
+        if worker is not self._cookie_acquire_worker:
+            return
         self._cookie_acquire_worker = None
+        if self._cookie_acquire_provider_id == "openai":
+            message = "连接已结束，原有连接未更改。" if self._openai_acquire_token is not None else None
+            self._openai_acquire_token = None
+            self._openai_acquire_original = None
+            self._openai_collect_requested = False
+            self._update_openai_acquire_controls(message)
 
     def _remember_visible_credentials(self) -> None:
-        if not self._rendered_provider_id:
+        if not self._rendered_provider_id or self._rendered_provider_id == "openai":
             return
         draft: dict[str, str] = {}
         for field, widget in self._provider_widgets.items():
@@ -2117,6 +2328,7 @@ class SettingsWindow(QDialog):
         self._cookie_acquire_button = None
         self._cookie_finish_button = None
         self._cookie_acquire_status = None
+        self.openai_dashboard_link.setVisible(provider_id == "openai")
 
         provider_cls = PROVIDERS.get(provider_id)
         if not provider_cls:
@@ -2141,7 +2353,7 @@ class SettingsWindow(QDialog):
             support_label.setProperty("tone", "muted")
             self.credentials_layout.addWidget(support_label)
         dashboard_url = getattr(provider_cls, "dashboard_url", "")
-        if dashboard_url:
+        if dashboard_url and provider_id != "openai":
             dashboard_button = bind_text(QPushButton(), "打开官方用量页面")
             dashboard_button.setObjectName("providerDashboardButton")
             dashboard_button.clicked.connect(
@@ -2149,7 +2361,14 @@ class SettingsWindow(QDialog):
             )
             self.credentials_layout.addWidget(dashboard_button)
 
+        if provider_id == "openai":
+            self._add_cookie_acquire_row(
+                provider_cls.name, provider_cls.credential_acquisition_label,
+                provider_cls.credential_acquisition_automatic,
+            )
         for field, meta in (provider_cls.credential_fields or {}).items():
+            if provider_id == "openai" and meta.get("browser_only"):
+                continue
             label = str(meta.get("label") or field)
             hint = str(meta.get("hint") or "")
             secret = bool(meta.get("secret"))
@@ -2215,9 +2434,24 @@ class SettingsWindow(QDialog):
                         else:
                             ph_widget.setText(ph_in_cookie)
         self._rendered_provider_id = provider_id
+        if provider_id == "openai":
+            if self._openai_acquire_token is not None:
+                message = (
+                    "正在关闭专用浏览器并独立验证，成功后才保存连接。"
+                    if self._openai_collect_requested
+                    else "请在专用 Chrome 中登录并选好组织，看到余额后回到此处点击“完成采集”。"
+                )
+            else:
+                message = (
+                    "已连接 OpenAI API；重新连接时请登录并选好组织，看到余额后点击“完成采集”；凭据不会在此显示。"
+                    if all(self._openai_credentials_snapshot())
+                    else "请通过专用 Chrome 登录并选好组织，看到余额后点击“完成采集”；凭据不会在此显示。"
+                )
+            self._update_openai_acquire_controls(message)
         enabled = provider_id not in cached.get("DISABLED_PROVIDER_IDS", [])
         # 已移除平台的草稿不会保存；禁用表单并给出恢复入口，避免允许输入后静默丢弃。
         self.credentials_card.setEnabled(enabled)
+        self.openai_dashboard_link.setEnabled(enabled)
         self.test_button.setEnabled(enabled and self._worker is None)
         self._set_feedback(self.connection_feedback, "" if enabled else "请先在全部平台中重新启用此平台。", "muted")
         self.deepseek_peak_pricing_card.setVisible(provider_id == "deepseek")
@@ -2462,7 +2696,11 @@ class SettingsWindow(QDialog):
             ),
             "MINUTE_USAGE_INTERVAL_MINUTES": self.minute_usage_interval_minutes.value(),
             "MINUTE_USAGE_RETENTION_DAYS": self.minute_usage_retention_days.value(),
-            "ACTIVE_PROVIDER": str(self.provider_combo.currentData() or ""),
+            "ACTIVE_PROVIDER": (
+                config_manager.get("ACTIVE_PROVIDER", "deepseek")
+                if self.provider_combo.currentData() == "openai"
+                else str(self.provider_combo.currentData() or "")
+            ),
             "QUOTA_ALERT_ENABLED": self.quota_alert_check.isChecked(),
             "QUOTA_ALERT_THRESHOLD": self.quota_alert_threshold.value(),
             "QUOTA_RECOVERY_ALERT_ENABLED": self.quota_recovery_check.isChecked(),
@@ -2527,7 +2765,8 @@ class SettingsWindow(QDialog):
                 key = f"{upper_id}_{field.upper()}"
                 if key in values:
                     continue
-                if provider_id in existing.get("DISABLED_PROVIDER_IDS", []):
+                if provider_id == "openai" or provider_id in existing.get("DISABLED_PROVIDER_IDS", []):
+                    # OpenAI 仅接受已事务保存的浏览器凭据，不能由草稿或普通自动保存覆盖。
                     values[key] = str(existing.get(key, ""))
                 elif field in self._provider_drafts.get(provider_id, {}):
                     values[key] = self._provider_drafts[provider_id][field]
@@ -2609,6 +2848,11 @@ class SettingsWindow(QDialog):
             self._set_feedback(self.save_feedback, f"开机自启设置失败：{exc}", "danger")
             return
         try:
+            # 确认对话框可能运行嵌套事件循环；不能用弹窗前的快照撤销刚完成的 OpenAI 连接。
+            current = config_manager.all_config()
+            for key in ("OPENAI_AUTH", "OPENAI_ORGANIZATION"):
+                if key in values:
+                    values[key] = current.get(key, "")
             config_manager.save_config(values)
         except Exception as exc:
             if autostart_changed:
@@ -2619,7 +2863,8 @@ class SettingsWindow(QDialog):
                     config_manager.logger().warning(
                         "Windows autostart state could not be rolled back"
                     )
-            self._set_feedback(self.save_feedback, f"保存失败，配置已回滚：{exc}", "danger")
+            message = "保存失败，配置已回滚。" if self._rendered_provider_id == "openai" else f"保存失败，配置已回滚：{exc}"
+            self._set_feedback(self.save_feedback, message, "danger")
             return
         scheduled_data_dir = (
             config_manager.pending_data_dir() or config_manager.CONFIG_DIR
@@ -2654,7 +2899,11 @@ class SettingsWindow(QDialog):
 
     def _test_connection(self) -> None:
         try:
-            candidate = config_manager.validate_config(self._values())
+            values = self._values()
+            if self._rendered_provider_id == "openai":
+                # 测试目标独立于当前来源；这份快照不写入配置。
+                values["ACTIVE_PROVIDER"] = "openai"
+            candidate = config_manager.validate_config(values)
         except Exception as exc:
             self._set_feedback(
                 self.connection_feedback, f"请先修正配置：{exc}", "danger"
@@ -2692,6 +2941,8 @@ class SettingsWindow(QDialog):
             tested = worker._config
             provider_id = str(tested.get("ACTIVE_PROVIDER", ""))
             current = self._values()
+            if provider_id == "openai":
+                current["ACTIVE_PROVIDER"] = self._rendered_provider_id
             # 编辑保持可用，但旧测试成功不能替当前新凭据背书；无关外观设置不影响判断。
             if (
                 current.get("ACTIVE_PROVIDER") != provider_id

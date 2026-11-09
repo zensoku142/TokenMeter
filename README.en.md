@@ -38,7 +38,7 @@ TokenMeter is a lightweight AI usage monitor for Windows 10/11. Track subscripti
 
 Actual component screenshots in Chinese with demo data; click to enlarge. [Images and sources](docs/images/readme/README.md).
 
-Current version：**v1.17.1** · Pet **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.17.2** · Pet **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
@@ -135,7 +135,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.17.1`; optional pet extension: `0.3.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.17.2`; optional pet extension: `0.3.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 
