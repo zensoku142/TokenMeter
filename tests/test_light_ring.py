@@ -259,6 +259,38 @@ def test_style_switch_and_tray_restore_without_recreating_ball(monkeypatch, pref
     assert rail.selected_providers() == ["codex"]
 
 
+@pytest.mark.parametrize("codex_state", ["configured", "missing", "disabled"])
+def test_api_ring_click_opens_only_configured_codex_panel(monkeypatch, preferences, tmp_path, codex_state):
+    from ui.qt_update import AppUpdateController
+
+    monkeypatch.setattr(FloatingWidget, "_start_provider_refresh", Mock(return_value=False))
+    monkeypatch.setattr(AppUpdateController, "schedule_startup_check", lambda _self: None)
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    if codex_state != "missing":
+        (codex_home / "auth.json").write_text('{"tokens":{"access_token":"synthetic"}}', encoding="utf-8")
+    preferences.update(
+        ACTIVE_PROVIDER="deepseek", FLOATING_STYLE="light_ring",
+        BACKGROUND_PROVIDER_IDS=["openai"], CODEX_HOME=str(codex_home),
+        DISABLED_PROVIDER_IDS=["codex"] if codex_state == "disabled" else [],
+    )
+    widget = FloatingWidget()
+    rail = widget._light_ring
+    APP.processEvents()
+
+    QTest.mouseClick(rail.items["openai"], Qt.MouseButton.LeftButton)
+    APP.processEvents()
+
+    assert rail.isVisible()
+    if codex_state == "configured":
+        assert preferences["ACTIVE_PROVIDER"] == "codex"
+        assert widget._expanded and widget.panel.isVisible()
+        assert widget.panel._display_provider_id == "codex"
+    else:
+        assert preferences["ACTIVE_PROVIDER"] == "deepseek"
+        assert not widget.isVisible() and widget.panel is None
+
+
 def test_long_balance_keeps_narrow_width_and_full_value_in_details():
     rail = LightRingWidget()
     rail.set_sources(["deepseek"])

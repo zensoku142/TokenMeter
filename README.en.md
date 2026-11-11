@@ -56,6 +56,7 @@ Local logs have unknown account attribution and are not quotas or bills. Speed e
 <summary>Controls and connection details</summary>
 
 - Drag the ring to move it, hold an icon then drag vertically to reorder, and use Ctrl + wheel to adjust width. Select sources in Usage → Background providers.
+- The OpenAI API ring shows the organization's available USD balance, with a theme-aware `API` label at the bottom of the ring. Click it to open the Codex usage panel when Codex is configured and enabled.
 - Multi-account and CC connections can be disabled separately without losing configuration. The CC bridge uses internal commands; if CC is running without it, exit fully from the tray once before refreshing. Independent multi-account login/renewal requires CC setup.
 - Forecasts require 10 minutes of valid samples in the same cycle; recovery alerts require low-quota alerts and a confirmed refresh. Alert state survives restarts; removing a connection preserves CLI logins and history.
 
