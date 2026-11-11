@@ -1,4 +1,14 @@
+import os
+import sys
 from pathlib import Path
+
+# Qt 的 offscreen 插件默认找不到字体目录，度量会退化成“每个字符约等于字号”，
+# 使细环等按 42px 实际宽度写的排版断言失真（真实 Segoe UI 约为退化值的一半）。
+# 指向系统字体目录，让 CI 与桌面端使用同一套度量。
+if sys.platform == "win32" and "QT_QPA_FONTDIR" not in os.environ:
+    _system_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    if _system_fonts.is_dir():
+        os.environ["QT_QPA_FONTDIR"] = _system_fonts.as_posix()
 
 import pytest
 from PySide6.QtCore import QEvent
