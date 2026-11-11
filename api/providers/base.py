@@ -94,6 +94,7 @@ class ProviderQuota:
     weekly_activity_source: str = ""
     statistics_source: str = ""
     source: str = "interface"
+    statistics_error: FetchError | None = None
 
 
 def _decimal(value: Any) -> Decimal:

@@ -26,6 +26,7 @@ from api.providers.deepseek import DeepSeekProvider
 from api.providers.mimo import MiMoProvider
 from api.providers.nayuto import NayutoProvider
 from api.providers.openai import OpenAIProvider
+from api.providers.workbuddy import WorkBuddyProvider
 from config import runtime as config_manager
 
 PROVIDERS: dict[str, type[Provider]] = {
@@ -36,6 +37,7 @@ PROVIDERS: dict[str, type[Provider]] = {
     NayutoProvider.id: NayutoProvider,
     ClaudeProvider.id: ClaudeProvider,
     OpenAIProvider.id: OpenAIProvider,
+    WorkBuddyProvider.id: WorkBuddyProvider,
 }
 
 

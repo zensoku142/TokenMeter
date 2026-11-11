@@ -2564,15 +2564,15 @@ class FloatingWidget(QWidget):
             )
         elif quota_mode:
             # 订阅额度暂不可用时也不能回退成金额视图，否则会显示虚假的金额。
-            unlimited = next(
+            metric = next(
                 # 旧缓存没有 value_kind，仍兼容两种已发布的不限额文案。
                 (metric for metric in self._data.quota_metrics
-                 if metric.value_kind == "unlimited" or metric.value in {"不限量", "不限额"}), None
+                 if metric.value_kind in {"unlimited", "credits"} or metric.value in {"不限量", "不限额"}), None
             )
-            if unlimited is not None:
+            if metric is not None:
                 self.ball.set_quota_state(
-                    None, unlimited.detail, unlimited.title,
-                    value_text="" if loading else unlimited.value,
+                    None, metric.detail, metric.title,
+                    value_text="" if loading else metric.value,
                 )
             else:
                 unavailable_title = (

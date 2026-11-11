@@ -38,12 +38,12 @@ TokenMeter は Windows 10/11 向けの軽量な AI 使用量モニターです�
 
 実際のコンポーネント画面です。中国語 UI とデモデータを使用。クリックで拡大できます。[画像と出典](docs/images/readme/README.md)。
 
-現在のバージョン：**v1.17.2** · ペット **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+現在のバージョン：**v1.17.3** · ペット **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 機能
 
-- **利用枠と残高**：Codex / Claude Code / Cursor の契約利用枠、DeepSeek / MiMo / NayutoAI の費用・残高・履歴。通貨・クレジット・Token は分けて表示します。
-- **統計と速度**：Codex の時間別表示、Codex / Claude / ZCode のローカル統計・絞り込み・Excel 出力。Codex / NayutoAI はモデルの出力速度も表示します。
+- **利用枠と残高**：Codex / Claude Code / Cursor の契約利用枠、WorkBuddy のクレジット、DeepSeek / MiMo / NayutoAI の費用・残高・履歴。通貨・クレジット・Token は分けて表示します。
+- **統計と速度**：WorkBuddy の当月日別クレジットとモデル別クレジット、Codex の時間別表示、Codex / Claude / ZCode のローカル統計・絞り込み・Excel 出力。Codex / NayutoAI はモデルの出力速度も表示します。
 - **一覧と複数アカウント**：複数サービスの一覧と最前面の 2 サービス表示。複数アカウントは既定でオフ。個別監視は既定の接続や CLI ログインを上書きしません。
 - **CC Switch**：複数アカウントと CC 連携を有効にすると、管理下の Codex OAuth アカウントを検出・自動取得。トークン更新・照会は CC が担当し、切断時はキャッシュを保持します。
 - **フローティング表示**：従来の利用枠・残高ウィジェットとライトリング。ドラッグ、サイズ変更、画面端への移動に対応し、リングは複数サービス・アカウント、順序・色・幅を設定できます。
@@ -135,7 +135,7 @@ Qt テストには利用可能な Windows デスクトップセッション、�
 
 ## バージョン
 
-本体 `1.17.2`、任意のペット拡張 `0.3.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
+本体 `1.17.3`、任意のペット拡張 `0.3.2`。変更履歴とチェックサムは [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) にあります。
 
 ## ライセンスと謝辞
 

@@ -713,6 +713,7 @@ class CursorProviderTests(unittest.TestCase):
                 ("nayuto", "NayutoAI"),
                 ("claude", "Claude Code"),
                 ("openai", "OpenAI API"),
+                ("workbuddy", "WorkBuddy"),
             ],
         )
 

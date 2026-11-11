@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import api.deepseek as ds  # noqa: F401  # 兼容 v1.0 中对 data.store.ds 的测试和扩展引用。
 from api.providers import active_providers
-from api.providers.base import FetchError, ModelUsage, QuotaMetric, QuotaWindow
+from api.providers.base import FetchError, ModelUsage, ProviderQuota, QuotaMetric, QuotaWindow
 from config import runtime as config_manager
 from data import history
 
@@ -568,6 +568,8 @@ class TokenData:
                     value, error = None, _unexpected_fetch_error(provider.id, source, exc)
                 if value is not None:
                     successes += 1
+                if isinstance(value, ProviderQuota) and value.statistics_error:
+                    per.errors.append(value.statistics_error)
                 if error:
                     per.errors.append(error)
             if should_stop and should_stop():
@@ -1107,6 +1109,8 @@ class TokenData:
                     "cache" if previous_per.quota_statistics else ""
                 )
             if quota is not None:
+                if quota.statistics_error:
+                    per.errors.append(quota.statistics_error)
                 if not kept_cached_quota:
                     per.quota_windows = list(quota.windows)
                     per.quota_metrics = list(quota.metrics)

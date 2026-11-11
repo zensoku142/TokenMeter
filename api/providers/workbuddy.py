@@ -1,4 +1,4 @@
-"""Offline WorkBuddy adapter; deliberately excluded from the provider registry."""
+"""WorkBuddy personal-account credits and usage from its web dashboard."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, DecimalException
 from typing import Any
@@ -51,6 +52,10 @@ class WorkBuddyProvider(Provider):
     def close(self) -> None:
         self._session.close()
 
+    def is_configured(self) -> bool:
+        return all(str(self.config_get(key, "")).strip()
+                   for key in ("WORKBUDDY_COOKIE", "WORKBUDDY_USER_AGENT"))
+
     @staticmethod
     def acquired_cookie_values(cookie: str) -> dict[str, str]:
         return {"COOKIE": browser_cookie.normalize_cookie(cookie)}
@@ -89,25 +94,30 @@ class WorkBuddyProvider(Provider):
         try:
             if not stop_event.wait(timeout=180):
                 raise RuntimeError("WORKBUDDY_COOKIE_EMPTY")
+            session.reconnect_page("www.workbuddy.cn")
             cookie = session.cookies(allowed_domains=("workbuddy.cn",), url="https://www.workbuddy.cn/billing/meter/get-user-resource-summary")
             user_agent = session.user_agent()
-            provider = WorkBuddyProvider({"WORKBUDDY_COOKIE": cookie, "WORKBUDDY_USER_AGENT": user_agent})
-            try:
-                # 在登录窗口仍打开时校验完整会话；成功后才向设置页交付凭据。
-                _, error = provider.fetch_quota()
-                if error:
-                    raise RuntimeError(error.code)
-                return json.dumps({"COOKIE": cookie, "USER_AGENT": user_agent})
-            finally:
-                provider.close()
         finally:
-            session.close()
+            session.close_and_verify()
+        if not cookie or not user_agent:
+            raise RuntimeError("WORKBUDDY_COOKIE_EMPTY")
+        # 浏览器退出后直连成功才保存，后续定时刷新沿用同一条 HTTP 路径。
+        provider = WorkBuddyProvider({"WORKBUDDY_COOKIE": cookie, "WORKBUDDY_USER_AGENT": user_agent})
+        try:
+            quota, error = provider._fetch_credit_balance()
+            if error or quota is None:
+                raise RuntimeError(error.code if error else "INVALID_RESPONSE")
+            return json.dumps({"COOKIE": cookie, "USER_AGENT": user_agent})
+        finally:
+            provider.close()
 
     @staticmethod
     def describe_acquire_error(exc: Exception) -> str:
         return {
             "CHROME_NOT_FOUND": "未检测到 Chrome 或 Edge，请先安装浏览器，或手动粘贴 Cookie",
             "WORKBUDDY_COOKIE_EMPTY": "WorkBuddy 登录未完成或已失效，请在浏览器登录成功后再点击“完成采集”",
+            "BROWSER_NOT_CLOSED": "未能确认专用浏览器已退出，请重新连接 WorkBuddy",
+            "CDP_NO_PAGE_TARGET": "请在专用小窗进入 WorkBuddy 的套餐与积分页后再完成采集",
             "AUTH_EXPIRED": "WorkBuddy 登录未完成或已失效，请在浏览器登录成功后再点击“完成采集”",
             "NETWORK_TIMEOUT": "请求超时",
             "NETWORK_ERROR": "连接失败，请检查网络和平台地址",
@@ -148,6 +158,34 @@ class WorkBuddyProvider(Provider):
         )
 
     def fetch_quota(self) -> tuple[ProviderQuota | None, FetchError | None]:
+        quota, error = self._fetch_credit_balance()
+        if quota is None:
+            return None, error
+        usage, usage_error = self.fetch_credit_usage()
+        if usage is None:
+            return replace(quota, statistics_error=usage_error), None
+        statistics = [
+            QuotaMetric(item["title"], item["value"], value_kind=item.get("value_kind", ""))
+            for item in usage["statistics"]
+        ]
+        statistics.extend(
+            QuotaMetric(item["date"], _credit_text(Decimal(item["credits"])), value_kind="credits")
+            for item in usage["daily"]
+        )
+        # 今日模型明细来自同一批请求，主面板右栏切到“今日”时不再单独发一次查询。
+        statistics.extend(
+            QuotaMetric(item["model"], _credit_text(Decimal(item["credits"])),
+                        "今日 · " + " · ".join(item["clients"]), value_kind="credits_today")
+            for item in usage["today_models"]
+        )
+        statistics.extend(
+            QuotaMetric(item["model"], _credit_text(Decimal(item["credits"])),
+                        " · ".join(item["clients"]), value_kind="credits")
+            for item in usage["models"]
+        )
+        return replace(quota, statistics=tuple(statistics), statistics_source="interface"), None
+
+    def _fetch_credit_balance(self) -> tuple[ProviderQuota | None, FetchError | None]:
         data, error = self._request_data("get-user-resource-summary", {})
         if error or data is None:
             return None, error
@@ -182,25 +220,27 @@ class WorkBuddyProvider(Provider):
             return error("NETWORK_TIMEOUT", "请求超时")
         except requests.RequestException:
             return error("NETWORK_ERROR", "连接失败，请检查网络和平台地址")
-        if response.status_code in (401, 403):
-            return error("AUTH_EXPIRED", "WorkBuddy 登录已失效，请重新连接")
-        if response.status_code == 429:
-            return error("RATE_LIMITED", "请求过于频繁，请稍后重试")
-        if response.status_code >= 500:
-            return error("SERVER_ERROR", "服务暂时不可用")
-        if not 200 <= response.status_code < 300:
-            return error("HTTP_ERROR", "请求失败，请检查平台 API 地址")
         try:
-            payload = response.json()
+            if response.status_code in (401, 403):
+                return error("AUTH_EXPIRED", "WorkBuddy 登录已失效，请重新连接")
+            if response.status_code == 429:
+                return error("RATE_LIMITED", "请求过于频繁，请稍后重试")
+            if response.status_code >= 500:
+                return error("SERVER_ERROR", "服务暂时不可用")
+            if not 200 <= response.status_code < 300:
+                return error("HTTP_ERROR", "请求失败，请检查平台 API 地址")
+            payload = response.json(parse_float=Decimal)
             if not isinstance(payload, dict):
                 raise ValueError("Invalid summary")
-            if payload.get("code", 0) != 0:
+            if payload.get("code", 0) not in (0, "0"):
                 return error("API_ERROR", "WorkBuddy 积分接口返回错误，请检查登录状态")
             if not isinstance(payload.get("data"), dict):
                 raise ValueError("Invalid summary")
             return payload["data"], None
         except (KeyError, TypeError, ValueError, DecimalException):
             return error("INVALID_RESPONSE", "WorkBuddy 返回了无效数据或接口结构已变化")
+        finally:
+            response.close()
 
     def fetch_credit_usage(self) -> tuple[dict[str, Any] | None, FetchError | None]:
         today = datetime.now(timezone(timedelta(hours=8))).date()
@@ -214,23 +254,30 @@ class WorkBuddyProvider(Provider):
                     break
                 data, error = self._request_data("get-user-request-usage", {
                     "startTime": f"{start.isoformat()} 00:00:00", "endTime": f"{today.isoformat()} 23:59:59",
-                    "pageNum": page, "pageSize": 3000,
-                    # 官网将 WorkBuddy 映射到 codebuddy 产品；该账号明细同时保留客户端标记。
+                    # 国内个人账号的网页查询使用页码；游标请求会被该接口拒绝。
+                    "pageNum": page, "pageSize": 100,
+                    # 官网「产品 = WorkBuddy」使用 codebuddy，client 是独立的使用端字段。
                     "appTypes": ["codebuddy"],
                 })
                 if error or data is None:
-                    return None, error
-                total = data["total"]
+                    return None, replace(error, source="WorkBuddy 使用明细") if error else None
                 rows = data["data"]
+                total = data["total"]
                 if type(total) is not int or total < 0 or not isinstance(rows, list):
                     raise ValueError("Invalid usage page")
                 for row in rows:
                     if not isinstance(row, dict) or not isinstance(row.get("requestId"), str) or not row["requestId"]:
                         raise ValueError("Invalid request")
+                    if not isinstance(row.get("appType"), str) or not row["appType"].strip():
+                        raise ValueError("Missing usage product")
                     # 只保留计量字段，不缓存官网返回的 input / inputTrunc 提示词或会话内容。
-                    records[row["requestId"]] = {key: row[key] for key in ("credit", "model", "client", "requestTime")}
+                    records[row["requestId"]] = {key: row[key] for key in (
+                        "appType", "credit", "model", "client", "requestTime"
+                    )}
                 if len(records) >= total:
-                    return self._aggregate_usage(list(records.values()), today, start), None
+                    workbuddy_rows = [row for row in records.values()
+                                      if row["appType"].strip().lower() in {"codebuddy", "workbuddy"}]
+                    return self._aggregate_usage(workbuddy_rows, today, start), None
                 if not rows:
                     break
             return None, FetchError("USAGE_INCOMPLETE", "WorkBuddy 使用明细", "WorkBuddy 使用明细未完整加载，请稍后重试")
@@ -241,6 +288,8 @@ class WorkBuddyProvider(Provider):
     def _aggregate_usage(records: list[dict[str, Any]], today: date, start: date) -> dict[str, Any]:
         daily: dict[str, dict[str, Any]] = {}
         models: dict[str, dict[str, Any]] = {}
+        today_models: dict[str, dict[str, Any]] = {}
+        today_key = today.isoformat()
         month_start = today.replace(day=1).isoformat()
         for row in records:
             credit = _amount(row, "credit", nonnegative=True)
@@ -261,21 +310,34 @@ class WorkBuddyProvider(Provider):
                 item["credits"] += credit
                 item["requests"] += 1
                 item["clients"].add(str(row["client"]))
+            if day == today_key:
+                # “今日”按同一账号、同一自然日另算一份，占比分母只含当天模型。
+                item = today_models.setdefault(model, {"model": model, "credits": Decimal(0), "requests": 0, "clients": set()})
+                item["credits"] += credit
+                item["requests"] += 1
+                item["clients"].add(str(row["client"]))
         month_rows = [item for day, item in daily.items() if day >= month_start]
         month_credits = sum((item["credits"] for item in month_rows), Decimal(0))
-        today_credits = daily.get(today.isoformat(), {}).get("credits", Decimal(0))
+        today_credits = daily.get(today_key, {}).get("credits", Decimal(0))
         statistics = [
-            {"title": "本月消耗积分", "value": _credit_text(month_credits)},
-            {"title": "今日消耗积分", "value": _credit_text(today_credits)},
+            {"title": "本月消耗积分", "value": _credit_text(month_credits), "value_kind": "credits"},
+            {"title": "今日消耗积分", "value": _credit_text(today_credits), "value_kind": "credits"},
             {"title": "本月调用次数", "value": str(sum(item["requests"] for item in month_rows))},
             {"title": "使用模型数", "value": str(len(models))},
             {"title": "本月活跃天数", "value": str(len(month_rows))},
         ]
+
+        def model_rows(source: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                {**item, "credits": str(item["credits"]), "clients": sorted(item["clients"])}
+                for item in sorted(source.values(), key=lambda item: (-item["credits"], item["model"]))
+            ]
+
         return {
             "start_date": start.isoformat(), "end_date": today.isoformat(),
             "daily": [{**daily[day], "credits": str(daily[day]["credits"])} for day in sorted(daily)],
-            "models": [{**item, "credits": str(item["credits"]), "clients": sorted(item["clients"])}
-                       for item in sorted(models.values(), key=lambda item: (-item["credits"], item["model"]))],
+            "models": model_rows(models),
+            "today_models": model_rows(today_models),
             "statistics": statistics,
         }
 

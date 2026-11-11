@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 PROVIDER_IDS = (
-    "deepseek", "mimo", "codex", "cursor", "nayuto", "claude", "openai",
+    "deepseek", "mimo", "codex", "cursor", "nayuto", "claude", "openai", "workbuddy",
 )
 REMOVED_PROVIDER_IDS = (
     "openrouter", "moonshot", "copilot", "zai", "kimi", "minimax", "elevenlabs",
-    "gemini", "antigravity", "workbuddy",
+    "gemini", "antigravity",
 )
 
 SECRET_KEYS = (
@@ -78,7 +78,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "NAYUTO_BASE": "https://nayutoai.xyz",
     "CODEX_HOME": "",
     "CURSOR_GLOBAL_STORAGE": "",
-    # WorkBuddy 已下线；旧字段继续兼容读取，避免清空用户已保存的凭据。
     "WORKBUDDY_COOKIE": "",
     "WORKBUDDY_USER_AGENT": "",
     # 已下架平台的旧字段只保留作配置兼容；密钥继续走凭据管理器，避免写入公开 JSON。

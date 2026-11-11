@@ -2184,10 +2184,8 @@ class SettingsWindow(QDialog):
             self._cookie_finish_button.setVisible(False)
             bind_text(self._cookie_acquire_status, "专用浏览器会话已验证；Cookie 无法由程序直连，当前凭据未覆盖。")
             return
-        # Save the fresh browser session immediately so changing tabs cannot restore stale drafts.
-        self._provider_drafts.setdefault(provider_id, {}).update(values)
         saved_automatically = False
-        if bool(getattr(provider_cls, "credential_acquisition_automatic", False)):
+        if provider_id == "workbuddy" or bool(getattr(provider_cls, "credential_acquisition_automatic", False)):
             secure_values = {
                 f"{provider_id.upper()}_{field.upper()}": value
                 for field, value in values.items()
@@ -2204,6 +2202,8 @@ class SettingsWindow(QDialog):
                     bind_text(self._cookie_acquire_status, f"{self._credential_acquire_label} 已验证，但安全保存失败。")
                 return
             saved_automatically = True
+        # Use the verified values only after an immediate save has succeeded.
+        self._provider_drafts.setdefault(provider_id, {}).update(values)
         if self._rendered_provider_id != provider_id:
             if saved_automatically and self.on_saved:
                 self.on_saved()

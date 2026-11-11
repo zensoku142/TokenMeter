@@ -541,6 +541,38 @@ QToolButton#activityModeButton:checked {{
     color: {activity_text};
     background: {tokens.selection};
 }}
+QFrame#modelRangeSegment {{
+    background: {tokens.surface};
+    border: 1px solid {tokens.border};
+    border-radius: 6px;
+}}
+QToolButton#modelRangeButton {{
+    min-height: 20px;
+    max-height: 20px;
+    padding: 0;
+    color: {tokens.subtext};
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    font-size: 10px;
+}}
+QToolButton#modelRangeButton:checked {{
+    color: {activity_text};
+    background: {tokens.selection};
+}}
+QLabel#modelCreditName {{ color: {tokens.text}; font-size: 11px; }}
+QLabel#modelCreditValue {{ color: {tokens.value}; font-size: 11px; font-weight: 600; }}
+QLabel#modelCreditShare {{ color: {tokens.subtext}; font-size: 9px; }}
+QLabel#modelCreditCount {{ color: {tokens.subtext}; font-size: 10px; }}
+QProgressBar#modelCreditBar {{
+    background: {tokens.surface};
+    border: 0;
+    border-radius: 2px;
+}}
+QProgressBar#modelCreditBar::chunk {{
+    background: {tokens.accent};
+    border-radius: 2px;
+}}
 QToolButton#minuteDatePreviousButton,
 QToolButton#minuteDateTextButton,
 QToolButton#minuteDateNextButton {{

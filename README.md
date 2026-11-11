@@ -38,12 +38,12 @@ TokenMeter 是适用于 Windows 10/11 的轻量级 AI 用量监控工具，支�
 
 真实组件截图，使用演示数据；点击查看原图。[截图与来源](docs/images/readme/README.md)。
 
-当前版本：**v1.17.2** · 桌宠扩展 **v0.3.2** · [产品官网（GitHub Pages）](https://zensoku142.github.io/TokenMeter/)
+当前版本：**v1.17.3** · 桌宠扩展 **v0.3.2** · [产品官网（GitHub Pages）](https://zensoku142.github.io/TokenMeter/)
 
 ## 功能
 
-- **额度与余额**：Codex / Claude Code / Cursor 订阅额度，DeepSeek / MiMo / NayutoAI 费用、余额与历史趋势；币种、积分和 Token 分开显示。
-- **统计与速度**：Codex 今日分时，Codex / Claude / ZCode 本机日志统计、筛选与 Excel 导出；Codex / NayutoAI 支持模型输出速度。
+- **额度与余额**：Codex / Claude Code / Cursor 订阅额度，WorkBuddy 积分，DeepSeek / MiMo / NayutoAI 费用、余额与历史趋势；币种、积分和 Token 分开显示。
+- **统计与速度**：WorkBuddy 本月每日积分与模型积分消耗，Codex 今日分时，Codex / Claude / ZCode 本机日志统计、筛选与 Excel 导出；Codex / NayutoAI 支持模型输出速度。
 - **总览与多账户**：多平台总览、置顶双平台看板；多账户默认关闭，开启后独立监控，不覆盖默认连接或 CLI 登录。
 - **CC Switch**：启用多账户及 CC 连接，自动发现并后台刷新托管 Codex OAuth 账号；CC 负责续期与查询，断连保留缓存。
 - **悬浮展示**：原有额度／余额悬浮球与轻底细环，支持拖动、缩放和贴边；细环可显示多平台、多账号，并调整顺序、颜色与宽度。
@@ -139,7 +139,7 @@ Qt 测试需要可用的 Windows 桌面会话；生成安装器需要 Inno Setup
 
 ## 版本
 
-主程序 `1.17.2`，可选桌宠扩展 `0.3.2`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
+主程序 `1.17.3`，可选桌宠扩展 `0.3.2`。更新记录与校验文件见 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)。
 
 ## 许可与致谢
 

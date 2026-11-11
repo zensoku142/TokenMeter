@@ -694,3 +694,54 @@ def test_invalid_saved_ring_width_falls_back_to_default(saved_width):
     rail = LightRingWidget()
     assert rail.width() == 58
     rail.close()
+
+
+def test_compact_amount_never_rounds_up_into_four_digit_suffix():
+    from ui.light_ring import _compact_amount
+
+    # 999999.99 不能进位成“1000k”，也不能在窄环里显示成被省略的读数。
+    assert _compact_amount(Decimal("999999.99")) == "1M"
+    assert _compact_amount(Decimal("1234.5")) == "1.23k"
+    assert _compact_amount(Decimal("123456789.12")) == "123.46M"
+    assert _compact_amount(Decimal("999999.99"), digits=0) == "1M"
+
+
+def test_ring_value_is_never_truncated_for_large_credit_balances(monkeypatch):
+    from ui.formatting import format_quota_metric
+
+    rail = LightRingWidget()
+    credit_source = "profile:" + "b" * 32
+    rail.set_sources(["codex", credit_source], providers={credit_source: "codex"})
+    original = ring_value
+    holder: dict[str, TokenData] = {}
+    # 布局测试接收已有读数，不依赖某个积分平台是否注册或如何采集。
+    monkeypatch.setattr("ui.light_ring.ring_value", lambda pid, data: (
+        (format_quota_metric(data.quota_metrics[0]), None) if data is holder.get("data")
+        else original(pid, data)))
+    # 正式环境的轻底细环实测宽度是 42px，这里按同一宽度验证 5/6 位数积分。
+    rail._rail_width = 42
+    rail.setFixedWidth(42)
+    rail.show()
+    APP.processEvents()
+    item = rail.items[credit_source]
+    base = QFont("Segoe UI")
+    base.setPixelSize(14)
+    base.setWeight(QFont.Weight.Medium)
+    available = item.width() - 4
+    for text in ("500", "2868.17", "9999.99", "12345.67", "123456.78", "999999.99"):
+        credit = TokenData(
+            last_success_at=datetime.now(),
+            quota_metrics=[QuotaMetric("剩余积分", text, value_kind="credits")],
+        )
+        holder["data"] = credit
+        rail.set_data({credit_source: credit, "codex": quota(84)})
+        chosen, pixel_size = item.fitted_value(base, available)
+        probe = QFont(base)
+        probe.setPixelSize(pixel_size)
+        metrics = QFontMetrics(probe)
+        # 任何量级都要放得下且不被省略号截断；完整值仍在无障碍名与详情里。
+        assert metrics.horizontalAdvance(chosen) <= available, (text, chosen)
+        assert metrics.elidedText(chosen, Qt.TextElideMode.ElideRight, available) == chosen
+        assert pixel_size >= 10
+        assert text in item.accessibleName()
+    rail.close()

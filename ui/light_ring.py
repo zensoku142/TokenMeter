@@ -72,24 +72,41 @@ def ring_value(provider_id: str, data: TokenData | None) -> tuple[str, float | N
         remaining = max(0.0, 100 - used) if used is not None else None
         return (f"{remaining:g}%", remaining) if remaining is not None else ("--", None)
     if PROVIDERS[provider_id].supports_subscription_quota:
-        unlimited = next((metric for metric in data.quota_metrics
-                          if metric.value_kind == "unlimited" or metric.value in {"不限量", "不限额"}), None)
-        return (format_quota_metric(unlimited), None) if unlimited else ("--", None)
+        metric = next((item for item in data.quota_metrics
+                       if item.value_kind in {"unlimited", "credits"} or item.value in {"不限量", "不限额"}), None)
+        return (format_quota_metric(metric), None) if metric else ("--", None)
     # 金额没有可用总额，不能伪造为百分比进度。
     return format_money(data.balance_cny, data.currency), None
 
 
-def _compact_amount(value) -> str:
+def _compact_amount(value, digits: int = 2) -> str:
     try:
         amount = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return "--"
     if not amount.is_finite():
         return "--"
-    for scale, suffix in ((10**12, "T"), (10**9, "B"), (10**6, "M"), (1000, "k")):
+    scales = ((10**12, "T"), (10**9, "B"), (10**6, "M"), (1000, "k"))
+    for index, (scale, suffix) in enumerate(scales):
         if abs(amount) >= scale:
-            return f"{amount / scale:.2f}".rstrip("0").rstrip(".") + suffix
-    return f"{amount:.2f}".rstrip("0").rstrip(".")
+            divided = f"{amount / scale:.{digits}f}"
+            if index > 0 and abs(Decimal(divided)) >= 1000:
+                # 999999.99 不能进位成“1000k”，改用更大的进位单位。
+                scale, suffix = scales[index - 1]
+                divided = f"{amount / scale:.{digits}f}"
+            return divided.rstrip("0").rstrip(".") + suffix
+    return f"{amount:.{digits}f}".rstrip("0").rstrip(".")
+
+
+def _round_amount(value) -> str:
+    """保留完整量级但去掉小数的写法；解析失败时返回空串由调用方跳过。"""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return ""
+    if not amount.is_finite():
+        return ""
+    return f"{amount:.0f}"
 
 
 class _RingItem(QAbstractButton):
@@ -101,6 +118,9 @@ class _RingItem(QAbstractButton):
         self.label = label
         self.value = "--"
         self.display_value = "--"
+        # 取整后的完整量与更粗的近似写法（123k），只在放不下时逐级兜底。
+        self.rounded_value = ""
+        self.coarse_value = ""
         self.remaining = None
         self.stale = False
         self._keyboard_focus = False
@@ -118,6 +138,8 @@ class _RingItem(QAbstractButton):
     def set_data(self, data):
         self.value, self.remaining = ring_value(self.provider_id, data)
         self.display_value = self.value
+        self.rounded_value = ""
+        self.coarse_value = ""
         if data is not None and data.last_success_at is not None and not data.quota_windows:
             if PROVIDERS[self.provider_id].supports_subscription_quota:
                 metric = next((m for m in data.quota_metrics
@@ -126,9 +148,13 @@ class _RingItem(QAbstractButton):
                         and self.value == format_quota_metric(metric)):
                     # 常驻栏只留紧凑数值，完整积分和单位仍保留在详情及无障碍名称中。
                     self.display_value = _compact_amount(metric.value)
+                    self.rounded_value = _round_amount(metric.value)
+                    self.coarse_value = _compact_amount(metric.value, digits=0)
             elif data.balance_cny is not None and abs(data.balance_cny) >= 1000:
                 prefix = "$" if self.provider_id == "openai" else _currency_prefix(data.currency)
                 self.display_value = prefix + _compact_amount(data.balance_cny)
+                self.rounded_value = prefix + _round_amount(data.balance_cny)
+                self.coarse_value = prefix + _compact_amount(data.balance_cny, digits=0)
         self.stale = bool(provider_status_message(data, provider_id=self.provider_id))
         label = tr(PROVIDERS[self.provider_id].name) + (" · " + self.label if self.label else "") + " · " + self.value
         self.setAccessibleName(label)
@@ -139,6 +165,40 @@ class _RingItem(QAbstractButton):
         else:
             self.setAccessibleDescription(tr(provider_status_message(data)))
         self.update()
+
+    def value_candidates(self) -> tuple[str, ...]:
+        """完整值 → 取整完整值 → k/M 两位小数 → k/M 整数位。"""
+        candidates = [self.value]
+        for candidate in (self.rounded_value, self.display_value, self.coarse_value):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        return tuple(candidates)
+
+    @staticmethod
+    def _fits(font: QFont, text: str, pixel_size: int, available: int) -> bool:
+        probe = QFont(font)
+        probe.setPixelSize(pixel_size)
+        return QFontMetrics(probe).horizontalAdvance(text) <= available
+
+    def fitted_value(self, base: QFont, available: int) -> tuple[str, int]:
+        """挑“最完整同时放得下”的写法：先保字号，再保精度。
+
+        完整值与取整值最少 12px；再放不下才退到 k/M，避免 42px 细环出现被省略号
+        截断的读数。完整数值仍在详情与无障碍名中。
+        """
+        minimum = 10 if self.rail._rail_width < _DEFAULT_RAIL_WIDTH else 12
+        tiers: list[tuple[str, int]] = []
+        for text in (self.value, self.rounded_value):
+            if text and all(text != existing for existing, _ in tiers):
+                tiers.append((text, 12))
+        for text, floor in ((self.display_value, 12), (self.coarse_value, minimum)):
+            if text and all(text != existing for existing, _ in tiers):
+                tiers.append((text, floor))
+        for text, floor in tiers:
+            for size in range(14, floor - 1, -1):
+                if self._fits(base, text, size, available):
+                    return text, size
+        return (tiers[-1][0] if tiers else "--"), minimum
 
     def paintEvent(self, event):
         theme = current_theme()
@@ -180,14 +240,13 @@ class _RingItem(QAbstractButton):
         font.setWeight(QFont.Weight.Medium)
         painter.setFont(font)
         painter.setPen(QColor(theme.value))
-        metrics = QFontMetrics(font)
         available = self.width() - 4
-        if metrics.horizontalAdvance(self.display_value) > available:
-            # 窄宽度下先缩小文字；仍放不下的长数值沿用省略及详情中的完整值。
-            minimum = 10 if self.rail._rail_width < _DEFAULT_RAIL_WIDTH else 12
-            font.setPixelSize(max(minimum, int(14 * available / metrics.horizontalAdvance(self.display_value))))
+        text, pixel_size = self.fitted_value(font, available)
+        if pixel_size != 14:
+            # 窄宽度先缩字号；仍放不下时上面的 fitted_value 已退到紧凑写法。
+            font.setPixelSize(pixel_size)
             painter.setFont(font)
-        text = QFontMetrics(font).elidedText(self.display_value, Qt.TextElideMode.ElideRight, available)
+        text = QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, available)
         painter.drawText(QRectF(0, 46, self.width(), 17), Qt.AlignmentFlag.AlignCenter, text)
         if self.stale:
             painter.setPen(Qt.PenStyle.NoPen)

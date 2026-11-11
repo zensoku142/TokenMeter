@@ -21,6 +21,7 @@ _PROVIDER_BRANDS = {
     "claude": ("claude-color.svg", "Claude", "Anthropic Claude Code 克劳德 编程"),
     "alibaba": ("bailian-color.svg", "Alibaba", "Alibaba Cloud Bailian 阿里云 百炼 通义 千问"),
     "openai": ("openai.svg", "OpenAI API", "ChatGPT Open AI 开放平台"),
+    "workbuddy": ("workbuddy.svg", "WorkBuddy", "腾讯 Buddy AI 积分"),
 }
 
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
+from calendar import monthrange
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from html import escape
 from math import ceil, floor
@@ -41,10 +43,12 @@ from PySide6.QtWidgets import (
     QCalendarWidget,
     QComboBox,
     QFrame,
+    QGraphicsRectItem,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -122,8 +126,11 @@ class MoneyAxis(pg.AxisItem):
         super().__init__(*args, **kwargs)
         self.currency = currency
         self.token_mode = False
+        self.credit_mode = False
 
     def tickStrings(self, values, scale, spacing):
+        if self.credit_mode:
+            return [format_credit_number(value * scale) for value in values]
         if self.token_mode:
             return [tr(format_codex_tokens(value * scale)) for value in values]
         return [format_money_axis(value * scale, self.currency) for value in values]
@@ -143,6 +150,125 @@ class MoneyAxis(pg.AxisItem):
 class TokenAxis(pg.AxisItem):
     def tickStrings(self, values, scale, spacing):
         return [tr(format_token_axis(value * scale)) for value in values]
+
+
+def china_today() -> date:
+    """WorkBuddy 明细按中国时区自然日汇总，图表日期必须使用同一口径。"""
+    return datetime.now(timezone(timedelta(hours=8))).date()
+
+
+def format_credit_number(value: float) -> str:
+    text = f"{float(value):.2f}".rstrip("0").rstrip(".")
+    return "0" if text in {"", "-0"} else text
+
+
+def credit_axis(maximum: float) -> tuple[list[float], float]:
+    """Integral-looking credit axis: shortest nice step with at most five labels."""
+    maximum = max(0.0, float(maximum))
+    if maximum <= 0:
+        return [0.0, 1.0], 1.0
+    steps: list[float] = []
+    for power in range(-2, 7):
+        # 小于 1 时只需要整数倍的 1/2/5，避免出现 0.025 这类无法阅读的刻度。
+        bases = (1, 2, 2.5, 5) if power >= 0 else (1, 2, 5)
+        steps.extend(base * 10**power for base in bases)
+    steps.sort()
+    step = next((value for value in steps if ceil(maximum / value) <= 4), steps[-1])
+    count = max(1, ceil(maximum / step))
+    return [step * index for index in range(count + 1)], step * count
+
+
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_TOTAL_CREDITS = re.compile(r"总计 ([\d.,]+) 积分")
+
+
+def compact_credit_total(detail: str) -> str:
+    """Keep only the total on the small card; used/total remains in hover and details."""
+    match = _TOTAL_CREDITS.search(detail)
+    return f"总额 {match.group(1)}" if match else detail
+
+
+def credit_is_positive(value: str) -> bool:
+    """接口用字符串给积分；只有明确大于 0 才在卡片区提示额外积分来源。"""
+    text = str(value).replace(",", "").strip()
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return False
+    return amount.is_finite() and amount > 0
+
+
+def credit_month_label(value: date) -> str:
+    """中文界面沿用“2026年11月”，其他语言使用 ISO 年月避免格式化中文后缀。"""
+    if current_language().startswith("zh"):
+        return f"{value.year}年{value.month}月"
+    return f"{value.year}-{value.month:02d}"
+
+
+# 未连接时底部仍按这五项积分口径占位，连接后由账号统计覆盖名称与数值。
+WORKBUDDY_STAT_TITLES = (
+    "本月消耗积分",
+    "今日消耗积分",
+    "本月调用次数",
+    "使用模型数",
+    "本月活跃天数",
+)
+
+
+def daily_credit_values(statistics: Sequence) -> dict[date, Decimal]:
+    """Extract validated per-day credits; model rows and invalid values are skipped."""
+    values: dict[date, Decimal] = {}
+    for metric in statistics:
+        if getattr(metric, "value_kind", "") != "credits":
+            continue
+        title = str(getattr(metric, "title", ""))
+        if not _ISO_DAY.fullmatch(title):
+            continue
+        try:
+            day = date.fromisoformat(title)
+            amount = Decimal(str(metric.value))
+        except (ValueError, TypeError, InvalidOperation):
+            continue
+        if not amount.is_finite() or amount < 0:
+            continue
+        values[day] = amount
+    return values
+
+
+def credit_model_rows(
+    statistics: Sequence, value_kind: str = "credits"
+) -> list[tuple[str, Decimal]]:
+    """Model credit rows, highest first; daily keys and invalid values are skipped."""
+    rows: list[tuple[str, Decimal]] = []
+    for metric in statistics:
+        if getattr(metric, "value_kind", "") != value_kind:
+            continue
+        title = str(getattr(metric, "title", ""))
+        if not title or title in WORKBUDDY_STAT_TITLES or _ISO_DAY.fullmatch(title):
+            continue
+        try:
+            amount = Decimal(str(metric.value))
+        except (TypeError, ValueError, InvalidOperation):
+            continue
+        if not amount.is_finite() or amount < 0:
+            continue
+        rows.append((title, amount))
+    rows.sort(key=lambda row: (-row[1], row[0]))
+    return rows
+
+
+def credit_window_rows(
+    daily: dict[date, Decimal], today: date, complete: bool, days: int = 7
+) -> list[dict]:
+    """Near-term credit rows; only a fully successful round may fill missing days with zero."""
+    rows: list[dict] = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        value = daily.get(day)
+        if value is None and not complete:
+            continue
+        rows.append({"date": day.isoformat(), "credits": str(value or Decimal(0))})
+    return rows
 
 
 class DraggableHeader(QFrame):
@@ -724,8 +850,13 @@ class TrendUsageTooltip(QFrame):
         layout.addWidget(self.footer)
         self.hide()
 
-    def set_simple(self, usage_date: date, value: str) -> None:
-        bind_text(self.date_label, usage_date.isoformat())
+    def set_simple(
+        self, usage_date: date | None, value: str, date_text: str = ""
+    ) -> None:
+        bind_text(
+            self.date_label,
+            date_text or (usage_date.isoformat() if usage_date is not None else ""),
+        )
         bind_text(self.total_label, value)
         self.model_row.hide()
         self.token_rows.hide()
@@ -842,6 +973,9 @@ class TrendCard(QFrame):
         self._bar_width = self.BAR_WIDTH
         self._currency = "CNY"
         self._token_mode = False
+        self._credit_mode = False
+        self._credit_texts: list[str] = []
+        self._credit_empty_message = ""
         self._provider_id = ""
         self._view = "amount"
         self._view_by_provider: dict[str, str] = {}
@@ -882,9 +1016,13 @@ class TrendCard(QFrame):
         model_rows: list[dict] | None = None,
         model_usage_enabled: bool = False,
         provider_id: str = "",
+        credit_mode: bool = False,
+        empty_message: str = "",
     ) -> None:
         self._currency = str(currency or "CNY").upper()
         self._token_mode = token_mode
+        self._credit_mode = credit_mode
+        self._credit_empty_message = empty_message
         self._provider_id = str(provider_id or "")
         self._standard_rows = list(rows)
         self._daily_model_rows = list(model_rows or [])
@@ -919,6 +1057,7 @@ class TrendCard(QFrame):
         left_axis.currency = self._currency
         model_mode = self._view == "model" and not self.view_segment.isHidden()
         left_axis.token_mode = self._token_mode or model_mode
+        left_axis.credit_mode = self._credit_mode and not model_mode
         if model_mode:
             self._prepare_model_bars()
             bind_text(self.title, "近 7 天各模型 Token 使用量")
@@ -927,20 +1066,49 @@ class TrendCard(QFrame):
             self.empty_label.setVisible(not self._model_order)
         else:
             by_date = {str(row.get("date")): row for row in self._standard_rows}
-            value_key = "tokens" if self._token_mode else "cost_cny"
-            self._values = [
-                float(by_date.get(day.isoformat(), {}).get(value_key, 0) or 0)
-                for day in self._dates
-            ]
+            if self._credit_mode:
+                # 积分不能复用 Token 或金额字段；文本保留接口原始小数位用于悬停展示。
+                raw_texts = [
+                    str((by_date.get(day.isoformat()) or {}).get("credits", "") or "")
+                    for day in self._dates
+                ]
+                self._values = []
+                for text in raw_texts:
+                    try:
+                        amount = Decimal(text) if text else Decimal(0)
+                    except (InvalidOperation, ValueError):
+                        amount = Decimal(0)
+                    self._values.append(
+                        float(amount) if amount.is_finite() and amount > 0 else 0.0
+                    )
+                self._credit_texts = [
+                    text or format_credit_number(value)
+                    for text, value in zip(raw_texts, self._values)
+                ]
+            else:
+                value_key = "tokens" if self._token_mode else "cost_cny"
+                self._credit_texts = []
+                self._values = [
+                    float(by_date.get(day.isoformat(), {}).get(value_key, 0) or 0)
+                    for day in self._dates
+                ]
             self._bar_positions = [float(index) for index in range(7)]
             self._bar_rows = []
             self._bar_models = []
             self._bar_width = self.BAR_WIDTH
-            bind_text(self.title, "近 7 天 Token 使用量" if self._token_mode else "近 7 天使用金额")
+            if self._credit_mode:
+                bind_text(self.title, "近 7 天积分消耗")
+            else:
+                bind_text(self.title, "近 7 天 Token 使用量" if self._token_mode else "近 7 天使用金额")
             self.legend_scroll.hide()
             self.empty_label.hide()
             provider_cls = PROVIDERS.get(self._provider_id)
-            if provider_cls and provider_cls.support_description and not self._standard_rows:
+            if self._credit_mode:
+                if not self._standard_rows:
+                    # 明细缺失时不能画成一张看似成功的全零积分图。
+                    bind_text(self.empty_label, self._credit_empty_message or "暂无积分明细")
+                    self.empty_label.show()
+            elif provider_cls and provider_cls.support_description and not self._standard_rows:
                 # 仅有额度或余额的平台没有历史明细，空图不能暗示真实用量为零。
                 bind_text(self.empty_label, "平台未提供历史明细")
                 self.empty_label.show()
@@ -959,19 +1127,26 @@ class TrendCard(QFrame):
         self.plot.setXRange(-0.5, 6.5, padding=0)
         maximum = max(self._values, default=0.0)
         token_axis = self._token_mode or model_mode
-        tick_max = max(1.0 if token_axis else 0.01, maximum)
-        self.plot.setYRange(0, tick_max * 1.08 if maximum > 0 else tick_max, padding=0)
-        self.plot.getAxis("left").setTicks(
-            [[
-                (
-                    tick_max * index / 3,
-                    format_token_axis(tick_max * index / 3)
-                    if token_axis
-                    else format_money_axis(tick_max * index / 3, self._currency),
-                )
-                for index in range(4)
-            ]]
-        )
+        if self._credit_mode and not model_mode:
+            ticks, top = credit_axis(maximum)
+            self.plot.setYRange(0, top, padding=0)
+            self.plot.getAxis("left").setTicks(
+                [[(value, format_credit_number(value)) for value in ticks]]
+            )
+        else:
+            tick_max = max(1.0 if token_axis else 0.01, maximum)
+            self.plot.setYRange(0, tick_max * 1.08 if maximum > 0 else tick_max, padding=0)
+            self.plot.getAxis("left").setTicks(
+                [[
+                    (
+                        tick_max * index / 3,
+                        format_token_axis(tick_max * index / 3)
+                        if token_axis
+                        else format_money_axis(tick_max * index / 3, self._currency),
+                    )
+                    for index in range(4)
+                ]]
+            )
         self._hover_index = None
         self._position_empty_label()
         self.refresh_theme()
@@ -1154,12 +1329,14 @@ class TrendCard(QFrame):
                 self._dates[day_index], self._bar_rows[index], self._currency
             )
         else:
-            self.hover_tooltip.set_simple(
-                self._dates[index],
-                format_codex_tokens(self._values[index])
+            value_text = (
+                f"{self._credit_texts[index]} 积分"
+                if self._credit_mode
+                else format_codex_tokens(self._values[index])
                 if self._token_mode
-                else format_money(self._values[index], self._currency),
+                else format_money(self._values[index], self._currency)
             )
+            self.hover_tooltip.set_simple(self._dates[index], value_text)
         tooltip_layout = self.hover_tooltip.layout()
         if tooltip_layout is not None:
             tooltip_layout.activate()
@@ -1204,10 +1381,514 @@ class TrendCard(QFrame):
                 f"{self._dates[index].isoformat()}\n"
                 f"Token：{format_codex_tokens(self._values[index])}"
             )
+        if self._credit_mode:
+            return (
+                f"{self._dates[index].isoformat()}\n"
+                f"积分：{self._credit_texts[index]}"
+            )
         return (
             f"{self._dates[index].isoformat()}\n"
             f"使用金额：{format_money(self._values[index], self._currency)}"
         )
+
+
+class MonthlyCreditChart(QWidget):
+    """Current-month credit bars; days without a reported value stay unknown."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.plot = pg.PlotWidget(axisItems={"left": MoneyAxis(orientation="left")})
+        self.plot.setStyleSheet("border: 0;")
+        self.plot.setMinimumHeight(96)
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.hideButtons()
+        self.plot.setMenuEnabled(False)
+        bind_text(self.plot, "", method="setToolTip")
+        self.plot.showGrid(x=False, y=True, alpha=0.14)
+
+        axis_font = QFont("Microsoft YaHei UI", 8)
+        left_axis = self.plot.getAxis("left")
+        bottom_axis = self.plot.getAxis("bottom")
+        left_axis.setTickFont(axis_font)
+        bottom_axis.setTickFont(axis_font)
+        left_axis.setStyle(hideOverlappingLabels=False)
+        bottom_axis.setStyle(hideOverlappingLabels=False)
+        left_axis.setWidth(44)
+        left_axis.enableAutoSIPrefix(False)
+        left_axis.credit_mode = True
+        bottom_axis.setHeight(22)
+
+        self.empty_label = bind_text(QLabel(self.plot), "本月暂无积分统计")
+        self.empty_label.setObjectName("muted")
+        self.empty_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.empty_label.hide()
+        layout.addWidget(self.plot, 1)
+
+        self.hover_tooltip = TrendUsageTooltip(self)
+        self._days = 30
+        self._today = 0
+        self._year = 0
+        self._month = 0
+        self._message = ""
+        self._values: dict[int, float] = {}
+        self._day_ticks: list[tuple[float, str]] = []
+        self._series: pg.BarGraphItem | None = None
+        self._today_band: QGraphicsRectItem | None = None
+        self._hover_day: int | None = None
+        self._mouse_proxy = pg.SignalProxy(
+            self.plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse_moved
+        )
+        self._connect_theme_changes()
+        self._render()
+
+    def _connect_theme_changes(self) -> None:
+        try:
+            controller = theme_controller()
+        except RuntimeError:
+            return
+        controller.changed.connect(self._on_theme_changed)
+
+    def set_data(
+        self,
+        values: dict[int, float],
+        *,
+        days: int,
+        today: int = 0,
+        year: int = 0,
+        month: int = 0,
+        message: str = "",
+    ) -> None:
+        self._values = {
+            int(day): max(0.0, float(value))
+            for day, value in values.items()
+            if 1 <= int(day) <= days
+        }
+        self._days = max(1, int(days))
+        self._today = int(today)
+        self._year = int(year)
+        self._month = int(month)
+        self._message = message
+        self._render()
+
+    def _render(self) -> None:
+        self._hide_hover()
+        self.plot.clear()
+        self._series = None
+        self._today_band = None
+        days = [day for day in sorted(self._values)]
+        tokens = current_theme()
+        maximum = max(self._values.values(), default=0.0)
+        ticks, top = credit_axis(maximum)
+        today_height = self._values.get(self._today, 0.0)
+        if 1 <= self._today <= self._days and today_height > 0:
+            # 今天只做轻微标记：与当天柱子等高的淡色外框。高度跟柱子走，
+            # 不会在柱顶上方露出一截，避免被读成“柱子被接了一段”。
+            band = QGraphicsRectItem(self._today - 0.47, 0, 0.94, today_height)
+            band.setPen(pg.mkPen(None))
+            band.setZValue(-10)
+            self._today_band = band
+            self.plot.addItem(band)
+        if days:
+            # 空序列不创建 BarGraphItem：pyqtgraph 会对空 pens 列表取上次循环变量。
+            self._series = pg.BarGraphItem(
+                x=days,
+                height=[self._values[day] for day in days],
+                width=0.62,
+                pen=pg.mkPen(tokens.accent),
+                brush=pg.mkBrush(tokens.accent),
+            )
+            self.plot.addItem(self._series)
+        self.plot.setYRange(0, top, padding=0)
+        self.plot.getAxis("left").setTicks(
+            [[(value, format_credit_number(value)) for value in ticks]]
+        )
+        self.plot.setXRange(0.35, self._days + 0.65, padding=0)
+        self._apply_day_ticks()
+        bind_text(self.empty_label, self._message)
+        self.empty_label.setVisible(bool(self._message))
+        self._position_empty_label()
+        self.refresh_theme()
+
+    DAY_TICK_MIN_PX = 22
+
+    def _apply_day_ticks(self) -> None:
+        # 按“每个刻度至少 22px”疏化，窄窗口也不会把 28/30 个日期挤成一排。
+        width = max(1, self.plot.width())
+        step = max(1, ceil(self._days * self.DAY_TICK_MIN_PX / width))
+        days = {day for day in range(1, self._days + 1) if day % step == 0}
+        if 1 <= self._today <= self._days:
+            days.add(self._today)
+            # 今天强制显示后，与它相距不足一个步长的邻居会与“今天”标签重叠。
+            days = {
+                day for day in days
+                if day == self._today or abs(day - self._today) >= step
+            }
+        # 月末给一个刻度，避免疏化后看不出这个月有几天。
+        days.add(self._days)
+        ticks = [(float(day), str(day)) for day in sorted(days)]
+        self._day_ticks = ticks
+        self.plot.getAxis("bottom").setTicks([ticks])
+
+    def _day_text(self, day: int) -> str:
+        return f"{self._year:04d}-{self._month:02d}-{day:02d}"
+
+    def refresh_theme(self) -> None:
+        tokens = current_theme()
+        _make_plot_background_transparent(self.plot)
+        left_axis = self.plot.getAxis("left")
+        bottom_axis = self.plot.getAxis("bottom")
+        left_axis.setTextPen(pg.mkPen(tokens.subtext))
+        bottom_axis.setTextPen(pg.mkPen(tokens.subtext))
+        axis_color = QColor(tokens.border)
+        axis_color.setAlpha(96)
+        left_axis.setPen(pg.mkPen(axis_color))
+        bottom_axis.setPen(pg.mkPen(axis_color))
+        if self._today_band is not None:
+            # 外框只有几个像素宽，透明度要比整列底纹稍高才看得出是“今天”。
+            band_color = QColor(tokens.accent)
+            band_color.setAlpha(62 if tokens.name == "dark" else 52)
+            self._today_band.setBrush(pg.mkBrush(band_color))
+        if self._series is not None:
+            days = [day for day in sorted(self._values)]
+            brushes, pens = [], []
+            for day in days:
+                # 今天靠背景底纹区分；柱子保持统一柱色，避免出现“被截成两段”的观感。
+                if day == self._hover_day:
+                    brushes.append(pg.mkBrush(tokens.accent_hover))
+                    pens.append(pg.mkPen(tokens.accent_hover))
+                else:
+                    brushes.append(pg.mkBrush(tokens.accent))
+                    pens.append(pg.mkPen(tokens.accent))
+            self._series.setOpts(brushes=brushes, pens=pens)
+        self.hover_tooltip.refresh_colors(TrendCard._token_colors())
+
+    def _on_theme_changed(self, _mode: str, _resolved: str) -> None:
+        self.refresh_theme()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_day_ticks()
+        self._position_empty_label()
+
+    def _position_empty_label(self) -> None:
+        self.empty_label.adjustSize()
+        self.empty_label.move(
+            max(0, (self.plot.width() - self.empty_label.width()) // 2),
+            max(0, (self.plot.height() - self.empty_label.height()) // 2),
+        )
+
+    def _on_mouse_moved(self, event) -> None:
+        scene_pos = event[0]
+        view_box = self.plot.getViewBox()
+        if not view_box.sceneBoundingRect().contains(scene_pos):
+            self._hide_hover()
+            return
+        point = view_box.mapSceneToView(scene_pos)
+        day = int(round(point.x()))
+        if day not in self._values:
+            self._hide_hover()
+            return
+        height = self._values[day]
+        if abs(point.x() - day) > 0.31 or (height > 0 and not 0 <= point.y() <= height):
+            self._hide_hover()
+            return
+        if self._hover_day != day:
+            self._hover_day = day
+            self.refresh_theme()
+        self._show_tooltip(day, self.plot.mapFromScene(scene_pos))
+
+    def _show_tooltip(self, day: int, local: QPoint) -> None:
+        self.hover_tooltip.set_simple(
+            None,
+            f"{format_credit_number(self._values[day])} 积分",
+            self._day_text(day),
+        )
+        tooltip_layout = self.hover_tooltip.layout()
+        if tooltip_layout is not None:
+            tooltip_layout.activate()
+        self.hover_tooltip.resize(self.hover_tooltip.sizeHint())
+        anchor = self.plot.mapTo(self, local)
+        x = anchor.x() + 10
+        if x + self.hover_tooltip.width() > self.width() - 6:
+            x = anchor.x() - self.hover_tooltip.width() - 10
+        x = max(6, min(x, max(6, self.width() - self.hover_tooltip.width() - 6)))
+        y = max(6, min(anchor.y() + 8, self.height() - self.hover_tooltip.height() - 6))
+        self.hover_tooltip.move(x, y)
+        self.hover_tooltip.raise_()
+        self.hover_tooltip.show()
+
+    def _hide_hover(self) -> None:
+        had_hover = self._hover_day is not None
+        self._hover_day = None
+        self.hover_tooltip.hide()
+        if had_hover:
+            self.refresh_theme()
+
+    def tooltip_text(self, day: int) -> str:
+        if day not in self._values:
+            return ""
+        return f"{self._day_text(day)}\n积分：{format_credit_number(self._values[day])}"
+
+
+class ModelCreditRow(QWidget):
+    """One ranked model: name, credits and share; long names are elided with a tooltip."""
+
+    SHARE_WIDTH = 42
+
+    def __init__(
+        self, name: str, credits: Decimal, share: float, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._name = name
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 1, 0, 1)
+        layout.setSpacing(1)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+        self.name_label = QLabel()
+        self.name_label.setObjectName("modelCreditName")
+        self.name_label.setTextFormat(Qt.TextFormat.PlainText)
+        # 名称列必须允许被压缩，否则长模型名会把滚动区撑宽、跳过省略逻辑。
+        self.name_label.setMinimumWidth(1)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        bind_text(self.name_label, name, method="setToolTip")
+        bind_text(self.name_label, name, method="setAccessibleName")
+        self.value_label = QLabel(tr("{value} 积分", value=format_credit_number(float(credits))))
+        self.value_label.setObjectName("modelCreditValue")
+        self.value_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.value_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        top.addWidget(self.name_label, 1)
+        top.addWidget(self.value_label, 0)
+
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(8)
+        self.bar = QProgressBar()
+        self.bar.setObjectName("modelCreditBar")
+        self.bar.setRange(0, 1000)
+        self.bar.setValue(round(max(0.0, min(100.0, float(share))) * 10))
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(4)
+        self.bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        bind_text(self.bar, f"{name} 占比", method="setAccessibleName")
+        self.share_label = QLabel(f"{share:.1f}%")
+        self.share_label.setObjectName("modelCreditShare")
+        self.share_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.share_label.setFixedWidth(self.SHARE_WIDTH)
+        bottom.addWidget(self.bar, 1)
+        bottom.addWidget(self.share_label, 0)
+
+        layout.addLayout(top)
+        layout.addLayout(bottom)
+        self._apply_elide()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        # 名称列由布局决定宽度，只能按实际可用像素省略；完整名称始终在提示中。
+        width = self.name_label.width()
+        if width <= 0:
+            return
+        self.name_label.setText(
+            self.name_label.fontMetrics().elidedText(
+                self._name, Qt.TextElideMode.ElideRight, width
+            )
+        )
+
+
+class ModelCreditPanel(QFrame):
+    """Right column of the credit activity section: per-model ranking and period switch."""
+
+    range_changed = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("modelCreditPanel")
+        self._range = "month"
+        self._signature: tuple | None = None
+        self._count_text = ""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+        self.title = bind_text(QLabel(), "模型积分消耗")
+        self.title.setObjectName("sectionTitle")
+        self.title.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.count = QLabel()
+        self.count.setObjectName("modelCreditCount")
+        self.count.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.count.hide()
+
+        self.range_segment = QFrame()
+        self.range_segment.setObjectName("modelRangeSegment")
+        self.range_segment.setFixedHeight(24)
+        range_layout = QHBoxLayout(self.range_segment)
+        range_layout.setContentsMargins(1, 1, 1, 1)
+        range_layout.setSpacing(0)
+        self.range_group = QButtonGroup(self)
+        self.range_group.setExclusive(True)
+        self.month_button = self._range_button("本月", "month", True)
+        self.today_button = self._range_button("今日", "today", False)
+        for button in (self.month_button, self.today_button):
+            self.range_group.addButton(button)
+            range_layout.addWidget(button)
+
+        header.addWidget(self.title)
+        header.addWidget(self.count)
+        header.addStretch(1)
+        header.addWidget(self.range_segment)
+        layout.addLayout(header)
+
+        self.scroll = QScrollArea()
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.list_widget = QWidget()
+        self.rows_layout = QVBoxLayout(self.list_widget)
+        self.rows_layout.setContentsMargins(0, 0, 6, 0)
+        self.rows_layout.setSpacing(7)
+        self.scroll.setWidget(self.list_widget)
+        layout.addWidget(self.scroll, 1)
+
+        self.empty_label = QLabel(self.list_widget)
+        self.empty_label.setObjectName("muted")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setWordWrap(True)
+        self.empty_label.hide()
+
+    def _range_button(self, text: str, key: str, checked: bool = False) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("modelRangeButton")
+        bind_text(button, text)
+        button.setCheckable(True)
+        button.setChecked(checked)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setFixedSize(36, 20)
+        bind_text(button, text, method="setAccessibleName")
+        button.clicked.connect(lambda _checked=False, value=key: self.select_range(value))
+        return button
+
+    def select_range(self, key: str) -> None:
+        key = "today" if key == "today" else "month"
+        (self.today_button if key == "today" else self.month_button).setChecked(True)
+        if key == self._range:
+            return
+        self._range = key
+        self._signature = None
+        self.range_changed.emit(key)
+
+    def set_period(self, key: str) -> None:
+        """Reset to the default period without going through the click handler."""
+        key = "today" if key == "today" else "month"
+        if key == self._range:
+            return
+        self._range = key
+        self._signature = None
+        (self.today_button if key == "today" else self.month_button).setChecked(True)
+
+    @property
+    def period(self) -> str:
+        return self._range
+
+    def set_view(
+        self,
+        rows: list[tuple[str, Decimal]],
+        *,
+        message: str = "",
+        count_text: str = "",
+        count_tooltip: str = "",
+        reset_scroll: bool = False,
+    ) -> None:
+        signature = (self._range, message, count_text, tuple(rows))
+        if signature == self._signature and not reset_scroll:
+            return
+        self._signature = signature
+        previous = self.scroll.verticalScrollBar().value()
+        self._clear()
+
+        self.count.setText(count_text)
+        self.count.setToolTip(count_tooltip)
+        self._count_text = count_text
+        self._fit_header()
+        total = sum((credits for _name, credits in rows), Decimal(0))
+        if rows and not message:
+            for name, credits in rows:
+                share = float(credits / total * 100) if total > 0 else 0.0
+                self.rows_layout.addWidget(ModelCreditRow(name, credits, share))
+            self.rows_layout.addStretch(1)
+        else:
+            self.empty_label.setText(message)
+            self.empty_label.setVisible(bool(message))
+            self.rows_layout.addStretch(1)
+            self.rows_layout.addWidget(self.empty_label, 0, Qt.AlignmentFlag.AlignHCenter)
+            self.rows_layout.addStretch(1)
+        self.rows_layout.activate()
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(0 if reset_scroll else min(previous, bar.maximum()))
+
+    def _clear(self) -> None:
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is None:
+                continue
+            if widget is self.empty_label:
+                widget.hide()
+                continue
+            widget.setParent(None)
+            widget.deleteLater()
+
+    def _fit_header(self) -> None:
+        # 窄窗口优先保留标题和时段切换；模型总数放不下时先收起，避免文字互相覆盖。
+        text = self._count_text
+        if not text:
+            self.count.setVisible(False)
+            return
+        metrics = self.count.fontMetrics()
+        needed = (
+            self.title.sizeHint().width()
+            + metrics.horizontalAdvance(text)
+            + self.range_segment.width()
+            + 24
+        )
+        fits = needed <= self.width()
+        self.count.setVisible(fits)
+        # 收起时把总数交给标题提示，窄窗口也不丢信息。
+        self.title.setToolTip("" if fits else text)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_header()
+
+    def refresh_language_widths(self) -> None:
+        # 外语短标签的字宽不同；切换后按实际文字收窄两个时段按钮。
+        chinese = current_language() == "zh-cn"
+        for button in (self.month_button, self.today_button):
+            button.ensurePolished()
+            width = 36 if chinese else max(
+                34, button.fontMetrics().horizontalAdvance(button.text()) + 16
+            )
+            button.setFixedSize(width, 20)
+        self.range_segment.setFixedWidth(
+            sum(button.width() for button in (self.month_button, self.today_button)) + 4
+        )
+        self._fit_header()
 
 
 class MinuteUsageTooltip(QFrame):
@@ -2277,8 +2958,17 @@ class StatisticsCard(QFrame):
             bind_text(label, value)
             bind_text(label, "", method='setToolTip')
 
-    def set_quota_data(self, data: TokenData) -> None:
-        provider_name = data.per_provider[0].provider_name if data.per_provider else "Codex"
+    def set_quota_data(
+        self,
+        data: TokenData,
+        *,
+        provider_name: str = "",
+        default_names: Sequence[str] = (),
+    ) -> None:
+        # 尚未连接时 data 里没有 per_provider，调用方可以补上平台名和固定的统计项名称。
+        provider_name = provider_name or (
+            data.per_provider[0].provider_name if data.per_provider else "Codex"
+        )
         bind_text(self.title, f"{provider_name} 使用统计")
         items = [(metric.title, metric.value, metric.detail) for metric in data.quota_statistics]
         source_tooltip = {
@@ -2295,7 +2985,7 @@ class StatisticsCard(QFrame):
                 bind_text(value, lambda metric=metric: format_quota_metric(metric))
                 bind_text(value, tooltip or text, method='setToolTip')
             else:
-                bind_text(name, "--")
+                bind_text(name, default_names[index] if index < len(default_names) else "--")
                 bind_text(name, "", method='setToolTip')
                 bind_text(value, "--")
                 bind_text(value, "", method='setToolTip')
@@ -2558,6 +3248,7 @@ class MainPanel(QFrame):
         activity_header.setSpacing(5)
         activity_title = bind_text(QLabel(), "Token 活动")
         activity_title.setObjectName("sectionTitle")
+        self.activity_title = activity_title
         # 标题只占文本所需宽度，避免分时控件显示后被布局拉伸并把切换按钮推向右侧。
         activity_title.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
@@ -2606,6 +3297,9 @@ class MainPanel(QFrame):
         )
         bind_text(self.activity_summary, self._minute_estimate_tooltip, method='setToolTip')
         self._annual_activity_summary = "暂无 Token 活动"
+        self._annual_activity_tooltip = ""
+        self._credit_activity_summary = "本月暂无积分统计"
+        self._credit_activity_tooltip = ""
         self._activity_view = "annual"
         activity_header.addWidget(activity_title)
         activity_header.addWidget(self.activity_mode_segment)
@@ -2662,7 +3356,9 @@ class MainPanel(QFrame):
         activity_header.addWidget(self.speed_legend_slot, 1)
         activity_header.addWidget(self.activity_summary)
         activity_header.addWidget(self.quota_details_button)
-        activity_layout.addLayout(activity_header)
+        # 积分视图把标题和月度汇总收成两行放在左栏上沿；其他视图继续共用这行头部。
+        self.activity_header_widget = QWidget()
+        self.activity_header_widget.setLayout(activity_header)
         self.minute_details_row = QWidget()
         self.minute_details_layout = QHBoxLayout(self.minute_details_row)
         self.minute_details_layout.setContentsMargins(0, 0, 0, 0)
@@ -2670,7 +3366,6 @@ class MainPanel(QFrame):
         self.minute_details_layout.addStretch()
         self.minute_details_row.hide()
         self._minute_details_wrapped = False
-        activity_layout.addWidget(self.minute_details_row)
 
         self.activity_scroll = QScrollArea()
         self.activity_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2690,10 +3385,70 @@ class MainPanel(QFrame):
         # 避免仅查看额度或年度活动也常驻完整分时图表。
         self._minute_chart: MinuteUsageChart | None = None
         self._speed_chart = None
+        self._credit_chart: MonthlyCreditChart | None = None
         self.activity_stack = QStackedWidget()
         self.activity_stack.setObjectName("activityStack")
         self.activity_stack.addWidget(self.activity_scroll)
-        activity_layout.addWidget(self.activity_stack)
+
+        self.credits_header = QWidget()
+        credits_header_layout = QHBoxLayout(self.credits_header)
+        credits_header_layout.setContentsMargins(0, 0, 0, 0)
+        credits_header_layout.setSpacing(6)
+        self.credits_title = bind_text(QLabel(), "积分活动")
+        self.credits_title.setObjectName("sectionTitle")
+        self.credits_title.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.credits_details_button = QToolButton()
+        self.credits_details_button.setObjectName("quotaDetailsButton")
+        self.credits_details_button.setFixedHeight(24)
+        self.credits_details_button.setAutoRaise(True)
+        self.credits_details_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        bind_text(self.credits_details_button, "额度明细")
+        bind_text(
+            self.credits_details_button,
+            "查看全部额度窗口和账户指标",
+            method="setToolTip",
+        )
+        self.credits_details_button.clicked.connect(self._open_quota_details)
+        credits_header_layout.addWidget(self.credits_title)
+        credits_header_layout.addStretch(1)
+        credits_header_layout.addWidget(self.credits_details_button)
+        self.credits_summary = bind_text(QLabel(), "")
+        self.credits_summary.setObjectName("activitySummary")
+
+        self.model_panel = ModelCreditPanel()
+        self.model_panel.range_changed.connect(self._on_model_range_changed)
+
+        left_column = QWidget()
+        left_layout = QVBoxLayout(left_column)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(3)
+        left_layout.addWidget(self.activity_header_widget)
+        left_layout.addWidget(self.credits_header)
+        left_layout.addWidget(self.credits_summary)
+        left_layout.addWidget(self.minute_details_row)
+        left_layout.addWidget(self.activity_stack, 1)
+
+        self.credits_divider = QFrame()
+        self.credits_divider.setObjectName("divider")
+        self.credits_divider.setFrameShape(QFrame.Shape.VLine)
+        self.credits_divider.setFixedWidth(1)
+
+        self.activity_columns = QWidget()
+        columns_layout = QHBoxLayout(self.activity_columns)
+        columns_layout.setContentsMargins(0, 0, 0, 0)
+        columns_layout.setSpacing(14)
+        columns_layout.addWidget(left_column, 3)
+        columns_layout.addWidget(self.credits_divider)
+        columns_layout.addWidget(self.model_panel, 2)
+        activity_layout.addWidget(self.activity_columns, 1)
+        # 右栏只属于积分视图；隐藏时不占位，其他平台仍是原来的整宽活动区。
+        self.credits_header.hide()
+        self.credits_summary.hide()
+        self.credits_divider.hide()
+        self.model_panel.hide()
+
+        self._model_range = "month"
+        self._model_states: dict[str, dict] = {}
         content.addWidget(self.activity_card)
         self.middle_section = self.activity_card
 
@@ -2745,6 +3500,9 @@ class MainPanel(QFrame):
         self._refresh_icons()
         self._set_activity_view("annual")
         self.refresh_language_layout()
+        if self._display_provider_id == "workbuddy":
+            # 首个数据到达前也按积分口径起版，避免面板先显示金额/Token 文案。
+            self.update_data(TokenData(), loading=True)
 
     def set_openai_balance(
         self, data: TokenData | None, *, connected: bool, organization: str = ""
@@ -2825,6 +3583,11 @@ class MainPanel(QFrame):
             button.setFixedWidth(
                 width if chinese else max(38, button.fontMetrics().horizontalAdvance(button.text()) + 20)
             )
+        if hasattr(self, "model_panel"):
+            self.model_panel.refresh_language_widths()
+            if self._model_states:
+                # 时段按钮和列表文字都随语言变化，重建一次右栏即可。
+                self._apply_model_view()
 
     def show_settings(self, settings: QWidget) -> None:
         self._settings_page = settings
@@ -2922,6 +3685,12 @@ class MainPanel(QFrame):
             self._minute_chart = MinuteUsageChart()
             self.activity_stack.addWidget(self._minute_chart)
         return self._minute_chart
+
+    def _ensure_credit_chart(self) -> MonthlyCreditChart:
+        if self._credit_chart is None:
+            self._credit_chart = MonthlyCreditChart()
+            self.activity_stack.addWidget(self._credit_chart)
+        return self._credit_chart
 
     @property
     def speed_chart(self):
@@ -3220,9 +3989,22 @@ class MainPanel(QFrame):
     def _set_activity_view(self, view: str) -> None:
         if view == "speed" and not self._speed_enabled:
             view = "annual"
+        if view == "credits" and self._credit_chart is None:
+            # 积分活动只属于 WorkBuddy；退回无数据时仍保留额度区的原视图。
+            view = "annual"
         minute_view = view == "minute"
         chart_view = view in {"minute", "speed"}
+        credits_view = view == "credits"
         self._activity_view = view
+        bind_text(self.activity_title, "积分活动" if credits_view else "Token 活动")
+        self.activity_header_widget.setVisible(not credits_view)
+        self.credits_header.setVisible(credits_view)
+        self.credits_summary.setVisible(credits_view)
+        self.credits_divider.setVisible(credits_view)
+        self.model_panel.setVisible(credits_view)
+        self.credits_details_button.setVisible(credits_view and self._quota_data is not None)
+        if credits_view:
+            bind_text(self.credits_summary, self._credit_activity_summary)
         if not chart_view:
             self.minute_date_edit.popup.close()
         activity_height = (
@@ -3236,6 +4018,8 @@ class MainPanel(QFrame):
             chart = self._ensure_minute_chart()
             self.activity_stack.setCurrentWidget(chart)
             self._render_minute_date(loading=False)
+        elif view == "credits":
+            self.activity_stack.setCurrentWidget(self._credit_chart)
         elif view == "speed":
             self.activity_stack.setCurrentWidget(self.speed_chart)
             self._render_speed_date(loading=False)
@@ -3249,9 +4033,12 @@ class MainPanel(QFrame):
         for button in self.minute_legend_buttons.values():
             button.setVisible(minute_view)
         if view != "speed":
-            bind_text(self.activity_summary, self._minute_chart.summary_text()
-                if minute_view
-                else self._annual_activity_summary)
+            if view == "credits":
+                bind_text(self.activity_summary, self._credit_activity_summary)
+            elif minute_view:
+                bind_text(self.activity_summary, self._minute_chart.summary_text())
+            else:
+                bind_text(self.activity_summary, self._annual_activity_summary)
         self._render_usage_card()
         self.activity_card.layout().invalidate()
         self._refresh_minute_control_colors()
@@ -3263,9 +4050,45 @@ class MainPanel(QFrame):
         elif minute_view:
             bind_text(self.minute_estimate_label, self._minute_estimate_tooltip, method="setToolTip")
             bind_text(self.activity_summary, self._minute_estimate_tooltip, method='setToolTip')
+        elif view == "credits":
+            bind_text(self.activity_summary, self._credit_activity_tooltip, method='setToolTip')
+            bind_text(self.credits_summary, self._credit_activity_tooltip, method='setToolTip')
         elif self._quota_data is not None:
             bind_text(self.activity_summary, self._annual_activity_tooltip, method='setToolTip')
         self.activity_height_changed.emit(panel_height)
+
+    def _on_model_range_changed(self, key: str) -> None:
+        # 切换只更新右栏：左栏整月图不动，列表回到首行。
+        self._model_range = "today" if key == "today" else "month"
+        self._apply_model_view(reset_scroll=True)
+
+    def _apply_model_view(self, *, reset_scroll: bool = False) -> None:
+        state = self._model_states.get(self._model_range) or {"kind": ""}
+        kind = str(state.get("kind", ""))
+        rows = list(state.get("rows", ()))
+        period = str(state.get("period", ""))
+        message = {
+            "not_configured": tr("尚未连接 WorkBuddy"),
+            "loading": tr("正在读取模型积分"),
+            "unavailable": tr("使用明细暂不可用"),
+            "stale": tr("统计待更新 · 缓存为 {month}", month=period),
+            "empty": tr("本月暂无模型消耗" if self._model_range == "month" else "今日暂无模型消耗"),
+        }.get(kind, "")
+        count_text = ""
+        count_tooltip = ""
+        if kind == "ok" and rows:
+            count_text = tr("{count} 个模型", count=len(rows))
+            count_tooltip = tr("按同一时段全部模型积分计算占比，包含未显示的模型")
+            if state.get("cached"):
+                count_text += " · " + tr("缓存 · {period}", period=period)
+                count_tooltip = tr("当前显示最近一次缓存的使用明细，统计截至 {period}", period=period)
+        self.model_panel.set_view(
+            rows,
+            message=message,
+            count_text=count_text,
+            count_tooltip=count_tooltip,
+            reset_scroll=reset_scroll,
+        )
 
     def _update_activity_header_visibility(self) -> None:
         minute_view = self._activity_view == "minute"
@@ -3401,6 +4224,8 @@ class MainPanel(QFrame):
             self._minute_chart.refresh_theme()
         if self._speed_chart is not None:
             self._speed_chart.refresh_theme()
+        if self._credit_chart is not None:
+            self._credit_chart.refresh_theme()
         self.minute_date_edit.refresh_theme()
         self._refresh_minute_control_colors()
         self._refresh_icons()
@@ -3438,6 +4263,166 @@ class MainPanel(QFrame):
         self.pricing_badge.style().unpolish(self.pricing_badge)
         self.pricing_badge.style().polish(self.pricing_badge)
         self.pricing_badge.update()
+
+    def _render_workbuddy_credits(self, data: TokenData, loading: bool) -> None:
+        """Reuse the single daily credit series for the trend, month chart and statistics."""
+        today = china_today()
+        daily = daily_credit_values(data.quota_statistics)
+        # 只有本轮完整成功的统计才能把缺失日期补成真实的零消耗；缓存日期范围未知。
+        complete = data.statistics_source == "interface"
+        month_start = today.replace(day=1)
+        month_values: dict[int, float] = {}
+        month_total = Decimal(0)
+        for offset in range((today - month_start).days + 1):
+            day = month_start + timedelta(days=offset)
+            value = daily.get(day)
+            if value is None and not complete:
+                continue
+            value = value or Decimal(0)
+            month_values[day.day] = float(value)
+            month_total += value
+
+        month_label = credit_month_label(today)
+        if complete:
+            summary = tr(
+                "本月 · {month} · {total} 积分",
+                month=month_label,
+                total=format_credit_number(float(month_total)),
+            )
+            tooltip = "来自 WorkBuddy 账号统计，按中国时区自然日汇总"
+        else:
+            summary = tr("本月 · {month} · 统计待更新", month=month_label)
+            tooltip = (
+                "当前显示最近一次缓存的 WorkBuddy 积分统计"
+                if daily
+                else "WorkBuddy 使用明细暂不可用"
+            )
+        self._credit_activity_summary = summary
+        self._credit_activity_tooltip = tooltip
+        self._model_states = self._credit_model_states(data, daily, complete, loading)
+        if self._activity_view != "credits":
+            # 重新打开 WorkBuddy 面板时回到“本月”；日常刷新保留用户选择。
+            self._model_range = "month"
+            self.model_panel.set_period("month")
+        self._apply_model_view()
+
+        self.trend.set_rows(
+            credit_window_rows(daily, today, complete),
+            today=today,
+            currency=self._currency,
+            provider_id="workbuddy",
+            credit_mode=True,
+            empty_message="使用明细暂不可用",
+        )
+        bind_text(self.trend.title, tooltip, method='setToolTip')
+        bind_text(self.trend.title, tooltip, method='setAccessibleDescription')
+        bind_text(self.trend.plot, "", method='setToolTip')
+
+        self._ensure_credit_chart().set_data(
+            month_values,
+            days=monthrange(today.year, today.month)[1],
+            today=today.day,
+            year=today.year,
+            month=today.month,
+            message=self._credit_chart_message(data, daily, month_values, month_total, complete,
+                                              loading),
+        )
+        self.statistics.set_quota_data(
+            data, provider_name="WorkBuddy", default_names=WORKBUDDY_STAT_TITLES
+        )
+        self._set_activity_view("credits")
+
+    def _credit_model_states(
+        self, data: TokenData, daily: dict[date, Decimal], complete: bool, loading: bool
+    ) -> dict[str, dict]:
+        """Per-period model rows plus the state the right column should show."""
+        today = china_today()
+        month_rows = credit_model_rows(data.quota_statistics, "credits")
+        today_rows = credit_model_rows(data.quota_statistics, "credits_today")
+        codes = {error.code for error in data.errors} | set(data.refresh_error_codes)
+        not_configured = data.status == "not_configured" or "NOT_CONFIGURED" in codes
+        if not_configured:
+            return {"month": {"kind": "not_configured"}, "today": {"kind": "not_configured"}}
+        if loading and data.last_success_at is None:
+            return {"month": {"kind": "loading"}, "today": {"kind": "loading"}}
+        if complete:
+            return {
+                "month": {"kind": "ok" if month_rows else "empty", "rows": month_rows},
+                "today": {"kind": "ok" if today_rows else "empty", "rows": today_rows},
+            }
+        # 缓存要按快照周期归属：跨月不能把上月模型当作本月，跨日不能让今日沿用昨天。
+        last_day = max(daily) if daily else None
+        month_label = credit_month_label(last_day or today)
+        month_matches = last_day is None or (last_day.year, last_day.month) == (
+            today.year, today.month
+        )
+        if month_matches and month_rows:
+            month_state = {"kind": "ok", "rows": month_rows, "period": month_label, "cached": True}
+        elif month_matches:
+            month_state = {"kind": "unavailable"}
+        else:
+            month_state = {"kind": "stale", "period": month_label}
+        if last_day == today and today_rows:
+            today_state = {
+                "kind": "ok", "rows": today_rows, "period": last_day.isoformat(), "cached": True,
+            }
+        else:
+            today_state = {"kind": "unavailable"}
+        return {"month": month_state, "today": today_state}
+
+    @staticmethod
+    def _credit_chart_message(
+        data: TokenData,
+        daily: dict[date, Decimal],
+        month_values: dict[int, float],
+        month_total: Decimal,
+        complete: bool,
+        loading: bool,
+    ) -> str:
+        not_configured = data.status == "not_configured" or "NOT_CONFIGURED" in (
+            set(data.refresh_error_codes) | {error.code for error in data.errors}
+        )
+        if not_configured:
+            return "尚未连接 WorkBuddy"
+        if loading and data.last_success_at is None:
+            return "正在读取积分明细"
+        if month_values:
+            # 完整的零消耗是真实结果；未知日期不会进入这份映射。
+            return "" if month_total > 0 else "本月暂无积分消耗"
+        if daily:
+            cached = max(daily)
+            return tr("统计待更新 · 缓存为 {month}", month=credit_month_label(cached))
+        if complete:
+            return "本月暂无积分消耗"
+        if data.statistics_source == "cache":
+            # 旧缓存只有汇总项没有每日项：本月缺日统计，但不能据此判断零消耗。
+            return "本月暂无积分统计"
+        return "使用明细暂不可用" if data.errors else "本月暂无积分统计"
+
+    @staticmethod
+    def workbuddy_status(data: TokenData, loading: bool = False) -> str:
+        codes = {error.code for error in data.errors} | set(data.refresh_error_codes)
+        if "NOT_CONFIGURED" in codes or data.status == "not_configured":
+            return "尚未连接 WorkBuddy，请在账户连接中登录"
+        if "AUTH_EXPIRED" in codes:
+            return "WorkBuddy 登录已失效，请重新连接"
+        if codes & {"NETWORK_TIMEOUT", "NETWORK_ERROR"}:
+            return (
+                "网络连接失败，显示最近缓存"
+                if data.quota_source == "cache"
+                else "网络连接失败，请稍后重试"
+            )
+        if loading and data.last_success_at is None:
+            return "正在读取 WorkBuddy 积分"
+        if data.quota_source == "interface":
+            if data.statistics_source == "interface":
+                return "连接正常 · 积分与统计已更新"
+            if data.statistics_source == "cache":
+                return "余额已更新 · 使用统计来自缓存"
+            return "余额已更新 · 使用明细暂不可用"
+        if data.quota_source == "cache":
+            return "积分读取失败，显示最近缓存"
+        return "积分读取失败，请稍后重试"
 
     def _set_annual_activity_data(self, data: TokenData) -> None:
         self.activity.set_activity(data.daily_usage)
@@ -3480,6 +4465,9 @@ class MainPanel(QFrame):
             if provider_index >= 0:
                 self.provider_quick_combo.setCurrentIndex(provider_index)
             del provider_blocker
+        elif str(config_manager.get("ACTIVE_PROVIDER", "")).strip().lower() == "workbuddy":
+            # 尚未连接时 data 里还没有 per_provider，仍要按积分口径显示空态标题和统计。
+            provider_id = "workbuddy"
         provider_cls = PROVIDERS.get(provider_id)
         openai_view = provider_id == "openai"
         if self._display_provider_id == "openai" and not openai_view:
@@ -3497,6 +4485,9 @@ class MainPanel(QFrame):
         self.speed_activity_button.setVisible(self._speed_enabled)
         self.refresh_language_layout()
         if self._activity_view == "speed" and not self._speed_enabled:
+            self._activity_view = "annual"
+        if self._activity_view == "credits" and provider_id != "workbuddy":
+            # 积分活动视图只属于 WorkBuddy；切回其他平台恢复各自的年度/分时视图。
             self._activity_view = "annual"
         self.provider_shortcuts.set_current(provider_id)
         quota_mode = bool(
@@ -3544,7 +4535,8 @@ class MainPanel(QFrame):
         if quota_mode:
             cards = (self.today_card, self.balance_card, self.month_card)
             provider_name = data.per_provider[0].provider_name if data.per_provider else "Codex"
-            summaries: list[tuple[str, str, str]] = []
+            metrics = list(data.quota_metrics)
+            summaries: list[tuple[str, str, str, str]] = []
             visible_windows = [
                 window
                 for window in data.quota_windows
@@ -3571,14 +4563,45 @@ class MainPanel(QFrame):
                         window.title,
                         "--" if loading or used is None else f"剩余 {max(0, 100 - used):.0f}%",
                         " · ".join(detail_parts),
+                        " · ".join(detail_parts),
                     )
                 )
-            for metric in data.quota_metrics:
+            if provider_id == "workbuddy":
+                # 官网不保证 CreditGroups 顺序；按已有指标标题固定主卡与两张积分来源卡。
+                metrics = []
+                by_title = {metric.title: metric for metric in data.quota_metrics}
+                addon = by_title.get("购买积分")
+                # 卡片区只有一主两副三个位置：四张并列时每张仅约 46px，而标签需要 72px，
+                # 因此自购积分作为剩余积分下的说明行，既在卡片区可见又不会挤坏布局。
+                addon_note = ""
+                if addon is not None and not loading and credit_is_positive(addon.value):
+                    addon_note = tr("含购买积分 {value}", value=addon.value)
+                for title in ("剩余积分", "套餐基础积分", "平台奖励积分"):
+                    metric = by_title.get(title)
+                    if metric is None:
+                        summaries.append((title, "--", "", "WorkBuddy 未返回该积分分组"))
+                        continue
+                    detail = compact_credit_total(metric.detail)
+                    tooltip = metric.detail
+                    if title == "剩余积分" and addon_note:
+                        detail = addon_note
+                        tooltip = f"{addon_note} · {metric.detail}" if metric.detail else addon_note
+                    summaries.append(
+                        (
+                            title,
+                            "--" if loading else metric.value,
+                            detail,
+                            tooltip,
+                        )
+                    )
+            for metric in metrics:
                 if len(summaries) >= len(cards):
                     break
-                summaries.append((metric.title, "--" if loading else metric.value, metric.detail))
+                summaries.append(
+                    (metric.title, "--" if loading else metric.value, metric.detail, metric.detail)
+                )
             if len(summaries) < len(cards) and data.account_plan:
-                summaries.append(("订阅套餐", "--" if loading else data.account_plan, ""))
+                summaries.append(("订阅套餐", "--" if loading else data.account_plan, "", ""))
             if len(summaries) < len(cards) and (
                 data.account_plan or data.account_plan_active_until
             ):
@@ -3588,15 +4611,26 @@ class MainPanel(QFrame):
                         "套餐到期",
                         "--" if loading else expiry_date,
                         "",
+                        "",
                     )
                 )
             while len(summaries) < len(cards):
-                summaries.append((provider_name, "--", "正在读取额度" if loading else ""))
-            for card, (title, value, detail) in zip(cards, summaries):
+                summaries.append((provider_name, "--", "正在读取额度" if loading else "", ""))
+            for card, (title, value, detail, tooltip) in zip(cards, summaries):
                 card.set_title(title)
                 card.set_values(value, detail, "")
-                bind_text(card.value, detail, method='setToolTip')
+                bind_text(card.value, tooltip, method='setToolTip')
                 card.detail.setVisible(bool(detail))
+            if provider_id == "workbuddy":
+                # 积分来源没有 Token/金额序列，不能沿用 Token 趋势和官方 Token 热力图。
+                self._render_workbuddy_credits(data, loading)
+                bind_text(
+                    self.status_text, self.workbuddy_status(data, loading or refreshing)
+                )
+                self.status_dot.set_role(self.status_role(data, loading))
+                bind_text(self.updated_text, self.codex_update_time(data))
+                self._update_openai_balance_visibility()
+                return
             # 近 7 天拥有独立序列：只在这里合并本机当天估算，不能传给官方热力图。
             self.trend.set_rows(
                 data.weekly_usage or data.daily_usage,

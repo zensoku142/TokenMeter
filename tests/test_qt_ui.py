@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from config import runtime as config_manager
 from config.defaults import DEFAULT_CONFIG, PROVIDER_IDS
-from api.providers.base import QuotaMetric, QuotaWindow
+from api.providers.base import FetchError, QuotaMetric, QuotaWindow
 from updater.client import CheckResult, PetReleaseInfo, ReleaseAsset, ReleaseInfo, SemVer
 from data.store import PerProviderData, TokenData
 from ui.geometry import WorkArea
@@ -54,10 +54,16 @@ from ui.qt_panel import (
     MainPanel,
     MinuteDateEdit,
     MinuteUsageChart,
+    ModelCreditRow,
+    MonthlyCreditChart,
     StatisticsCard,
     TrendCard,
+    compact_credit_total,
+    credit_axis,
+    daily_credit_values,
     format_codex_reset_time,
     format_codex_tokens,
+    format_credit_number,
     format_money,
     format_money_axis,
     format_reset_countdown,
@@ -6421,3 +6427,782 @@ def test_open_ball_and_update_dialog_retheme_in_place():
         controller.set_mode("dark")
         ball.close()
         update_dialog.close()
+
+
+WORKBUDDY_TODAY = date(2026, 11, 11)
+WORKBUDDY_DAILY = {
+    "2026-11-05": "2.8",
+    "2026-11-06": "6.32",
+    "2026-11-07": "0",
+    "2026-11-08": "7.58",
+    "2026-11-09": "2.04",
+    "2026-11-10": "8.33",
+    "2026-11-11": "4.76",
+}
+
+
+def workbuddy_data(
+    *,
+    daily: dict[str, str] | None = None,
+    statistics: list[QuotaMetric] | None = None,
+    quota_source: str = "interface",
+    statistics_source: str = "interface",
+    status: str = "ok",
+    errors: list[FetchError] | None = None,
+    metrics: list[QuotaMetric] | None = None,
+    models: list[tuple[str, str]] | None = None,
+    today_models: list[tuple[str, str]] | None = None,
+) -> TokenData:
+    if daily is None:
+        daily = WORKBUDDY_DAILY
+    if metrics is None:
+        # 官网不保证 CreditGroups 顺序，故意打乱以验证按标题取卡。
+        metrics = [
+            QuotaMetric("剩余积分", "2868.17", value_kind="credits"),
+            QuotaMetric("平台奖励积分", "2368.17", "已用 31.83 / 总计 2400 积分",
+                        value_kind="credits"),
+            QuotaMetric("套餐基础积分", "500", "已用 0 / 总计 500 积分", value_kind="credits"),
+        ]
+    if statistics is None:
+        if models is None:
+            models = [("test-model", "29.4")]
+        if today_models is None:
+            today_models = [("test-model", "4.76")]
+        statistics = [
+            QuotaMetric("本月消耗积分", "31.83", value_kind="credits"),
+            QuotaMetric("今日消耗积分", "4.76", value_kind="credits"),
+            QuotaMetric("本月调用次数", "10"),
+            QuotaMetric("使用模型数", "2"),
+            QuotaMetric("本月活跃天数", "6"),
+            *(
+                QuotaMetric(day, value, value_kind="credits")
+                for day, value in daily.items()
+            ),
+            *(
+                QuotaMetric(name, value, "今日 · WorkBuddy", value_kind="credits_today")
+                for name, value in today_models
+            ),
+            *(
+                QuotaMetric(name, value, "WorkBuddy", value_kind="credits")
+                for name, value in models
+            ),
+        ]
+    return TokenData(
+        status=status,
+        last_success_at=datetime.now(),
+        quota_metrics=metrics,
+        quota_statistics=statistics,
+        quota_source=quota_source,
+        statistics_source=statistics_source,
+        errors=list(errors or []),
+        per_provider=[
+            PerProviderData(
+                "workbuddy",
+                "WorkBuddy",
+                quota_metrics=list(metrics),
+                quota_statistics=list(statistics),
+                status=status,
+            )
+        ],
+    )
+
+
+def test_workbuddy_panel_renders_credits_in_cards_trend_month_and_statistics(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, ANNUAL_PANEL_HEIGHT)
+    data = workbuddy_data()
+    panel.update_data(data)
+    panel.show()
+    APP.processEvents()
+
+    assert panel.today_card.title_label.text() == "剩余积分"
+    assert panel.today_card.value.text() == "2868.17"
+    assert panel.balance_card.title_label.text() == "套餐基础积分"
+    assert panel.balance_card.value.text() == "500"
+    assert panel.balance_card.detail.text() == "总额 500"
+    assert panel.month_card.title_label.text() == "平台奖励积分"
+    assert panel.month_card.value.text() == "2368.17"
+    assert panel.month_card.detail.text() == "总额 2400"
+    # 完整已用/总计说明仍在悬停和额度明细中，可见文字不截断。
+    assert "已用 0 / 总计 500 积分" in panel.balance_card.value.toolTip()
+
+    assert panel.trend.title.text() == "近 7 天积分消耗"
+    assert panel.trend._values == [2.8, 6.32, 0.0, 7.58, 2.04, 8.33, 4.76]
+    assert panel.trend.plot.getAxis("left").credit_mode
+    assert "积分" in panel.trend.tooltip_text(6)
+    assert "Token" not in panel.trend.tooltip_text(6)
+    assert "金额" not in panel.trend.tooltip_text(6)
+
+    assert panel.activity_title.text() == "积分活动"
+    assert panel._activity_view == "credits"
+    assert panel.activity_stack.currentWidget() is panel._credit_chart
+    assert panel.activity_summary.text() == "本月 · 2026年11月 · 31.83 积分"
+    assert not panel.quota_details_button.isHidden()
+    assert panel.activity_mode_segment.isHidden()
+    chart = panel._credit_chart
+    assert chart._days == 30
+    assert sorted(chart._values) == list(range(1, 12))
+    assert chart._values[11] == 4.76
+    assert 30 in [int(value) for value, _label in chart._day_ticks]
+    assert chart._message == ""
+    # 未来日期不绘制已发生消耗，也不给出“0 消耗”的悬停结论。
+    assert 12 not in chart._values
+    assert chart.tooltip_text(12) == ""
+    assert chart.tooltip_text(7) == "2026-11-07\n积分：0"
+
+    assert [label.text() for label in panel.statistics._names] == [
+        "本月消耗积分",
+        "今日消耗积分",
+        "本月调用次数",
+        "使用模型数",
+        "本月活跃天数",
+    ]
+    assert [label.text() for label in panel.statistics._values] == [
+        "31.83",
+        "4.76",
+        "10",
+        "2",
+        "6",
+    ]
+    assert panel.status_text.text() == "连接正常 · 积分与统计已更新"
+    panel.close()
+
+
+@pytest.mark.parametrize(
+    ("today", "expected_days"),
+    [
+        (date(2026, 11, 11), 30),
+        (date(2027, 2, 10), 28),
+        (date(2028, 2, 29), 29),
+        (date(2026, 4, 1), 30),
+    ],
+)
+def test_workbuddy_month_chart_uses_real_calendar_days(monkeypatch, today, expected_days):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: today)
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, ANNUAL_PANEL_HEIGHT)
+    panel.update_data(workbuddy_data())
+
+    chart = panel._credit_chart
+    assert chart._days == expected_days
+    assert all(1 <= int(value) <= expected_days for value, _label in chart._day_ticks)
+    assert chart._today == today.day
+    panel.close()
+
+
+def test_workbuddy_zero_consumption_is_a_successful_empty_state(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    zeros = [
+        QuotaMetric("本月消耗积分", "0", value_kind="credits"),
+        QuotaMetric("今日消耗积分", "0", value_kind="credits"),
+        QuotaMetric("本月调用次数", "0"),
+        QuotaMetric("使用模型数", "0"),
+        QuotaMetric("本月活跃天数", "0"),
+    ]
+    panel = MainPanel()
+    panel.update_data(workbuddy_data(daily={}, statistics=zeros))
+
+    assert panel._credit_chart._message == "本月暂无积分消耗"
+    assert panel.activity_summary.text() == "本月 · 2026年11月 · 0 积分"
+    assert panel.status_text.text() == "连接正常 · 积分与统计已更新"
+    assert [label.text() for label in panel.statistics._values] == ["0", "0", "0", "0", "0"]
+    panel.close()
+
+
+def test_workbuddy_without_credentials_explains_the_connect_state(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    data = TokenData(
+        status="not_configured",
+        errors=[FetchError("NOT_CONFIGURED", "WorkBuddy", "尚未配置 WorkBuddy 凭据")],
+        per_provider=[PerProviderData("workbuddy", "WorkBuddy", status="not_configured")],
+    )
+    panel = MainPanel()
+    panel.update_data(data)
+
+    assert panel.today_card.value.text() == "--"
+    assert panel._credit_chart._message == "尚未连接 WorkBuddy"
+    assert panel._credit_chart._values == {}
+    assert panel.trend.empty_label.text() == "使用明细暂不可用"
+    assert panel.status_text.text() == "尚未连接 WorkBuddy，请在账户连接中登录"
+    panel.close()
+
+
+def test_workbuddy_empty_payload_keeps_credit_wording(monkeypatch):
+    """首个数据到达前 data 还没有 per_provider，面板也不能回退成金额/Token 口径。"""
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    from config import runtime as config_manager
+
+    original_get = config_manager.get
+    monkeypatch.setattr(
+        config_manager,
+        "get",
+        lambda key, default=None: (
+            "workbuddy" if key == "ACTIVE_PROVIDER" else original_get(key, default)
+        ),
+    )
+    panel = MainPanel()
+    panel.update_data(TokenData())
+
+    assert panel.activity_title.text() == "积分活动"
+    assert panel.trend.title.text() == "近 7 天积分消耗"
+    assert panel.statistics.title.text() == "WorkBuddy 使用统计"
+    assert [label.text() for label in panel.statistics._names] == [
+        "本月消耗积分",
+        "今日消耗积分",
+        "本月调用次数",
+        "使用模型数",
+        "本月活跃天数",
+    ]
+    assert [label.text() for label in panel.statistics._values] == ["--"] * 5
+    assert panel._activity_view == "credits"
+    panel.close()
+
+
+def test_workbuddy_usage_failure_without_cache_reports_unavailable_details(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    data = workbuddy_data(
+        daily={},
+        statistics=[],
+        statistics_source="",
+        status="partial",
+        errors=[FetchError("USAGE_INCOMPLETE", "WorkBuddy 使用明细", "未完整加载")],
+    )
+    panel = MainPanel()
+    panel.update_data(data)
+
+    # 余额保持本次新值，明细不可用时不能画成零消耗。
+    assert panel.today_card.value.text() == "2868.17"
+    assert panel._credit_chart._message == "使用明细暂不可用"
+    assert panel._credit_chart._values == {}
+    assert panel.trend.empty_label.text() == "使用明细暂不可用"
+    assert panel.status_text.text() == "余额已更新 · 使用明细暂不可用"
+    assert all(label.text() == "--" for label in panel.statistics._values)
+    panel.close()
+
+
+def test_workbuddy_usage_failure_with_cache_marks_statistics_as_cached(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    data = workbuddy_data(
+        statistics_source="cache",
+        status="partial",
+        errors=[FetchError("USAGE_INCOMPLETE", "WorkBuddy 使用明细", "未完整加载")],
+    )
+    panel = MainPanel()
+    panel.update_data(data)
+
+    assert panel.today_card.value.text() == "2868.17"
+    assert panel.activity_summary.text() == "本月 · 2026年11月 · 统计待更新"
+    assert panel._credit_chart._values  # 已缓存日期仍可读，但不补零。
+    assert panel._credit_chart._message == ""
+    assert panel.status_text.text() == "余额已更新 · 使用统计来自缓存"
+    assert panel.status_dot._role == "warning"
+    assert panel.statistics._values[0].text() == "31.83"
+    panel.close()
+
+
+def test_workbuddy_cross_month_cache_keeps_previous_month_label(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: date(2026, 11, 2))
+    previous_month = {
+        "2026-10-30": "3.5",
+        "2026-10-31": "1.2",
+    }
+    statistics = [
+        QuotaMetric("本月消耗积分", "4.7", value_kind="credits"),
+        QuotaMetric("今日消耗积分", "0", value_kind="credits"),
+        QuotaMetric("本月调用次数", "5"),
+        QuotaMetric("使用模型数", "1"),
+        QuotaMetric("本月活跃天数", "2"),
+        *(QuotaMetric(day, value, value_kind="credits") for day, value in previous_month.items()),
+    ]
+    panel = MainPanel()
+    panel.update_data(
+        workbuddy_data(daily=previous_month, statistics=statistics, statistics_source="cache")
+    )
+
+    # 上月缓存不能被当成新月份的完整统计。
+    assert panel._credit_chart._values == {}
+    assert panel._credit_chart._message == "统计待更新 · 缓存为 2026年10月"
+    assert panel.activity_summary.text() == "本月 · 2026年11月 · 统计待更新"
+    panel.close()
+
+
+def test_workbuddy_view_and_shared_trend_restore_other_providers(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, PANEL_HEIGHT)
+    panel.update_data(workbuddy_data())
+    assert panel._activity_view == "credits"
+
+    window = QuotaWindow("codex-weekly", "每周额度", 25)
+    codex = sample_data()
+    codex.quota_windows = [window]
+    codex.quota_statistics = [QuotaMetric("累计 Token 数", "21.7亿")]
+    codex.quota_source = "interface"
+    codex.weekly_activity_source = "interface"
+    codex.activity_source = "interface"
+    codex.statistics_source = "interface"
+    codex.per_provider = [
+        PerProviderData("codex", "Codex", quota_windows=[window], status="ok")
+    ]
+    panel.update_data(codex)
+
+    assert panel._activity_view == "annual"
+    assert panel.activity_title.text() == "Token 活动"
+    assert panel.activity_stack.currentWidget() is panel.activity_scroll
+    assert panel.trend.title.text() == "近 7 天 Token 使用量"
+    assert not panel.trend._credit_mode
+    assert panel.trend._values[-1] == 10_000_000
+
+    panel.update_data(workbuddy_data())
+    assert panel._activity_view == "credits"
+    assert panel.activity_title.text() == "积分活动"
+    assert panel.activity_stack.currentWidget() is panel._credit_chart
+    panel.close()
+
+
+def test_daily_credit_values_rejects_models_and_invalid_dates():
+    values = daily_credit_values(
+        [
+            QuotaMetric("2026-11-05", "2.8", value_kind="credits"),
+            QuotaMetric("2026-11-06", "0", value_kind="credits"),
+            QuotaMetric("test-model", "29.4", value_kind="credits"),
+            QuotaMetric("2026-13-01", "1", value_kind="credits"),
+            QuotaMetric("20261105", "1", value_kind="credits"),
+            QuotaMetric("2026-11-07", "-1", value_kind="credits"),
+            QuotaMetric("2026-11-08", "nan", value_kind="credits"),
+            QuotaMetric("2026-11-09", "1"),
+        ]
+    )
+
+    assert values == {date(2026, 11, 5): Decimal("2.8"), date(2026, 11, 6): Decimal("0")}
+
+
+@pytest.mark.parametrize(
+    ("maximum", "labels"),
+    [
+        (0, ["0", "1"]),
+        (8.33, ["0", "2.5", "5", "7.5", "10"]),
+        (31.83, ["0", "10", "20", "30", "40"]),
+        (0.35, ["0", "0.1", "0.2", "0.3", "0.4"]),
+    ],
+)
+def test_credit_axis_uses_short_readable_steps(maximum, labels):
+    ticks, top = credit_axis(maximum)
+    assert [format_credit_number(value) for value in ticks] == labels
+    assert top >= maximum
+
+
+def test_compact_credit_total_keeps_only_the_total():
+    assert compact_credit_total("已用 31.83 / 总计 2400 积分") == "总额 2400"
+    assert compact_credit_total("") == ""
+
+
+def test_workbuddy_month_chart_filters_unknown_days_and_messages():
+    chart = MonthlyCreditChart()
+    chart.set_data({5: 2.8, 6: 0.0}, days=30, today=6, year=2026, month=11)
+    assert sorted(chart._values) == [5, 6]
+    assert chart.tooltip_text(6) == "2026-11-06\n积分：0"
+    assert chart.tooltip_text(20) == ""
+
+    chart.set_data({}, days=30, today=6, year=2026, month=11, message="本月暂无积分消耗")
+    assert chart._series is None
+    assert chart.empty_label.text() == "本月暂无积分消耗"
+    assert not chart.empty_label.isHidden()
+
+
+def test_workbuddy_today_marker_never_rises_above_the_bar():
+    """今天的标记必须是等高的淡色外框：高于柱子会被读成“柱子被接了一段”。"""
+    chart = MonthlyCreditChart()
+    chart.set_data({7: 31.83, 11: 114.51}, days=30, today=11, year=2026, month=11)
+    band = chart._today_band
+    assert band is not None
+    # 轴上限是 150（不是 114.51），标记高度必须跟随柱子而不是轴上限。
+    assert band.rect().height() == pytest.approx(114.51)
+    assert band.rect().width() > 0.62  # 比柱宽，形成外框
+    assert band.zValue() < 0  # 在柱子下层
+
+    # 今天没有消耗时不画标记，避免空列出现一个孤立色块。
+    chart.set_data({7: 31.83}, days=30, today=11, year=2026, month=11)
+    assert chart._today_band is None
+
+
+def test_workbuddy_ball_shows_remaining_credits_without_currency():
+    data = workbuddy_data()
+    with patch("ui.qt_widget.FloatingWidget.refresh"):
+        widget = FloatingWidget()
+        widget._data = data
+        widget._refreshing = False
+        widget._apply_update()
+
+    assert widget.ball._quota_mode
+    assert widget.ball._quota_value_text == "2868.17"
+    assert widget.ball._quota_title == "剩余积分"
+    assert "¥" not in widget.ball.toolTip()
+    widget._closed = True
+    widget.hide()
+
+
+@pytest.mark.parametrize(
+    "provider_id", [provider for provider in PROVIDER_IDS if provider != "workbuddy"]
+)
+def test_every_registered_provider_restores_its_own_charts_after_workbuddy(
+    monkeypatch, provider_id
+):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, PANEL_HEIGHT)
+    panel.update_data(workbuddy_data())
+    assert panel._activity_view == "credits"
+
+    provider_name = panel.provider_quick_combo.itemText(
+        panel.provider_quick_combo.findData(provider_id)
+    )
+    window = QuotaWindow(f"{provider_id}-window", "每月额度", 20)
+    data = sample_data()
+    data.quota_windows = [window]
+    data.quota_statistics = [
+        QuotaMetric("套餐", "Pro"),
+        QuotaMetric("额度", "$8.40"),
+        QuotaMetric("Bonus", "$0.00"),
+        QuotaMetric("Auto", "$6.20"),
+        QuotaMetric("账期", "08-01 — 09-01"),
+    ]
+    data.quota_source = "interface"
+    data.statistics_source = "interface"
+    data.per_provider = [
+        PerProviderData(
+            provider_id,
+            provider_name,
+            quota_windows=[window],
+            quota_statistics=list(data.quota_statistics),
+            status="ok",
+        )
+    ]
+    panel.update_data(data)
+
+    # 积分模式不能残留到其他平台：标题、单位、活动视图和统计标题都要恢复。
+    assert not panel.trend._credit_mode
+    assert panel.trend.title.text() != "近 7 天积分消耗"
+    assert panel.activity_title.text() == "Token 活动"
+    assert panel._activity_view == "annual"
+    assert panel.activity_stack.currentWidget() is panel.activity_scroll
+    assert panel.statistics.title.text() == f"{provider_name} 使用统计"
+    panel.close()
+
+
+def test_workbuddy_old_cache_without_daily_items_keeps_month_unknown(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    summary_only = [
+        QuotaMetric("本月消耗积分", "12.5", value_kind="credits"),
+        QuotaMetric("今日消耗积分", "0", value_kind="credits"),
+        QuotaMetric("本月调用次数", "4"),
+        QuotaMetric("使用模型数", "1"),
+        QuotaMetric("本月活跃天数", "3"),
+    ]
+    panel = MainPanel()
+    panel.update_data(
+        workbuddy_data(
+            daily={},
+            statistics=summary_only,
+            statistics_source="cache",
+            status="partial",
+            errors=[FetchError("USAGE_INCOMPLETE", "WorkBuddy 使用明细", "未完整加载")],
+        )
+    )
+
+    # 旧缓存有汇总但缺每日项：不能补零，也不能声称本月已完成统计。
+    assert panel._credit_chart._values == {}
+    assert panel._credit_chart._message == "本月暂无积分统计"
+    assert panel.activity_summary.text() == "本月 · 2026年11月 · 统计待更新"
+    assert panel.statistics._values[0].text() == "12.5"
+    assert panel.status_text.text() == "余额已更新 · 使用统计来自缓存"
+    panel.close()
+
+
+def test_workbuddy_month_chart_thins_day_ticks_on_narrow_widths(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.show()
+    try:
+        panel.resize(PANEL_MAX_WIDTH, ANNUAL_PANEL_HEIGHT)
+        panel.layout().activate()
+        APP.processEvents()
+        panel.update_data(workbuddy_data())
+        chart = panel._credit_chart
+        wide = [int(value) for value, _label in chart._day_ticks]
+        # 左栏只占约 60% 宽度，820 宽时已按“每刻度至少 22px”疏化，但仍保留逐日悬停。
+        assert len(wide) < 30
+        assert len(wide) >= 12
+        assert WORKBUDDY_TODAY.day in wide
+        assert 30 in wide
+        assert wide == sorted(wide)
+
+        panel.resize(PANEL_MIN_WIDTH, ANNUAL_PANEL_HEIGHT)
+        panel.layout().activate()
+        APP.processEvents()
+        chart._apply_day_ticks()
+        narrow = [int(value) for value, _label in chart._day_ticks]
+        # 640 宽时左栏进一步收窄，刻度不会变多；今天与月末必须保留。
+        assert len(narrow) <= len(wide)
+        assert WORKBUDDY_TODAY.day in narrow
+        assert 30 in narrow
+        assert all(1 <= day <= 30 for day in narrow)
+        assert narrow == sorted(narrow)
+    finally:
+        panel.close()
+
+
+def test_month_chart_day_ticks_thin_by_available_pixels():
+    # 面板左栏已缩到约 60%，独立校验“每刻度至少 22px”的疏化规则本身。
+    chart = MonthlyCreditChart()
+    values = {day: 1.0 for day in range(1, 31)}
+    chart.resize(760, 140)
+    chart.layout().activate()
+    chart.set_data(values, days=30, today=11, year=2026, month=11)
+    chart._apply_day_ticks()
+    wide = [int(value) for value, _label in chart._day_ticks]
+    assert wide == list(range(1, 31))
+
+    chart.resize(260, 140)
+    chart.layout().activate()
+    chart._apply_day_ticks()
+    narrow = [int(value) for value, _label in chart._day_ticks]
+    assert len(narrow) < len(wide)
+    assert 11 in narrow and 30 in narrow
+    # 相邻刻度之间始终保持至少一个步长，标签不会互相覆盖。
+    gaps = [b - a for a, b in zip(narrow, narrow[1:])]
+    assert min(gaps) >= 2
+
+
+def model_rows(panel) -> list[ModelCreditRow]:
+    return panel.model_panel.list_widget.findChildren(ModelCreditRow)
+
+
+def test_workbuddy_model_column_lists_models_with_credit_shares(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, ANNUAL_PANEL_HEIGHT)
+    panel.show()
+    APP.processEvents()
+    panel.update_data(workbuddy_data(
+        models=[("model-b", "10"), ("model-a", "20"), ("model-c", "5")],
+        today_models=[("model-a", "3.5")],
+    ))
+    APP.processEvents()
+
+    model = panel.model_panel
+    assert not model.isHidden()
+    assert model.period == "month"
+    assert model.count.text() == "3 个模型"
+    rows = model_rows(panel)
+    # 按积分降序，同分再按名称；输入顺序故意打乱。
+    assert [row.name_label.toolTip() for row in rows] == ["model-a", "model-b", "model-c"]
+    assert [row.value_label.text() for row in rows] == ["20 积分", "10 积分", "5 积分"]
+    # 分母是本月全部模型（35），不是首屏可见行。
+    assert [row.share_label.text() for row in rows] == ["57.1%", "28.6%", "14.3%"]
+    assert rows[0].bar.value() == 571
+    # 左栏仍是整月积分图。
+    assert panel._credit_chart is not None
+    assert panel.activity_stack.currentWidget() is panel._credit_chart
+    panel.close()
+
+
+def test_workbuddy_model_column_switches_period_resets_scroll_and_keeps_month_chart(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    twelve = [(f"model-{index:02d}", str(30 - index)) for index in range(12)]
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, ANNUAL_PANEL_HEIGHT)
+    panel.show()
+    APP.processEvents()
+    panel.update_data(workbuddy_data(models=twelve, today_models=[("model-00", "3")]))
+    APP.processEvents()
+
+    model = panel.model_panel
+    month_values = dict(panel._credit_chart._values)
+    chart_geometry = panel._credit_chart.geometry()
+    card_height = panel.activity_card.height()
+    assert len(model_rows(panel)) == 12
+    scroll = model.scroll.verticalScrollBar()
+    assert scroll.maximum() > 0
+    scroll.setValue(scroll.maximum())
+    assert scroll.value() > 0
+
+    QTest.mouseClick(model.today_button, Qt.MouseButton.LeftButton)
+    APP.processEvents()
+    assert model.period == "today"
+    assert model.today_button.isChecked()
+    assert not model.month_button.isChecked()
+    assert model.count.text() == "1 个模型"
+    today_rows = model_rows(panel)
+    assert [row.name_label.toolTip() for row in today_rows] == ["model-00"]
+    assert today_rows[0].share_label.text() == "100.0%"
+    # 切换只更新右栏：列表回到首行，左栏整月数据与位置、窗口高度都不变。
+    assert scroll.value() == 0
+    assert panel._credit_chart._values == month_values
+    assert panel._credit_chart.geometry() == chart_geometry
+    assert panel.activity_card.height() == card_height
+
+    model.select_range("month")
+    APP.processEvents()
+    assert model.period == "month"
+    assert len(model_rows(panel)) == 12
+    assert scroll.value() == 0
+    panel.close()
+
+
+def test_workbuddy_model_column_keeps_zero_rows_and_shows_period_empty_states(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.update_data(workbuddy_data(
+        models=[("hy4-free", "0"), ("wb-lite", "0")], today_models=[],
+    ))
+    assert panel.model_panel.count.text() == "2 个模型"
+    rows = model_rows(panel)
+    assert [row.value_label.text() for row in rows] == ["0 积分", "0 积分"]
+    # 合计为零时不出现 NaN，按 0% 展示。
+    assert [row.share_label.text() for row in rows] == ["0.0%", "0.0%"]
+
+    panel.model_panel.select_range("today")
+    APP.processEvents()
+    assert model_rows(panel) == []
+    assert panel.model_panel.count.isHidden()
+    assert panel.model_panel.empty_label.text() == "今日暂无模型消耗"
+    assert not panel.model_panel.empty_label.isHidden()
+    panel.close()
+
+
+def test_workbuddy_model_column_reports_month_empty_and_first_load(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.update_data(workbuddy_data(models=[], today_models=[]))
+    assert panel.model_panel.empty_label.text() == "本月暂无模型消耗"
+    assert panel.model_panel.empty_label.isHidden() is False
+
+    from config import runtime as config_manager
+
+    original_get = config_manager.get
+    monkeypatch.setattr(
+        config_manager, "get",
+        lambda key, default=None: "workbuddy" if key == "ACTIVE_PROVIDER"
+        else original_get(key, default),
+    )
+    loading = MainPanel()
+    loading.update_data(TokenData(), loading=True)
+    assert loading.model_panel.empty_label.text() == "正在读取模型积分"
+    loading.close()
+    panel.close()
+
+
+def test_workbuddy_model_column_marks_cache_periods_and_hides_stale_today(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.update_data(workbuddy_data(
+        models=[("cached-model", "12")], today_models=[("cached-model", "2")],
+        statistics_source="cache",
+    ))
+    assert panel.model_panel.count.text() == "1 个模型 · 缓存 · 2026年11月"
+    panel.model_panel.select_range("today")
+    APP.processEvents()
+    assert panel.model_panel.count.text() == "1 个模型 · 缓存 · 2026-11-11"
+
+    # 缓存停在昨天：本月仍可用，今日不能沿用昨天的模型。
+    yesterday = {day: value for day, value in WORKBUDDY_DAILY.items() if day != "2026-11-11"}
+    panel.update_data(workbuddy_data(
+        daily=yesterday, models=[("cached-model", "12")], today_models=[("cached-model", "2")],
+        statistics_source="cache",
+    ))
+    panel.model_panel.select_range("today")
+    APP.processEvents()
+    assert panel.model_panel.empty_label.text() == "使用明细暂不可用"
+    assert model_rows(panel) == []
+    panel.model_panel.select_range("month")
+    APP.processEvents()
+    assert panel.model_panel.count.text() == "1 个模型 · 缓存 · 2026年11月"
+
+    # 跨月缓存：本月模型不属于当前月份，给出缓存月份而不是当作本月。
+    october = {"2026-10-31": "4.7"}
+    panel.update_data(workbuddy_data(
+        daily=october, models=[("cached-model", "12")], today_models=[],
+        statistics_source="cache",
+    ))
+    assert panel.model_panel.empty_label.text() == "统计待更新 · 缓存为 2026年10月"
+    assert model_rows(panel) == []
+    panel.close()
+
+
+def test_workbuddy_model_column_elides_long_names_and_keeps_full_tooltip(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    long_name = "claude-sonnet-4.5-20260101-extended-thinking-preview"
+    panel = MainPanel()
+    panel.resize(PANEL_MIN_WIDTH, ANNUAL_PANEL_HEIGHT)
+    panel.show()
+    APP.processEvents()
+    panel.update_data(workbuddy_data(models=[(long_name, "9")], today_models=[]))
+    APP.processEvents()
+
+    row = model_rows(panel)[0]
+    # 窄窗口下名称省略，但悬停仍是完整名称；数值与占比不受影响。
+    assert row.name_label.text() != long_name
+    assert row.name_label.text().endswith("…")
+    assert row.name_label.toolTip() == long_name
+    assert row.value_label.text() == "9 积分"
+    assert row.share_label.text() == "100.0%"
+    # 积分与占比右对齐到同一列，占比条不与百分比重叠。
+    assert row.value_label.geometry().right() == row.share_label.geometry().right()
+    assert row.bar.geometry().right() < row.share_label.geometry().left()
+    panel.close()
+
+
+def test_model_column_is_workbuddy_only_and_keeps_full_width_for_other_platforms(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+    panel = MainPanel()
+    panel.resize(PANEL_MAX_WIDTH, ANNUAL_PANEL_HEIGHT)
+    panel.show()
+    APP.processEvents()
+    panel.update_data(workbuddy_data())
+    APP.processEvents()
+    assert not panel.model_panel.isHidden()
+
+    # 切换账号后只保留新账号的模型，不残留上一份列表。
+    panel.update_data(workbuddy_data(models=[("other-account-model", "5")], today_models=[]))
+    APP.processEvents()
+    assert [row.name_label.toolTip() for row in model_rows(panel)] == ["other-account-model"]
+
+    panel.update_data(sample_data())
+    APP.processEvents()
+    assert panel.model_panel.isHidden()
+    assert panel.credits_divider.isHidden()
+    assert panel.credits_header.isHidden()
+    panel.close()
+
+
+def test_workbuddy_purchased_credits_stay_visible_in_the_card_area(monkeypatch):
+    monkeypatch.setattr("ui.qt_panel.china_today", lambda: WORKBUDDY_TODAY)
+
+    def metrics_with(addon: str) -> list[QuotaMetric]:
+        return [
+            QuotaMetric("剩余积分", "4068.17", value_kind="credits"),
+            QuotaMetric("平台奖励积分", "2368.17", "已用 31.83 / 总计 2400 积分",
+                        value_kind="credits"),
+            QuotaMetric("套餐基础积分", "500", "已用 0 / 总计 500 积分", value_kind="credits"),
+            QuotaMetric("购买积分", addon, f"已用 0 / 总计 {addon} 积分", value_kind="credits"),
+        ]
+
+    panel = MainPanel()
+    panel.update_data(workbuddy_data(metrics=metrics_with("1200")))
+    # 卡片区只有一主两副：自购积分作为剩余积分下的说明行，避免挤成 46px 的第四张卡。
+    assert panel.today_card.title_label.text() == "剩余积分"
+    assert not panel.today_card.detail.isHidden()
+    assert panel.today_card.detail.text() == "含购买积分 1200"
+    assert panel.today_card.value.toolTip() == "含购买积分 1200"
+    # 两张副卡不受影响，仍是总额说明。
+    assert panel.balance_card.detail.text() == "总额 500"
+    assert panel.month_card.detail.text() == "总额 2400"
+    panel.close()
+
+    panel = MainPanel()
+    panel.update_data(workbuddy_data(metrics=metrics_with("0")))
+    assert panel.today_card.detail.isHidden()
+    assert panel.today_card.title_label.text() == "剩余积分"
+    panel.close()

@@ -43,7 +43,7 @@ def provider():
 
 
 def test_registry_and_secret_defaults_do_not_change_selection():
-    assert list(PROVIDERS)[-1] == PROVIDER_IDS[-1] == "openai"
+    assert "openai" in PROVIDERS and "openai" in PROVIDER_IDS
     assert DEFAULT_CONFIG["ACTIVE_PROVIDER"] == "deepseek"
     assert DEFAULT_CONFIG["BACKGROUND_PROVIDER_IDS"] == []
     assert DEFAULT_CONFIG["BACKGROUND_PROFILE_IDS"] == []

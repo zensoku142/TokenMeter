@@ -38,12 +38,12 @@ TokenMeter는 Windows 10/11용 경량 AI 사용량 모니터입니다. 6개 플�
 
 중국어 UI와 데모 데이터를 사용한 실제 컴포넌트 화면입니다. 클릭하면 확대됩니다. [이미지와 출처](docs/images/readme/README.md).
 
-현재 버전：**v1.17.2** · 펫 **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+현재 버전：**v1.17.3** · 펫 **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## 기능
 
-- **한도와 잔액**: Codex / Claude Code / Cursor 구독 한도와 DeepSeek / MiMo / NayutoAI 비용·잔액·기록. 통화·크레딧·Token은 구분합니다.
-- **통계와 속도**: Codex 시간대별 사용량, Codex / Claude / ZCode 로컬 통계·필터·Excel 내보내기. Codex / NayutoAI는 모델 출력 속도도 표시합니다.
+- **한도와 잔액**: Codex / Claude Code / Cursor 구독 한도, WorkBuddy 크레딧과 DeepSeek / MiMo / NayutoAI 비용·잔액·기록. 통화·크레딧·Token은 구분합니다.
+- **통계와 속도**: WorkBuddy 월간 일별 크레딧과 모델별 크레딧 사용량, Codex 시간대별 사용량, Codex / Claude / ZCode 로컬 통계·필터·Excel 내보내기. Codex / NayutoAI는 모델 출력 속도도 표시합니다.
 - **개요와 다중 계정**: 다중 플랫폼 개요와 항상 위에 표시되는 두 플랫폼 대시보드. 다중 계정은 기본적으로 꺼져 있으며, 개별 모니터링은 기본 연결이나 CLI 로그인을 덮어쓰지 않습니다.
 - **CC Switch**: 다중 계정과 CC 연결을 켜면 관리 중인 Codex OAuth 계정을 찾아 자동 수집합니다. 토큰 갱신·조회는 CC가 처리하고 연결이 끊겨도 캐시를 유지합니다.
 - **플로팅 표시**: 기존 한도·잔액 위젯과 라이트 링. 드래그·크기 조절·가장자리 이동을 지원하고, 링은 여러 플랫폼·계정과 순서·색상·너비를 설정할 수 있습니다.
@@ -135,7 +135,7 @@ Qt 테스트에는 사용 가능한 Windows 데스크톱 세션이, 설치 파�
 
 ## 버전
 
-메인 앱 `1.17.2`, 선택적 펫 확장 `0.3.2`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
+메인 앱 `1.17.3`, 선택적 펫 확장 `0.3.2`. 변경 기록과 체크섬은 [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases)에서 확인하세요.
 
 ## 라이선스 및 감사의 말
 

@@ -10,6 +10,7 @@ from shiboken6 import ownedByPython
 def isolate_native_credentials(monkeypatch, tmp_path):
     from config import credentials
     from config import account_profiles
+    from config import runtime as config_manager
     from data import history
 
     # 项目直接调用 Win32 凭据 API，不受 PYTHON_KEYRING_BACKEND 控制；测试默认断开真实后端。
@@ -18,6 +19,21 @@ def isolate_native_credentials(monkeypatch, tmp_path):
     # 自动统计会写入可选本地快照；每个测试必须与用户的真实用量数据库隔离。
     monkeypatch.setattr(history, "DB_PATH", tmp_path / "usage.db")
     monkeypatch.setattr(account_profiles, "_path", lambda: tmp_path / "account-profiles.json")
+    # 运行时路径在模块导入时绑定；只改 APPDATA 不会移动窗口状态、布局和配置写入点。
+    config_dir = tmp_path / "config"
+    for name, filename in (
+        ("CONFIG_DIR", ""),
+        ("CONFIG_PATH", "config.json"),
+        ("LOG_PATH", "TokenSpider.log"),
+        ("UPDATER_LOG_PATH", "TokenScopeUpdater.log"),
+        ("WIDGET_STATE_PATH", "widget-state.json"),
+        ("PANEL_LAYOUT_PATH", "panel-layout.json"),
+        ("UPDATE_STATE_PATH", "update-state.json"),
+        ("UPDATE_CACHE_DIR", "updates"),
+    ):
+        monkeypatch.setattr(
+            config_manager, name, config_dir / filename if filename else config_dir
+        )
     # CLI 自动发现也只能看到临时目录；各账号用例再显式注入自己的登录文件。
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.delenv("CODEX_HOME", raising=False)

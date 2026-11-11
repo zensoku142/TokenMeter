@@ -38,12 +38,12 @@ TokenMeter is a lightweight AI usage monitor for Windows 10/11. Track subscripti
 
 Actual component screenshots in Chinese with demo data; click to enlarge. [Images and sources](docs/images/readme/README.md).
 
-Current version：**v1.17.2** · Pet **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
+Current version：**v1.17.3** · Pet **v0.3.2** · [GitHub Pages](https://zensoku142.github.io/TokenMeter/)
 
 ## Features
 
-- **Quotas and balances**: Codex / Claude Code / Cursor quotas; DeepSeek / MiMo / NayutoAI costs, balances and history. Currencies, credits and tokens stay separate.
-- **Analytics and speed**: Codex intraday usage; local Codex / Claude / ZCode statistics, filters and Excel export. Codex / NayutoAI also show model output speed.
+- **Quotas and balances**: Codex / Claude Code / Cursor quotas; WorkBuddy credits; DeepSeek / MiMo / NayutoAI costs, balances and history. Currencies, credits and tokens stay separate.
+- **Analytics and speed**: WorkBuddy monthly daily credits and per-model credit usage; Codex intraday usage; local Codex / Claude / ZCode statistics, filters and Excel export. Codex / NayutoAI also show model output speed.
 - **Overview and accounts**: multi-provider overview and an always-on-top two-provider dashboard. Multi-account is off by default; independent monitoring preserves default connections and CLI logins.
 - **CC Switch**: enable multi-account and the CC connection to discover and refresh managed Codex OAuth accounts. CC handles renewal and queries; disconnects retain cached quotas.
 - **Floating displays**: quota/balance widget or light ring, with dragging, resizing and edge docking. The ring supports multiple providers/accounts, ordering, colors and width adjustment.
@@ -135,7 +135,7 @@ Qt tests need an available Windows desktop session; installer builds require Inn
 
 ## Versions
 
-Main app: `1.17.2`; optional pet extension: `0.3.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
+Main app: `1.17.3`; optional pet extension: `0.3.2`. See [GitHub Releases](https://github.com/zensoku142/TokenMeter/releases) for changes and checksums.
 
 ## License and acknowledgments
 

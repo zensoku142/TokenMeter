@@ -165,6 +165,18 @@ class ChromeSession:
         self._websocket_url = websocket_url
         self._connection = _CdpConnection(websocket_url)
 
+    def reconnect_page(self, host: str) -> None:
+        """Reconnect to the first matching page after a sign-in navigation."""
+        port = urlparse(self._websocket_url).port
+        if port is None:
+            raise RuntimeError("CDP_INVALID_WS_URL")
+        websocket_url = _pick_websocket_endpoint(port, host, require_host=True)
+        if self._connection is not None:
+            self._connection.close()
+        self._connection = None
+        self._connection = _CdpConnection(websocket_url)
+        self._websocket_url = websocket_url
+
     def cookies(
         self,
         *,
@@ -536,11 +548,9 @@ def open_chrome_session(
     else:
         args.append(f"--app={acquire_url}")
     startupinfo = None
-    try:
+    if headless and os.name == "nt":
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    except AttributeError:
-        pass
     try:
         process = subprocess.Popen(
             args,
@@ -658,7 +668,7 @@ def _wait_browser_ready(port: int, stop_event: threading.Event, timeout: float =
         timer.cancel()
 
 
-def _pick_websocket_endpoint(port: int, preferred_host: str) -> str:
+def _pick_websocket_endpoint(port: int, preferred_host: str, *, require_host: bool = False) -> str:
     items = _http_json("127.0.0.1", port, "/json", _CDP_TIMEOUT_SECONDS)
     if not isinstance(items, list):
         raise RuntimeError("CDP_UNEXPECTED_JSON")
@@ -671,11 +681,16 @@ def _pick_websocket_endpoint(port: int, preferred_host: str) -> str:
         websocket_url = str(entry.get("webSocketDebuggerUrl") or "")
         if not websocket_url:
             continue
-        if preferred_host in str(entry.get("url") or ""):
+        page_url = str(entry.get("url") or "")
+        if require_host:
+            parsed = urlparse(page_url)
+            if entry.get("type") == "page" and parsed.scheme == "https" and parsed.hostname == preferred_host:
+                return websocket_url
+        elif preferred_host in page_url:
             return websocket_url
         if not candidate:
             candidate = websocket_url
-    if candidate:
+    if candidate and not require_host:
         return candidate
     raise RuntimeError("CDP_NO_PAGE_TARGET")
 
