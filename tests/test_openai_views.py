@@ -22,7 +22,7 @@ from ui.i18n import bind_text, configure_language
 from ui.light_ring import LightRingWidget, ring_value
 from ui.provider_overview import ProviderOverview, openai_balance_details, openai_status_message
 from ui.qt_panel import ANNUAL_PANEL_HEIGHT, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, MainPanel
-from ui.qt_theme import configure_theme
+from ui.qt_theme import configure_theme, current_theme
 
 APP = QApplication.instance() or QApplication([])
 SUCCESS_AT = datetime(2026, 11, 9, 10, 20, 30, tzinfo=timezone.utc)
@@ -239,7 +239,7 @@ def test_api_ring_has_no_percentage_even_if_unrelated_quota_is_present(data, exp
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("width", [40, 58])
-def test_api_badge_is_painted_on_neutral_ring_without_affecting_codex(monkeypatch, theme, width):
+def test_api_label_sits_in_neutral_ring_gap_and_follows_theme(monkeypatch, theme, width):
     configure_theme(APP, theme)
     rail = LightRingWidget()
     rail._rail_width = width
@@ -252,11 +252,11 @@ def test_api_badge_is_painted_on_neutral_ring_without_affecting_codex(monkeypatc
 
     class RecordingPainter(QPainter):
         def drawArc(self, *args):
-            arcs.append(args)
+            arcs.append((*args, self.pen().widthF()))
             return super().drawArc(*args)
 
         def drawText(self, *args):
-            texts.append(args[-1])
+            texts.append((args[-1], args[0], self.pen().color().name()))
             return super().drawText(*args)
 
         def drawEllipse(self, *args):
@@ -266,14 +266,20 @@ def test_api_badge_is_painted_on_neutral_ring_without_affecting_codex(monkeypatc
     monkeypatch.setattr("ui.light_ring.QPainter", RecordingPainter)
     item = rail.items["openai"]
     assert not item.grab().isNull()
-    assert "API" in texts and not arcs
-    assert tracks[0] == pytest.approx(1.6)
+    [(ring, start, span, stroke)] = arcs
+    assert 270 * 16 < span < 360 * 16 and start + span / 2 == 90 * 16
+    assert stroke == pytest.approx(1.6) and not tracks
+    [(label, color)] = [(rect, color) for text, rect, color in texts if text == "API"]
+    assert label.center().x() == ring.center().x()
+    assert label.top() < ring.bottom() < label.bottom()
+    assert color == current_theme().subtext.lower()
     assert item.value == "$24.85" and item.remaining is None
     assert "USD" in item.accessibleDescription() and "组织 …1234" in item.accessibleDescription()
     texts.clear()
+    arcs.clear()
     tracks.clear()
     rail.items["codex"].grab()
-    assert arcs and "API" not in texts
+    assert arcs and all(text != "API" for text, *_ in texts)
     assert tracks[0] == pytest.approx(3.2)
     assert rail.items["codex"].value == "90%"
     assert rail.items["deepseek"].value == "¥12.15"

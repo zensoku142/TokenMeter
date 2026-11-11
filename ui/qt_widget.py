@@ -662,6 +662,10 @@ class FloatingWidget(QWidget):
         self._update_provider_overview()
 
     def _open_light_ring_provider(self, provider_id: str) -> None:
+        if provider_id == "openai":
+            if "codex" not in configured_provider_ids():
+                return
+            provider_id = "codex"
         rail = self._light_ring
         rail.popup.hide()
         if provider_id.startswith("profile:"):

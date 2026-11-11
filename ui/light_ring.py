@@ -209,8 +209,14 @@ class _RingItem(QAbstractButton):
         ring = QRectF((self.width() - diameter) / 2, 4, diameter, diameter)
         track = QColor(theme.border)
         track.setAlpha(95)
-        painter.setPen(QPen(track, 1.6 if self.provider_id == "openai" else 3.2))
-        painter.drawEllipse(ring)
+        openai = self.provider_id == "openai"
+        painter.setPen(QPen(track, 1.6 if openai else 3.2))
+        if openai:
+            # 圆环在六点钟方向留出缺口，给 API 标签两侧留白。
+            gap_half_angle = 28
+            painter.drawArc(ring, (-90 + gap_half_angle) * 16, (360 - 2 * gap_half_angle) * 16)
+        else:
+            painter.drawEllipse(ring)
         if self.remaining is not None:
             accent = QColor(theme.accent if config_manager.get("FLOATING_RING_FOLLOW_THEME", True)
                             else config_manager.get("FLOATING_RING_COLOR", theme.accent))
@@ -223,18 +229,14 @@ class _RingItem(QAbstractButton):
         icon_size = round(22 * diameter / 38)
         self._brand_icon.paint(painter, round(ring.center().x() - icon_size / 2),
                                round(ring.center().y() - icon_size / 2), icon_size, icon_size)
-        if self.provider_id == "openai":
-            # 角标随现有图标绘制，不新增条目或改变行高、点击及拖动命中区。
-            badge = QRectF(ring.right() - 23, ring.bottom() - 14, 23, 12)
-            painter.setPen(QPen(QColor(theme.border), 0.8))
-            painter.setBrush(QColor(theme.elevated))
-            painter.drawRoundedRect(badge, 3, 3)
-            badge_font = QFont("Segoe UI")
-            badge_font.setPixelSize(8)
-            badge_font.setWeight(QFont.Weight.DemiBold)
-            painter.setFont(badge_font)
-            painter.setPen(QColor(theme.value))
-            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "API")
+        if openai:
+            label_font = QFont("Segoe UI")
+            label_font.setPixelSize(8)
+            label_font.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(label_font)
+            painter.setPen(QColor(theme.subtext))
+            label = QRectF(ring.left(), ring.bottom() - 6, ring.width(), 10)
+            painter.drawText(label, Qt.AlignmentFlag.AlignCenter, "API")
         font = QFont("Segoe UI")
         font.setPixelSize(14)
         font.setWeight(QFont.Weight.Medium)
